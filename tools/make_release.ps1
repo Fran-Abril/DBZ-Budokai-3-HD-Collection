@@ -126,6 +126,15 @@ if (Test-Path -LiteralPath $ctrldb) {
     Write-Warning "No se encontro gamecontrollerdb.txt - omitido"
 }
 
+# Nova's Mods: clave de solo lectura del repo de mods (tools/novas_mods.py clave). Sin ella, la
+# pestana del launcher dice que llega en la proxima actualizacion.
+$novaKey = Join-Path $root "novas_mods.key"
+if (Test-Path -LiteralPath $novaKey) {
+    Copy-Item -LiteralPath $novaKey (Join-Path $OutDir "novas_mods.key")
+} else {
+    Write-Warning "Sin novas_mods.key: Nova's Mods no podra descargar"
+}
+
 # 1.4.3 EX: cache inicial de shaders/pipelines (la del build de desarrollo, que ya
 # ha visto todo el juego). dbz3.exe la copia a user_data solo si falta: el primer
 # combate de una instalacion nueva no compila nada sobre la marcha.

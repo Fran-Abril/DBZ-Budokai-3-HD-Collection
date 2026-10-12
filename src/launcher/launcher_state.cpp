@@ -1132,10 +1132,6 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
   const bool tabs_open = ImGui::BeginTabBar("##launcher_tabs");
   ImGui::PopStyleVar(2);
   if (tabs_open) {
-    if (begin_tab(tab_label(ICON_DOWNLOAD, "Nova's Mods", "tab_novas"))) {
-      DrawNovasModsTab();
-      ImGui::EndTabItem();
-    }
     if (begin_tab(tab_label(ICON_VIDEO, i18n::T("Video", "Video"), "tab_video"))) {
       DrawVideoTab();
       ImGui::EndTabItem();
@@ -1157,6 +1153,10 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
     if (begin_tab(tab_label(ICON_MODS, i18n::T("Mods", "Mods"), "tab_mods"),
                             want_tab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) {
       DrawModsTab();
+      ImGui::EndTabItem();
+    }
+    if (begin_tab(tab_label(ICON_DOWNLOAD, "Nova's Mods", "tab_novas"))) {
+      DrawNovasModsTab();
       ImGui::EndTabItem();
     }
     if (begin_tab(tab_label(ICON_NATIVE, i18n::T("Mods nativos", "Native mods"), "tab_native"))) {

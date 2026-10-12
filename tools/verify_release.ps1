@@ -25,7 +25,7 @@ $errors = @()
 # v1.4.3 = 11109888 / 6431232.
 # v1.4.3.1 = 11127296 / 6448640.
 # amd_fidelityfx_dx12.dll no cambia desde 2026-08-28.
-$canonVersion = "1.4.4"
+$canonVersion = "1.4.4.1"
 $canonSizes = @{
     "rexruntime.dll"          = 11129344
     "rexgpu-xenos.dll"        = 6482432
