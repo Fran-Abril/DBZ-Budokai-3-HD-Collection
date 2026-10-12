@@ -144,11 +144,14 @@ if(EXISTS "${DBZ3_CONTROLLERDB}")
 endif()
 
 # Recursos de las pantallas propias (TAG TEAM, ONLINE, fichas del Tag Team): tools/ingame_ui.py
+# (el repo publico no lleva res/: sin la carpeta, las pantallas escriben el titulo con texto)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/res/ingame_ui")
 add_custom_command(TARGET dbz3 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/res/ingame_ui" "$<TARGET_FILE_DIR:dbz3>/ingame_ui"
     COMMENT "Staging ingame_ui next to dbz3"
     VERBATIM)
+endif()
 
 # Codegen target - run 'cmake --build . --target dbz3_codegen'
 add_custom_target(dbz3_codegen
