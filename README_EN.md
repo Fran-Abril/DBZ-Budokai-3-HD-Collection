@@ -1,5 +1,11 @@
 # DBZ Budokai 3 HD Collection
 
+<p align="center"><img src="docs/logo.png" alt="Dragon Ball Z Budokai 3 HD Recomp" width="480"></p>
+
+<p align="center"><b>1.4.4 EX trailer:</b>
+<a href="https://github.com/novapowers0/DBZ-Budokai-3-HD-Collection/releases/download/v1.4.4.1/trailer_1.4.4EX_en.mp4">English</a> ·
+<a href="https://github.com/novapowers0/DBZ-Budokai-3-HD-Collection/releases/download/v1.4.4.1/trailer_1.4.4EX_es.mp4">español</a></p>
+
 **Windows | Linux**
 
 English · [Español](README.md)
