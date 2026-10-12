@@ -35,6 +35,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -122,7 +123,7 @@ std::string FileHash(const fs::path& p) {
   std::error_code ec;
   const auto size = fs::file_size(p, ec);
   const auto t = fs::last_write_time(p, ec).time_since_epoch().count();
-  const std::string key = rex::path_to_utf8(p) + "|" + std::to_string(size) + "|" + std::to_string(t);
+  const std::string key = rex::path_to_utf8(p) + "|" + std::to_string(size) + "|" + std::to_string(static_cast<long long>(t));
   auto& c = HashCache();
   auto it = c.find(key);
   if (it != c.end()) return it->second;
