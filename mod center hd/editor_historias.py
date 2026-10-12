@@ -1635,8 +1635,11 @@ class App:
     def new(self, ask=True):
         if ask and not self.confirm_discard():
             return
-        with open(PLANTILLA, encoding="utf-8") as f:
-            data, raw = parse_text(f.read())
+        try:
+            with open(PLANTILLA, encoding="utf-8") as f:
+                data, raw = parse_text(f.read())
+        except OSError:   # Kit sin campanas/plantilla_historia.toml: historia vacia en vez de no abrir
+            data, raw = parse_text("")
         self.load(data, raw, None, False)
         self.log(T("Nueva historia desde la plantilla.", "New story from the template."))
 

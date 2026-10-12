@@ -909,14 +909,18 @@ def list_source(game, extra=None):
     if game == "iw":
         # del disco del usuario (ISO o carpeta); la coleccion de la comunidad solo si no se lee
         iw = source_path("iw")
+        why = ""
         try:
             lst = iso_list(iw) if iw else []
         except Exception as e:  # noqa: BLE001
+            why = str(e)
             print("aviso: modelos de IW sin leer del disco (%s)" % e, file=sys.stderr)
             lst = []
         if not lst and os.path.isdir(IW_MODELS):
             lst = community_list([IW_MODELS])
         if not lst:
+            if why:      # el disco esta, pero no se pudo leer (p. ej. falta iw_modelos.json)
+                sys.exit("Infinite World: no se pudo leer el disco (%s) / could not read the disc (%s)" % (why, why))
             sys.exit("Infinite World: no encuentro su disco (ISO o carpeta) / Infinite World: "
                      "its disc (ISO or folder) was not found.")
         ports = iw_ports()

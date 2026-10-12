@@ -40,7 +40,13 @@ KIT_ENTRIES = ["roster_build", "importar", "swap_b3", "texture_b3", "texture_dum
 KIT_EXTRA_TOOLS = ["name_banner", "portrait_hd", "extract_azt_afs", "awg_to_obj_b3", "awg0_export",
                    "awg_cara_export", "swap_matrix", "texture_upscale_b3", "psp_amo", "sb_amm", "csk_edit",
                    "acm_parse", "sbport", "sb_tablas", "sdbh_model", "sb_tecnicas", "sb_voces"]
-KIT_DATA = ["catalog_b3.cat", "roster_db.json", "b1_capsulas.txt"]   # b1_capsulas: nombres de B1 (importador)
+KIT_DATA = ["catalog_b3.cat", "roster_db.json", "b1_capsulas.txt",   # b1_capsulas: nombres de B1 (importador)
+            # sin estos el Kit fallaba en casa de los jugadores (log de un jugador, 2026-10-12): presets del
+            # importador, nombres de los modelos de IW, codigos de Dragon Universe, etiquetas de texturas
+            # y la lista de herramientas de la ventana
+            "presets_importar.toml", "iw_modelos.json", "du_codigos.json", "texturas_etiquetas.json",
+            "tools_manifest.json"]
+KIT_CAMPAIGNS = ["plantilla_historia.toml", "ejemplo_freezer.toml"]   # editor de historias (sin imagenes)
 AWO_DATA = ["psp_ramp.npy"]      # rampa toon de PSP: la carga psp_amo.py (importar de Shin Budokai)
 KIT_ROOT_FILES = ["LEEME_KIT.txt", "LEEME_KIT_EN.txt", "requirements.txt", "instalar_requisitos.bat", "DBZ3_ModKit.bat"]
 KIT_FORMAT_DOCS = ["CAPSULAS_B3.md", "MAPA_ROSTER_HD.md", "ACM_FORMAT.md", "AMO_AWO.md", "BIN_LAYOUT.md",
@@ -124,6 +130,9 @@ def kit_pack(ver, stage):
         shutil.copytree(fonts, os.path.join(mch, "fonts"))
     for f in KIT_DATA:
         shutil.copyfile(os.path.join(ROOT, "mod center hd", f), os.path.join(mch, f))
+    os.makedirs(os.path.join(mch, "campanas"), exist_ok=True)
+    for f in KIT_CAMPAIGNS:
+        shutil.copyfile(os.path.join(ROOT, "mod center hd", "campanas", f), os.path.join(mch, "campanas", f))
     for f in AWO_DATA:
         shutil.copyfile(os.path.join(ROOT, "awo_tools", f), os.path.join(awo, f))
     for f in os.listdir(XDK):

@@ -135,6 +135,17 @@ if (Test-Path -LiteralPath $novaKey) {
     Write-Warning "Sin novas_mods.key: Nova's Mods no podra descargar"
 }
 
+# Partida al 100% (Mods nativos): sin mods_nativos/partida_100 el boton Aplicar sale en gris
+# (Save100Available); hasta la 1.4.4.2 no iba en el paquete (avisos de jugadores, 2026-10-12)
+$save100 = Join-Path $root "out\build\win-amd64-release\mods_nativos\partida_100"
+if ((Test-Path -LiteralPath (Join-Path $save100 "data.bin")) -and (Test-Path -LiteralPath (Join-Path $save100 "DBZ3.header"))) {
+    $dst100 = Join-Path $OutDir "mods_nativos\partida_100"
+    New-Item -ItemType Directory -Force -Path $dst100 | Out-Null
+    Copy-Item -LiteralPath (Join-Path $save100 "data.bin"), (Join-Path $save100 "DBZ3.header") $dst100
+} else {
+    Write-Warning "Sin mods_nativos/partida_100: la partida al 100% no se podra aplicar"
+}
+
 # 1.4.3 EX: cache inicial de shaders/pipelines (la del build de desarrollo, que ya
 # ha visto todo el juego). dbz3.exe la copia a user_data solo si falta: el primer
 # combate de una instalacion nueva no compila nada sobre la marcha.

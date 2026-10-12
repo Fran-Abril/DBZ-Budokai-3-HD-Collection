@@ -156,6 +156,9 @@ if ($Version -ne "" -and (Test-Path -LiteralPath $zip)) {
         } else {
             Write-Output "zip OK: $($z.Entries.Count) entradas sin assets del juego"
         }
+        if (-not ($z.Entries | Where-Object { $_.FullName -match "mods_nativos[\\/]partida_100[\\/]data\.bin$" })) {
+            $errors += "el zip no lleva mods_nativos/partida_100 (la partida al 100% saldria en gris)"
+        }
         # Residuos de ejecucion: una carpeta de datos/user_data/logs/iso_cache
         # delataria que se empaqueto la carpeta con la que se jugo, no una limpia.
         $runtime_residue = $z.Entries | Where-Object {
