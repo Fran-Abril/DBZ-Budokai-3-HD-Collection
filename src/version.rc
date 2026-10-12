@@ -36,7 +36,8 @@
 // v1.4.4.1 = "1.4.4 EX": descargas de Nova's Mods activas, arreglo de relevos seguidos en Tag Team.
 // v1.4.4.2 = "1.4.4 EX+": Budokai 2 en el importador (golpes y pelucas), ronda de arreglos de Tag
 // Team / Online (beta), Nova's Mods y campanas.
-// v1.4.4.4 = "1.4.4 EX++": selector de forma inicial LT/RT (beta) con su modelo en la rueda,
+// v1.4.4.5 = "1.4.4 EX MAX Omega": historia de Freezer con dialogos recortados, manejador de errores seguro.
+// v1.4.4.4 = "1.4.4 EX MAX". v1.4.4.3 = "1.4.4 EX++": selector de forma inicial LT/RT (beta) con su modelo en la rueda,
 // destello en el KO del Tag Team, relevo que espera a la transformacion, imagenes de disco.
 // v1.4.4.4 = "1.4.4 EX MAX": menu TAG TEAM en COM VS COM, elegir la ISO desde el aviso, presets
 // descritos en el launcher, interruptor del selector de transformacion (beta).
@@ -45,8 +46,8 @@
 #define VERSION_MAJOR 1
 #define VERSION_MINOR 4
 #define VERSION_PATCH 4
-#define VERSION_BUILD 4
-#define DBZ3_VERSION_STR "1.4.4.4"
+#define VERSION_BUILD 5
+#define DBZ3_VERSION_STR "1.4.4.5"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, VERSION_BUILD

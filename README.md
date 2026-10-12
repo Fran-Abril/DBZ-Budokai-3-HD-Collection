@@ -43,18 +43,27 @@
 | Plataforma | Windows / Linux |
 | Motor | Xbox 360 (ReXGlue SDK) |
 | Género | Lucha 3D |
-| Versión | **v1.4.4.4** (1.4.4 EX MAX) |
+| Versión | **v1.4.4.5** (1.4.4 EX MAX Ω) |
 
 ---
 
 ## Novedades
 
-### 1.4.4 EX MAX (v1.4.4.4)
+### 1.4.4 EX MAX Ω (v1.4.4.5)
+
+- **Estabilidad:** si el juego se cierra, siempre sale el aviso y el registro queda completo.
+- **Tag Team (beta):** arreglado: si el menú de Duelo recordaba otra fila, TAG TEAM se quedaba pulsando A. 1P VS 2P pide un segundo mando.
+- **Historia de Freezer (Nova's Mods) 1.2:** diálogos y voces originales que se recortaron del juego.
+
+<details>
+<summary><b>1.4.4 EX MAX (v1.4.4.4)</b></summary>
 
 - **Tag Team (beta):** al elegir un modo en TAG TEAM se va **directo a la selección de personajes**, con un fundido como los del juego. Arreglado: A en TAG TEAM podía abrir el Torneo o la Tienda. Salir de la selección vuelve a TAG TEAM.
 - **Relevos (beta):** cada luchador vuelve con la transformación que tenía al salir.
 - **Selector de transformación (beta):** se puede apagar en el launcher. Viene activado.
 - **"No encuentro el juego":** el aviso deja elegir la imagen de disco ahí mismo.
+
+</details>
 
 <details>
 <summary><b>1.4.4 EX++ (v1.4.4.3)</b></summary>
@@ -218,9 +227,9 @@ En la página de [**Releases**](../../releases/latest):
 
 | Archivo | Para qué |
 |---|---|
-| `DBZ-Budokai-3-HD-Collection-v1.4.4.4.zip` | **El juego para Windows** (obligatorio). |
-| `DBZ-Budokai-3-HD-Collection-v1.4.4.4-linux-amd64.tar.gz` | El juego para Linux (Vulkan). |
-| `DBZ3HD-1.4.4.4-Kit-Modding.zip` | Opcional: herramientas para crear e importar personajes. |
+| `DBZ-Budokai-3-HD-Collection-v1.4.4.5.zip` | **El juego para Windows** (obligatorio). |
+| `DBZ-Budokai-3-HD-Collection-v1.4.4.5-linux-amd64.tar.gz` | El juego para Linux (Vulkan). |
+| `DBZ3HD-1.4.4.5-Kit-Modding.zip` | Opcional: herramientas para crear e importar personajes. |
 | [`DBZ3HD-1.4.3-Personajes.zip`](https://drive.google.com/file/d/1jDRwzd_idmeIxwAMN4q4bC89JKFiGXX7/view?usp=sharing) | Opcional, alternativa manual: los 7 personajes nuevos (Google Drive; WIP). |
 
 ### Paso 2: añade los datos de tu copia del juego

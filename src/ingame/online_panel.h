@@ -54,6 +54,9 @@ bool Pad2Connected();
 // Fila del menu principal (0 Dragon Universe, 1 Duelo...), seguida pulsacion a pulsacion.
 int MainMenuRow();
 void SetMainMenuRow(int row);
+// Fila del cursor del Duelo (el juego la recuerda entre visitas).
+int DuelMenuRow();
+void SetDuelMenuRow(int row);
 // Objeto del menu principal en pantalla (guest; +150 = fila del cursor), 0 si no esta.
 uint32_t MainMenuObj();
 

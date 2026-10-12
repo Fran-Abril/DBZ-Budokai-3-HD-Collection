@@ -163,9 +163,13 @@ void PilotToDuel(int row) {
   }
   steps.push_back(Press(kA));
   steps.push_back(WaitScreen(kDuelScreen));
-  for (int n = row; n > 0; --n) steps.push_back(Press(kDown));   // 1P VS 2P gris tambien cuenta
+  // desde la fila que recuerda el juego, por el camino corto (el menu da la vuelta; las grises cuentan)
+  const int down = (row - DuelMenuRow() + 4) % 4;
+  for (int n = down <= 2 ? down : 0; n > 0; --n) steps.push_back(Press(kDown));
+  for (int n = down > 2 ? 4 - down : 0; n > 0; --n) steps.push_back(Press(kUp));
   steps.push_back(PressToLeave(kA, kDuelScreen));
   SetMainMenuRow(kDuelRow);
+  SetDuelMenuRow(row);
   Run(std::move(steps));
 }
 
@@ -443,6 +447,9 @@ void TagTeamPanel::DrawMenu(ImGuiIO& io, uint16_t pressed) {
   if (pressed & kLeft) g_format = (g_format.load() + kNumFormats - 1) % kNumFormats;
   if (pressed & kRight) g_format = (g_format.load() + 1) % kNumFormats;
   if (pressed & (kB | kY)) g_wanted = false;
+  // 1P VS 2P sale en gris en el Duelo sin mando 2: el piloto pulsaria A sin fin (2026-10-12)
+  const bool no_pad2 = row_ == 1 && !Pad2Connected();
+  if (no_pad2) pressed &= uint16_t(~kA);
   if (pressed & kA) {
     g_wanted = false;
     {
@@ -496,7 +503,9 @@ void TagTeamPanel::DrawMenu(ImGuiIO& io, uint16_t pressed) {
   S::Frame(dl, g0, g1, a.s);
   S::MenuText(dl, ImVec2((g0.x + g1.x) * 0.5f, (g0.y + g1.y) * 0.5f), 50 * a.s, kFormats[g_format.load()], true, false);
   S::Arrows(dl, ImVec2(g0.x - 18 * a.s, g0.y), ImVec2(g1.x + 18 * a.s, g1.y), 46 * a.s, t);
-  std::string text = help[row_];
+  std::string text = no_pad2 ? T::T("Conecta un segundo mando para jugar 1P VS 2P.",
+                                     "Connect a second controller to play 1P VS 2P.")
+                             : help[row_];
   text += '\n';
   text += g_format.load() == 3
               ? T::T("3 VS 3: SELECT cambia al segundo y SELECT + L al tercero.",

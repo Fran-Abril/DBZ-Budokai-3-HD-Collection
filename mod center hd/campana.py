@@ -362,7 +362,9 @@ def story(cfg, us, mod, work):
         """Dialogo en el escenario (cabecera de 16 B): retratos (izquierda, derecha; hablan por
         turnos, empieza el de la izquierda) y una frase por pagina, sin voz."""
         nl = text(bank, c, key, "dialogo")
-        a, b = c["retratos"]
+        # `retratos_dialogo` = [izquierda, derecha]: habla primero el de la izquierda (en el juego, 5800.1
+        # pone a Goku a la izquierda cuando empieza el). Por defecto `retratos` (rival, tu personaje)
+        a, b = c.get("retratos_dialogo", c["retratos"])
         return ([4 + 2 * nl, 5, nl + 1, 5],
                 [(10, 0, int(a)), (10, 1, int(b)), (10, 2, 0x1026E), (10, 3, 0x10000 | bank), (10, 4, 0x10000 | bank),
                  (13, 0, 0xFFFFFFFF)] + [ev for i in range(4) for ev in ((11, i, 1556), (12, i, 1557))] +

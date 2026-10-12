@@ -211,13 +211,18 @@ bool OnlinePanel::IsOpen() { return g_open.load(); }
 // el menu nace en la fila 0, abajo/arriba recorren las 4 filas (1P VS 2P gris tambien) y dan la vuelta, y cada
 // pulsacion cuenta una vez (mantener pulsado no repite en este menu, para no perder la cuenta).
 std::atomic<bool> g_close_req{false};
+// el juego recuerda la fila del Duelo entre visitas (el piloto de TAG TEAM pulsaba A en COM VS 2P
+// creyendo estar en 1P VS COM, 2026-10-12): la cuenta no se reinicia al entrar
+std::atomic<int> g_duel_row{0};
+int DuelMenuRow() { return g_duel_row.load(); }
+void SetDuelMenuRow(int row) { g_duel_row = row; }
 
 uint16_t DuelMenuFilter(uint8_t* base, uint16_t real) {
   (void)base;
   constexpr uint16_t kUp = 0x0001, kDown = 0x0002, kUD = 0x0003, kA = 0x1000, kB = 0x2000, kY = 0x8000;
   using Clock = std::chrono::steady_clock;
   static uint16_t prev = 0;
-  static int row = 0, last_screen = -1;
+  int row = g_duel_row.load();
   static Clock::time_point ud_at;     // cuando empezo la ultima pulsacion de arriba/abajo
   static bool ud_cap = false;         // arriba/abajo se corta tras el primer paso (sin repeticion)
   const uint16_t pressed = real & ~prev;
@@ -237,10 +242,6 @@ uint16_t DuelMenuFilter(uint8_t* base, uint16_t real) {
   // la rueda de personajes tambien es la pantalla 14: se distingue por su logica (select_ext.cpp)
   const int screen = (g_screen.load() == kDuelMenuScreen && (dbz3_select_live() || dbz3_select_to_stage())) ? -2
                                                                                                   : g_screen.load();
-  if (screen != last_screen) {
-    if (screen == kDuelMenuScreen) row = 0;
-    last_screen = screen;
-  }
   // menu principal (7 filas, recuerda la ultima): se sigue igual para el piloto de TAG TEAM
   // con la ultima fila (Dragon Arena), abajo pasa a TAG TEAM (el juego no lo ve); arriba vuelve,
   // abajo da la vuelta a la primera fila y A abre la pantalla TAG TEAM
@@ -278,6 +279,11 @@ uint16_t DuelMenuFilter(uint8_t* base, uint16_t real) {
                       Session::Get().link() == Link::kIdle;
   if (!active) {
     g_online_focus = false;
+    if (screen == kDuelMenuScreen && (pressed & kUD)) {
+      g_duel_row = (row + ((pressed & kDown) ? 1 : 3)) % 4;
+      one_step();
+      return out();
+    }
     return uint16_t(real & ~g_swallow);
   }
   if (!g_online_focus.load()) {
@@ -303,6 +309,7 @@ uint16_t DuelMenuFilter(uint8_t* base, uint16_t real) {
   } else if (pressed) {
     g_swallow |= pressed;
   }
+  g_duel_row = row;
   if (g_online_focus.load()) return 0;
   return out();
 }

@@ -915,13 +915,24 @@ private:
                 // PPCContext layout (rex/ppc/context.h): r3@0x00 r0@0x08 r1@0x10
                 // r2@0x18 r4@0x20 r5@0x28 ... r10@0x50 r11@0x58 ... r31@0xF8
                 // lr@0x100 ctr@0x108 xer@0x110 cr0@0x124 ... cr6@0x13C
+                rex::FlushLogging();   // lo esencial queda escrito aunque lo de abajo fallara
+                // RCX solo es el contexto del guest dentro del codigo recompilado; en un fallo de
+                // lectura del guest es la direccion que fallo (0x20000001A) y leerla volvia a caer
+                // dentro de este manejador (sin aviso ni registro; auditoria 2026-10-12)
                 const uint8_t* g = reinterpret_cast<const uint8_t*>(c->Rcx);
-                const auto rd32 = [&](size_t o) { uint32_t v; std::memcpy(&v, g + o, 4); return v; };
-                const auto rd64 = [&](size_t o) { uint64_t v; std::memcpy(&v, g + o, 8); return v; };
-                REXLOG_CRITICAL("guest(ctx=0x{:016X}): r3=0x{:08X} r4=0x{:08X} r11=0x{:08X}", c->Rcx, rd32(0x00), rd32(0x20), rd32(0x58));
-                REXLOG_CRITICAL("guest: r28=0x{:08X} r29=0x{:08X} r30=0x{:08X} r31=0x{:08X}", rd32(0xE0), rd32(0xE8), rd32(0xF0), rd32(0xF8));
-                REXLOG_CRITICAL("guest: lr=0x{:08X} ctr=0x{:08X} xer=0x{:08X} cr6=0x{:02X}",
-                                rd64(0x100), rd32(0x108), rd32(0x110), g[0x13C]);
+                MEMORY_BASIC_INFORMATION mbi = {};
+                const bool readable =
+                    VirtualQuery(g, &mbi, sizeof(mbi)) == sizeof(mbi) && mbi.State == MEM_COMMIT &&
+                    !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) &&
+                    reinterpret_cast<uintptr_t>(g) + 0x140 <= reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+                if (readable) {
+                  const auto rd32 = [&](size_t o) { uint32_t v; std::memcpy(&v, g + o, 4); return v; };
+                  const auto rd64 = [&](size_t o) { uint64_t v; std::memcpy(&v, g + o, 8); return v; };
+                  REXLOG_CRITICAL("guest(ctx=0x{:016X}): r3=0x{:08X} r4=0x{:08X} r11=0x{:08X}", c->Rcx, rd32(0x00), rd32(0x20), rd32(0x58));
+                  REXLOG_CRITICAL("guest: r28=0x{:08X} r29=0x{:08X} r30=0x{:08X} r31=0x{:08X}", rd32(0xE0), rd32(0xE8), rd32(0xF0), rd32(0xF8));
+                  REXLOG_CRITICAL("guest: lr=0x{:08X} ctr=0x{:08X} xer=0x{:08X} cr6=0x{:02X}",
+                                  rd64(0x100), rd32(0x108), rd32(0x110), g[0x13C]);
+                }
             }
             // Flush the log so the message box below points at a complete file.
             rex::FlushLogging();
