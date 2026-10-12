@@ -125,7 +125,10 @@ std::array<std::map<int, uint32_t>, 2> g_face;  // por lado: ID -> hoja de caras
 // mientras un efecto suyo sigue vivo (rayo en pantalla, choque de poderes) el relevo espera, porque
 // esos efectos buscan sus datos en la ranura del lado y tras el cambio ya serian los del que entra
 std::array<std::atomic<uint32_t>, 2> g_tech_seen{};
-constexpr uint32_t kFxQuiet = 8, kFxWaitMax = 240;   // ticks sin efectos; espera maxima (~4 s)
+// ticks sin efectos; espera maxima (~10 s). Con 8 ticks un efecto del que salia (sus llamadas al
+// banco no son seguidas) sobrevivia al relevo, buscaba su id en el banco del que entra y el juego se
+// paraba (2026-10-12: trampa en sub_822F8988 via sub_82096FF0, 20-30 ms despues del relevo)
+constexpr uint32_t kFxQuiet = 90, kFxWaitMax = 600;
 std::vector<uint32_t> g_face_res;             // hojas que cargamos nosotros (se sueltan con las del juego)
 constexpr uint32_t kComCheck = 90;            // ticks entre decisiones del ordenador
 
