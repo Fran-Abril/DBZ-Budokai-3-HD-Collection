@@ -2175,16 +2175,16 @@ void LauncherDialog::DrawNativeModsTab() {
   // Tag Team y Online (beta): vienen de serie, pero quien no los quiera los quita (sin su fila en los menus)
   {
     bool tag = REXCVAR_GET(dbz3_tag_team_enabled), online = REXCVAR_GET(dbz3_online_enabled);
-    if (ImGui::Checkbox(i18n::T("Tag Team (beta): equipos de hasta 5 con relevos", "Tag Team (beta): teams of up to 5 with swaps"), &tag)) {
+    if (ImGui::Checkbox(i18n::T("Tag Team (beta): equipos con relevos", "Tag Team (beta): teams with swaps"), &tag)) {
       rex::cvar::SetFlagByName("dbz3_tag_team_enabled", tag ? "true" : "false");
       dbz3::settings::SaveUserSettings();
     }
-    ImGui::TextDisabled("%s", i18n::T("Entrada TAG TEAM bajo el menu principal.", "TAG TEAM entry under the main menu."));
+    ImGui::TextDisabled("%s", i18n::T("Entrada TAG TEAM (beta) bajo el menu principal.", "TAG TEAM (beta) entry under the main menu."));
     if (ImGui::Checkbox(i18n::T("Online (beta): combates por internet o en red local", "Online (beta): internet or local network fights"), &online)) {
       rex::cvar::SetFlagByName("dbz3_online_enabled", online ? "true" : "false");
       dbz3::settings::SaveUserSettings();
     }
-    ImGui::TextDisabled("%s", i18n::T("Entrada ONLINE en el menu de Duelo.", "ONLINE entry in the Duel menu."));
+    ImGui::TextDisabled("%s", i18n::T("Entrada ONLINE (beta) en el menu de Duelo.", "ONLINE (beta) entry in the Duel menu."));
   }
   ImGui::Separator();
 
@@ -4020,8 +4020,8 @@ const char* ImportSourceNote(const std::string& id) {
                    "Model, moves, combos and yells from the original Budokai 1; ultimate from its Budokai 3 counterpart.");
   }
   if (id == "b2") {
-    return i18n::T("Modelo de Budokai 2; golpes, tecnicas y definitiva de su equivalente en Budokai 3.",
-                   "Budokai 2 model; moves, techniques and ultimate from its Budokai 3 counterpart.");
+    return i18n::T("Modelo de Budokai 2 con su pelo y cara; golpes y combos de B2; tecnicas, definitiva y voz del donante.",
+                   "Budokai 2 model with its hair and face; B2 moves and combos; techniques, ultimate and voice from the donor.");
   }
   if (id == "b3") {
     return i18n::T("Modelos de la comunidad (.amb / .amo + .amt) de 'modding resources'.",

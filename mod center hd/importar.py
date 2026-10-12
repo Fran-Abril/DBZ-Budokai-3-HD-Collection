@@ -8,7 +8,8 @@ roster_build.new_char; el montaje (_roster) se hace como siempre al pulsar JUGAR
 
 Fuentes:
   b1         Budokai 1 (ISO PS2): modelo + moveset + combos + gritos propios (b1port.py)
-  b2         Budokai 2 (ISO PS2): modelos (#AMB [AMO, AMT]); moveset del donante
+  b2         Budokai 2 (ISO PS2): modelos (#AMB [AMO, AMT]) con su peluca (pelo + cara) pegada a la
+             cabeza; golpes y combos de B2 (b1port.B2) sobre el moveset del donante
   b3         Budokai 3 / mods de la comunidad: .amb y parejas .amo/.amt en "modding resources"
              (y en la carpeta que se pase con --carpeta)
   iw         Infinite World (carpeta del juego PS2): modelos, voces y gritos de IW, y su moveset
@@ -70,7 +71,7 @@ GAMES = [
 ]
 NOTES = {
     "b1": "Modelo, golpes, combos y gritos del Budokai 1 original; definitiva de su equivalente en B3.",
-    "b2": "Modelo de Budokai 2; golpes, tecnicas y definitiva de su equivalente en Budokai 3.",
+    "b2": "Modelo de Budokai 2 con su pelo y cara; golpes y combos de B2; tecnicas, definitiva y voz del donante.",
     "b3": "Modelos de la comunidad (.amb / .amo+.amt); golpes del donante.",
     "iw": "Modelo, voces, gritos, golpes, tecnicas y definitiva de Infinite World (con modo hiper).",
     "sb1": "Modelos de PSP con sus formas; golpes de Shin Budokai (sbport) o del donante.",
@@ -723,6 +724,18 @@ def b1_list():
     return out
 
 
+def b2_wigs(clave):
+    """Pelucas (pelo + cara, huesos X<P>_S0n_WIG) de un personaje de B2: {forma (0 normal, 1 SSJ...): entrada}."""
+    import b1port  # noqa: PLC0415
+    b2 = b1port.B2(source_path("b2"))
+    pre = clave.lstrip("X")
+    out = {}
+    for i, (p, form) in sorted(b2.wigs().items()):
+        if p == pre:
+            out.setdefault(form, i)
+    return out
+
+
 def iw_ports():
     """Ports IW -> B3 de la comunidad: {nombre en minusculas: carpeta B3}."""
     out = {}
@@ -1071,6 +1084,8 @@ def do_import(a):
     donor = a.donante if a.donante is not None else (e.get("donante") if e.get("donante") is not None else 21)
     models, keys, port = [], {}, None
     forms = 1
+    b2_pairs = False                  # B2: trajes en parejas (peluca normal, peluca transformada)
+    ps2_bodies = []                   # B2: el cuerpo PS2 de cada traje (los trajes ya van en HD con su peluca)
     if game == "b1":
         import b1port  # noqa: PLC0415
         b1 = b1port.B1(source_path("b1"))
@@ -1090,10 +1105,25 @@ def do_import(a):
     else:                             # modelos de un AFS: un traje cada uno
         afs = (AfsFile(source_path("b2"), "/USR/DATA_CMN.AFS") if game == "b2"
                else iw_afs(source_path("iw")))
+        wigs = b2_wigs(e["clave"]) if game == "b2" else {}
+        # B2: pelo y cara van en "pelucas" aparte (S00 normal, S01 Super Saiyan) que se pegan a la
+        # cabeza; con las dos, cada traje sale en pareja (normal, transformado) como las formas de B1
+        b2_pairs = 0 in wigs and 1 in wigs
         for m in e["modelos"][:MAX_COSTUMES]:
-            p = os.path.join(work, "traje%d.amb" % (len(models) + 1))
-            open(p, "wb").write(afs.entry(m))
-            models.append(p)
+            for w in ([wigs[0], wigs[1]] if b2_pairs else [wigs.get(0)]):
+                p = os.path.join(work, "traje%d.amb" % (len(models) + 1))
+                data = afs.entry(m)
+                ps2_bodies.append(data)   # el puerto de golpes lee el esqueleto PS2 (sin peluca)
+                if w is not None:
+                    import ps2hd  # noqa: PLC0415
+                    try:
+                        data = ps2hd.convert_with_wigs(data, [afs.entry(w)])
+                    except Exception as ex:  # noqa: BLE001
+                        rb.log("aviso: sin pelo pegado en el traje %d (%s)" % (len(models) + 1, ex))
+                open(p, "wb").write(data)
+                models.append(p)
+        if wigs.get(0) is not None:
+            rb.log("Budokai 2: pelo y cara pegados a la cabeza%s" % (" (normal y transformado)" if b2_pairs else ""))
         port = e.get("port")
     rb.log("importando %s de %s: %d modelos, donante %d" % (e["nombre"], dict((g, n) for g, n, s in GAMES)[game],
                                                          len(models), donor))
@@ -1136,20 +1166,31 @@ def do_import(a):
         except Exception as ex:  # noqa: BLE001
             files = {}
             rb.log("aviso: moveset de IW sin leer (%s): golpes del donante" % ex)
-    if game == "b1":                  # golpes, combos y gritos de B1 sobre el moveset del donante
+    b2_rec = None                     # B2: su moveset (mismo puerto que B1), si el preset lo pide
+    if game == "b2" and not a.golpes_donante:
+        import b1port  # noqa: PLC0415
+        b1 = b1port.B2(source_path("b2"))
+        b2_rec = (b1.movesets().get(e["clave"].lstrip("X")) or [None])[0]   # clave = prefijo de huesos (XGOK)
+        if b2_rec is None:
+            rb.log("aviso: %s no tiene moveset propio en Budokai 2: golpes del donante" % e["clave"])
+    if game == "b1" or b2_rec is not None:   # golpes, combos (y gritos de B1) sobre el moveset del donante
         import afs_pair  # noqa: PLC0415
         import ps2hd  # noqa: PLC0415
         dn = next(x for x in rb.DB["ids"] if x["id"] == donor)
         rep = []
         b1_ult = {}               # su definitiva de B1 traducida a la cinematica del donante
-        anm, cam = b1port.port(b1, int(e["clave"]), afs_pair.ps2(dn["anm"][0]), afs_pair.ps2(dn["cam"]), rep,
-                               models, [0x64], b1port.donor_model(dn["anm"][0]), ult_out=b1_ult)
+        anm, cam = b1port.port(b1, b2_rec if game == "b2" else int(e["clave"]), afs_pair.ps2(dn["anm"][0]),
+                               afs_pair.ps2(dn["cam"]), rep,
+                               ps2_bodies or models, [0x64], b1port.donor_model(dn["anm"][0]), ult_out=b1_ult)
         for ln in rep:
             rb.log("   " + ln)
         # con transformacion (P+K+G) los modelos van de dos en dos: traje 1 normal, traje 1 forma 2...
-        if any(ln.startswith("transformacion:") for ln in rep) and len(models) >= 2 and len(models) % 2 == 0:
+        if any(ln.startswith("transformacion:") for ln in rep) and len(models) >= 2 and len(models) % 2 == 0 and \
+                (game == "b1" or b2_pairs):
             forms = 2
         b1_anm, b1_cam = bytes(ps2hd.convert_block(anm)), bytes(ps2hd.convert_block(cam))
+    if b2_pairs and forms == 1:   # sin transformacion en su moveset: solo la peluca normal
+        models = models[::2]
     iw_forms = None               # IW con su moveset: sus formas sobre las del donante con el mismo nombre
     if game == "iw" and (port == "iw" or a.golpes_donante) and e.get("formas") and len(models) > 1:
         if a.donante is None:
@@ -1181,11 +1222,12 @@ def do_import(a):
     d = os.path.join(a.mods or rb.default_mods(), a.mod)
     toml = os.path.join(d, "personaje.toml")
     os.makedirs(os.path.join(d, "moveset"), exist_ok=True)
-    if game == "b1":
+    if game == "b1" or b2_rec is not None:
         open(os.path.join(d, "moveset", "anm.bin"), "wb").write(b1_anm)
         open(os.path.join(d, "moveset", "camara.bin"), "wb").write(b1_cam)
-        keys.update({"moveset": str_list(["moveset/anm.bin"] * forms), "camara": '"moveset/camara.bin"',
-                     "gritos": '"b1:%s"' % e["clave"], "voces": '"ninguna"'})
+        keys.update({"moveset": str_list(["moveset/anm.bin"] * forms), "camara": '"moveset/camara.bin"'})
+        if game == "b1":
+            keys.update({"gritos": '"b1:%s"' % e["clave"], "voces": '"ninguna"'})
         if b1_ult.get("receta"):
             with open(os.path.join(d, "moveset", "definitiva.json"), "w", encoding="utf-8") as fh:
                 json.dump(dict({"_capsulas_b1": b1_ult["capsulas"]}, **b1_ult["receta"]), fh, indent=1)

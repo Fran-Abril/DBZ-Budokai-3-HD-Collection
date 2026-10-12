@@ -178,7 +178,7 @@ personaje (`--opcion clave=valor`):
 | Fuente | `original` | `solo_modelos` |
 |---|---|---|
 | Budokai 1 (`b1`) | golpes, combos, gritos y definitiva de B1 | solo el modelo |
-| Budokai 2 (`b2`) | modelos de B2 (sus golpes aún no se portan) | — |
+| Budokai 2 (`b2`) | golpes y combos de B2 sobre el cuerpo del donante; pelo y cara (normal y Super Saiyan) pegados a la cabeza; técnicas, definitiva y voz del donante | solo el modelo (golpes, técnicas y voz del donante) |
 | Shin Budokai (`sb1`) / Another Road (`sb2`) | formas, golpes, técnicas que evolucionan, definitiva y voces | solo los modelos (voces de SB) |
 | Infinite World (`iw`) | formas, golpes, técnicas, hiper, definitiva y voces de IW | solo los modelos y sus formas |
 | Budokai 3 comunidad (`b3`), Heroes (`sdbh`) | lo que traiga el port / el modelo sobre el donante | — |

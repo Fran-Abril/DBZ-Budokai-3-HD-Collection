@@ -64,6 +64,7 @@ Uso:
 import argparse
 import json
 import os
+import re
 import struct
 import sys
 
@@ -146,6 +147,108 @@ class B1:
         v = [struct.unpack_from("<i", r, o)[0] for o in range(320, 360, 4)]
         return dict(common=v[0], amm=v[1], small=v[2], bcm=v[4], bsk=v[5], spx=v[6], snd=v[7:10],
                     models=[x for x in struct.unpack_from("<4i", r, 128) if x > 0])
+
+
+class B2(B1):
+    """Budokai 2 con la misma interfaz que B1 (port() sirve tal cual; BSK v3 = mismo formato que el v2
+    de B1, medido 2026-10-12). En DATA_CMN cada moveset es un #AMB [AMC, BCM, BSK, SPX] seguido (1-2
+    entradas despues) de sus animaciones, #AMB [AMM propio, AMM pequeno]; el personaje es el prefijo
+    de los huesos de ese AMM (GOK, VGT...). El pool 1 de su BSK cabe justo en el AMM propio (comprobado
+    en los 38 movesets). record(rec) toma la entrada del moveset; movesets() da {prefijo: [entradas]}."""
+    COMMON = (134, 0)               # AMM comun (275 animaciones, huesos GOK_): el pool 0 de los BSK de B2
+
+    def __init__(self, iso_path=None):
+        import iso
+        self.iso = iso.Iso(iso_path or iso.find_game("b2"))
+        self.f = self.iso.open(self.iso.find("/USR/DATA_CMN.AFS") or "/USR/DATA_CMN.AFS")
+        self.f.seek(4)
+        n = struct.unpack("<I", self.f.read(4))[0]
+        self.tab = struct.unpack("<%dI" % (2 * n), self.f.read(8 * n))
+        self._scan = None
+
+    def entry(self, i):
+        if isinstance(i, tuple):
+            return amb_kids(super().entry(i[0]))[i[1]][0]
+        return super().entry(i)
+
+    def _kinds(self, i):
+        if not self.tab[2 * i + 1]:
+            return []
+        self.f.seek(self.tab[2 * i])
+        if self.f.read(4) != b"#AMB":
+            return []
+        try:
+            return [(k[:4], k) for k, _ in amb_kids(super().entry(i))]
+        except (struct.error, IndexError):
+            return []
+
+    @staticmethod
+    def _prefix(names):
+        import collections  # noqa: PLC0415
+        c = collections.Counter(n.split("_")[0].lstrip("X") for n in names if "_" in n).most_common(1)
+        return c[0][0] if c else "?"
+
+    def scan(self):
+        """(movesets {entrada: (anim, prefijo)}, modelos {prefijo: [entradas #AMB AMO+AMT]})."""
+        if self._scan is None:
+            kinds = [self._kinds(i) for i in range(len(self.tab) // 2)]
+            mv, models, wigs = {}, {}, {}
+            for i, k in enumerate(kinds):
+                tags = [t for t, _ in k]
+                if tags == [b"#AMC", b"#BCM", b"#BSK", b"#SPX"]:
+                    a = next((j for j in range(i + 1, min(i + 4, len(kinds)))
+                              if [t for t, _ in kinds[j]][:1] == [b"#AMM"] and len(kinds[j]) == 2), None)
+                    if a is not None:
+                        try:
+                            mv[i] = (a, self._prefix(Amm(kinds[a][0][1]).names))
+                        except (struct.error, IndexError, ValueError):
+                            pass
+                elif tags == [b"#AMO", b"#AMT"]:
+                    try:
+                        names = [n for n, _, _ in amo_bind(k[0][1]).values()]
+                    except (struct.error, IndexError, ValueError):
+                        continue
+                    wig = next((re.match(r"X?([A-Z0-9]+)_S(\d\d)_WIG$", n) for n in names
+                                if re.match(r"X?[A-Z0-9]+_S\d\d_WIG$", n)), None)
+                    # (Videl, Gotenks gordo, Vegeta Majin traen la peluca dentro del cuerpo: son trajes)
+                    body = any(re.match(r"[A-Z0-9]+_(BODY|WAIST|HIPS|HEAD)$", n) for n in names)
+                    if wig and not body:   # pelo + cara de una forma (se pega a la cabeza del cuerpo)
+                        wigs[i] = (wig.group(1), int(wig.group(2)))
+                    else:
+                        models.setdefault(self._prefix(names), []).append(i)
+            # AMM comun (pool 0): el #AMB [AMM...] mas grande que no es de ningun personaje (en la
+            # europea, la entrada 134); por contenido y no por indice, para valer en otras regiones
+            own = {a for a, _ in mv.values()}
+            best = (0, None)
+            for i, k in enumerate(kinds):
+                if i in own or [t for t, _ in k][:1] != [b"#AMM"]:
+                    continue
+                try:
+                    best = max(best, (len(Amm(k[0][1]).anims), i))
+                except (struct.error, IndexError, ValueError):
+                    pass
+            if best[1] is not None:
+                self.COMMON = (best[1], 0)
+            self._scan = (mv, models)
+            self._wigs = wigs
+        return self._scan
+
+    def wigs(self):
+        """{entrada: (prefijo, forma)} de las pelucas (pelo + cara aparte; S00 normal, S01 SSJ...)."""
+        self.scan()
+        return self._wigs
+
+    def movesets(self):
+        out = {}
+        for m, (_, p) in sorted(self.scan()[0].items()):
+            out.setdefault(p, []).append(m)
+        return out
+
+    def record(self, rec):
+        mv, models = self.scan()   # (tambien fija COMMON)
+        anm, pre = mv[rec]
+        return dict(common=self.COMMON, amm=(anm, 0), small=(anm, 1), bcm=(rec, 1), bsk=(rec, 2), spx=(rec, 3),
+                    snd=[], models=models.get(pre, []), prefijo=pre)
 
 
 def amb_kids(d):
@@ -1274,6 +1377,19 @@ def prueba():
         rr = b1.record(13)
         u = b1_ultimate(b1.entry(rr["bsk"]), b1.entry(rr["spx"]), bcm_parse(b1.entry(rr["bcm"]))[1])
         assert u["ranura"] == 3 and u["capsulas"] == [81] and len(u["eventos"]) == 18, u
+    import iso  # noqa: PLC0415
+    if iso.find_game("b2"):           # B2: los pools de los BSK caben en el AMM comun y en el propio
+        b2 = B2()
+        gok = b2.movesets()["GOK"][0]
+        r = b2.record(gok)
+        raw = b2.entry(r["bsk"])
+        assert r["models"], r
+        L = bsk_code_list(raw)
+        top = {}
+        for c in (c for c, a in enumerate(L) if a):
+            anim, pool = struct.unpack_from("<HH", raw, L[c])
+            top[pool] = max(top.get(pool, 0), anim)
+        assert top[0] < len(Amm(b2.entry(r["common"])).anims) and top[1] < len(Amm(b2.entry(r["amm"])).anims), top
     print("b1port: prueba OK")
 
 
@@ -1290,9 +1406,11 @@ def main():
     ap.add_argument("--hd", action="store_true", help="convertir a HD (ps2hd)")
     ap.add_argument("--quitar-efecto", nargs="*", default=[],
                     help="efectos de B1 (hex) que se quitan: en el BSP del donante son otros")
+    ap.add_argument("--juego", choices=("b1", "b2"), default="b1",
+                    help="b2: --registro es la entrada del moveset en DATA_CMN (B2().movesets(): GOK 173, VGT 294)")
     a = ap.parse_args()
     import afs_pair
-    b1 = B1()
+    b1 = B2() if a.juego == "b2" else B1()
     report = []
     ult = {}
     anm, cam = port(b1, a.registro, afs_pair.ps2(a.donante_anm), afs_pair.ps2(a.donante_cam), report,

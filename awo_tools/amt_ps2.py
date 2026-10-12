@@ -82,12 +82,17 @@ def dds_dxt3_header(w, h):
             struct.pack("<I", 0x1000) + bytes(16))
 
 
-def to_azt(amt, images=None):
-    """#AMT PS2 -> #AZT HD. images: {idx: ndarray RGBA} para sustituir texturas."""
+def to_azt(amt, images=None, extra=()):
+    """#AMT PS2 -> #AZT HD. images: {idx: ndarray RGBA} para sustituir texturas. extra: otros #AMT
+    cuyas texturas van detras (indices n, n+1...: las pelucas de Budokai 2 pegadas al cuerpo)."""
     sys.path.insert(0, os.path.join(HERE, "..", "mod center hd"))
     from texture_b3 import encode_dxt3
     n, idx = struct.unpack("<II", amt[0x10:0x18])
-    ts = entries(amt, keep_empty=True)
+    srcs = [(amt, t) for t in entries(amt, keep_empty=True)]
+    for e in extra:
+        srcs += [(e, dict(t, idx=len(srcs) + k) if t else None) for k, t in enumerate(entries(e, keep_empty=True))]
+    n = len(srcs)
+    ts = [t for _, t in srcs]
     m = sum(1 for t in ts if t)
     first = idx + 4 * n          # la HD pone las entradas presentes justo tras el indice
     data_base = (first + 0x30 * m + 0x1F) // 0x20 * 0x20
@@ -100,7 +105,7 @@ def to_azt(amt, images=None):
             continue
         img = images.get(k) if images else None
         if img is None:
-            img = decode(amt, t)
+            img = decode(srcs[k][0], t)
         from texture_b3 import pad4  # noqa: PLC0415
         img = pad4(img)
         w, h = img.shape[1], img.shape[0]

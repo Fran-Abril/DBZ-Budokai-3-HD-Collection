@@ -294,6 +294,7 @@ std::vector<ModInfo> ListMods() {
       continue;
     }
     const std::string raw_name = rex::path_to_utf8(mod_entry.path().filename());
+    if (!raw_name.empty() && raw_name[0] == '.') continue;   // .install_* a medias (launcher cerrado al instalar)
     if (EndsWithDotDisabled(raw_name) &&
         std::filesystem::exists(mods_root / StripDotDisabled(raw_name))) {
       continue;

@@ -22,7 +22,8 @@ HudSide Hud(int player);
 
 // Tag Team al vuelo (tagteam_slots.cpp): miembros elegidos en la rueda por lado (0 = 1P).
 // Con 2 o mas, el combate siguiente usa la ranura de ese lado con esos miembros.
-void SetDynamicTeam(int side, const std::vector<int>& members);
+// remember: el equipo del lado 1 pasa a ser "mi ultimo equipo" (el que se lleva al online); el online no
+void SetDynamicTeam(int side, const std::vector<int>& members, bool remember = true);
 void ClearDynamicTeams();
 std::vector<int> DynamicTeam(int side);
 // Capsulas "Custom" de un miembro, elegidas en el menu del juego al confirmarlo (n + 7 IDs, como

@@ -9,7 +9,9 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -51,7 +53,9 @@ std::string Token() {
   std::ifstream in(ExeDir() / "novas_mods.key");
   std::string hex, out;
   in >> hex;
+  if (hex.rfind("github_pat_", 0) == 0) return hex;   // pegada tal cual (sin pasar por la herramienta)
   for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+    if (!std::isxdigit(uint8_t(hex[i])) || !std::isxdigit(uint8_t(hex[i + 1]))) return {};   // fichero roto: sin clave
     out += char(std::stoi(hex.substr(i, 2), nullptr, 16) ^ 0x5A);
   }
   return out;
@@ -104,7 +108,12 @@ void Fetch() {
             if (key.rfind("nombre_", 0) == 0) e.names[key.substr(7)] = v.value_or(std::string());
             if (key.rfind("descripcion_", 0) == 0) e.descs[key.substr(12)] = v.value_or(std::string());
           }
-          if (!e.mod.id.empty() && !e.mod.zip.empty() && e.mod.id.find_first_of("/\\.") == std::string::npos) {
+          // id = nombre de carpeta (solo letras, cifras, _ y -: ni rutas ni "C:"); zip sin ?, # ni ".."
+          const auto plain = [](const std::string& s) {
+            return std::all_of(s.begin(), s.end(), [](char c) { return std::isalnum(uint8_t(c)) || c == '_' || c == '-'; });
+          };
+          if (!e.mod.id.empty() && !e.mod.zip.empty() && plain(e.mod.id) &&
+              e.mod.zip.find_first_of("?#\\") == std::string::npos && e.mod.zip.find("..") == std::string::npos) {
             list.push_back(std::move(e));
           }
         }
@@ -193,7 +202,8 @@ void InstallNovaMod(const NovaMod& mod) {
     const std::string data = Get(mod.zip);
     std::error_code ec;
     std::string error;
-    if (data.empty() || (mod.size > 0 && (long long)data.size() != mod.size)) {
+    // un zip empieza por "PK": una respuesta de error de GitHub no se instala
+    if (data.size() < 4 || data.compare(0, 2, "PK") != 0 || (mod.size > 0 && (long long)data.size() != mod.size)) {
       error = i18n::T("no se pudo descargar (revisa tu conexion)", "download failed (check your connection)");
     } else {
       const fs::path tmp_dir = ExeDir() / "novas_tmp";
@@ -205,6 +215,7 @@ void InstallNovaMod(const NovaMod& mod) {
       }
       // la copia instalada pasa a mods_respaldo (nunca se borra) y se respeta si estaba desactivada
       bool was_disabled = false;
+      std::vector<std::pair<fs::path, fs::path>> moved;   // (copia apartada, sitio original)
       for (const std::string& dir : {mod.id, mod.id + ".disabled"}) {
         const fs::path old = ModsRoot() / dir;
         if (!fs::is_directory(old, ec)) continue;
@@ -213,10 +224,18 @@ void InstallNovaMod(const NovaMod& mod) {
         fs::create_directories(bak.parent_path(), ec);
         fs::rename(old, bak, ec);
         if (ec) error = i18n::T("no se pudo apartar la version instalada", "could not move the installed version aside");
+        else moved.emplace_back(bak, old);
       }
       std::string name;
       if (error.empty() && !InstallModFromZip(rex::path_to_utf8(zip), name, error)) {
         error = i18n::T("el zip no se pudo instalar", "the zip could not be installed");
+      }
+      if (!error.empty()) {   // fallo: lo copiado a medias se aparta y la version que habia vuelve a su sitio
+        for (const auto& [bak, old] : moved) {
+          if (fs::exists(old, ec)) fs::rename(old, ExeDir() / "mods_respaldo" / (old.filename().string() + "_fallido_" + Stamp()), ec);
+          fs::rename(bak, old, ec);
+          if (ec) REXLOG_WARN("dbz3: Nova's Mods: no se pudo devolver {} (sigue en mods_respaldo)", rex::path_to_utf8(old));
+        }
       }
       fs::remove(zip, ec);
       if (error.empty() && was_disabled) SetModEnabled(name, false);

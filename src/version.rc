@@ -34,13 +34,15 @@
 // v1.4.4 = Tag Team y Online (beta) como mods nativos, Nova's Mods (descargas en el launcher),
 // historias propias de Dragon Universe (Freezer) y editor de historias en el Mod Kit.
 // v1.4.4.1 = "1.4.4 EX": descargas de Nova's Mods activas, arreglo de relevos seguidos en Tag Team.
+// v1.4.4.2 = "1.4.4 EX+": Budokai 2 en el importador (golpes y pelucas), ronda de arreglos de Tag
+// Team / Online (beta), Nova's Mods y campanas.
 #include <windows.h>
 
 #define VERSION_MAJOR 1
 #define VERSION_MINOR 4
 #define VERSION_PATCH 4
-#define VERSION_BUILD 1
-#define DBZ3_VERSION_STR "1.4.4.1"
+#define VERSION_BUILD 2
+#define DBZ3_VERSION_STR "1.4.4.2"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, VERSION_BUILD

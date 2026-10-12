@@ -493,9 +493,75 @@ def names_list(names):
     return [names[i:i + 32].split(b"\0")[0].decode("latin1") for i in range(0, len(names), 32)]
 
 
-def convert_amo(b, report=None):
-    """bytes #AMO0 (PS2, LE) -> bytes #AWO (HD, BE)."""
+def _qmat(q, t):
+    x, y, z, w = q
+    M = np.eye(4)
+    M[:3, :3] = [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                 [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                 [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+    M[:3, 3] = t
+    return M
+
+
+def attach_rigid(a, extra, tex_off, bone_suffix="_HEAD"):
+    """Pega las partes de otro #AMO0 (`extra`, en el espacio local del hueso *_HEAD del cuerpo, como
+    las pelucas de Budokai 2: huesos X<P>_S0n_WIG / X<P>_L00_S0n_FACE con bind identidad) como partes
+    rigidas del grupo de ese hueso en el AMG 0 del cuerpo. Sus texturas van detras de las del cuerpo
+    (tex_off = n del #AMT del cuerpo)."""
+    m = a.amgs[0]
+    names = names_list(m.b[m.a + m.names_rel:m.a + m.names_rel + 32 * m.nb])
+    head = next((i for i, n in enumerate(names) if n.endswith(bone_suffix) and not n.startswith("X")), None)
+    if head is None:
+        raise ConvError("el cuerpo no tiene hueso %s" % bone_suffix)
+    w = PS2AMO(extra)
+    added = []
+    for wm in w.amgs[:1]:
+        # bind de los huesos de la peluca (WIG/FACE son identidad; los mechones HAIR1.. de Goku no)
+        world = []
+        for i in range(wm.nb):
+            o = wm.a + wm.axes_rel + 80 * i
+            q = [lef(wm.b, o + 4 * k) for k in range(4)]
+            t = [lef(wm.b, o + 16 + 4 * k) for k in range(3)]
+            par = le(wm.b, o + 0x40)
+            L = _qmat(q, t)
+            pi_ = (par - wm.axes_rel) // 80 if par else -1
+            world.append(world[pi_] @ L if 0 <= pi_ < i else L)
+        skin = {s[4]: s for s in wm.skin}          # piel: (hueso, peso, pos local, normal local, off)
+
+        def place(bone, pos, nrm):
+            W = world[bone]
+            return [float(x) for x in W[:3, :3] @ pos + W[:3, 3]], \
+                (None if nrm is None else [float(x) for x in W[:3, :3] @ nrm])
+        for p in wm.parts:
+            verts = []
+            for off, xyz, nrm, uv, col in p.verts:
+                if off in skin:
+                    s = skin[off]
+                    pos, n2 = place(s[0], s[2], s[3] if s[3] is not None else nrm)
+                else:
+                    pos, n2 = place(p.bone, xyz, nrm)
+                verts.append((off, pos, n2, uv, col))
+            p.verts = verts
+            p.bone = head
+            for f in ("tex", "shader"):
+                if getattr(p, f) != 0xFFFFFFFF:
+                    setattr(p, f, getattr(p, f) + tex_off)
+            added.append(len(m.parts))
+            m.parts.append(p)
+    grp = next((g for g in m.groups if g[0] == head), None)
+    if grp:
+        grp[1].extend(added)
+    else:
+        m.groups.append((head, added))
+    m.ntex = max(m.ntex, tex_off + max((w2.ntex for w2 in w.amgs[:1]), default=0))
+    return len(added)
+
+
+def convert_amo(b, report=None, attach=()):
+    """bytes #AMO0 (PS2, LE) -> bytes #AWO (HD, BE). attach: [(#AMO0 extra, tex_off)] rigidos a *_HEAD."""
     a = PS2AMO(b)
+    for extra, tex_off in attach:
+        attach_rigid(a, extra, tex_off)
     nb = a.nb
     o = Out()
     o.b += bytes(0x30)

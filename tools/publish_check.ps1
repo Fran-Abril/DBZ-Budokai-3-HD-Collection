@@ -64,7 +64,7 @@ foreach ($rel in $tracked) {
     $ext = [System.IO.Path]::GetExtension($rel).ToLower()
     $full = Join-Path $repoPath ($rel -replace '/', '\')
 
-    if ($gameExt -contains $ext) {
+    if ($gameExt -contains $ext -and $rel -ne 'docs/logo.png') {   # el logo del README es propio, no del juego
         # permitir ficheros de datos legitimos de tools/ (gamecontrollerdb.txt no; .bin si no)
         $fails.Add("game file extension rastreado: $rel")
     }

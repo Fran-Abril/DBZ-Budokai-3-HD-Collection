@@ -60,11 +60,11 @@ void PutCapsules(uint8_t* base, uint32_t rec, int side, int id) {
   for (uint32_t k = 0; k < 8; ++k) REX_STORE_U16(rec + 52 + 2 * k, c[k]);
 }
 
-void SetDynamicTeam(int side, const std::vector<int>& members) {
+void SetDynamicTeam(int side, const std::vector<int>& members, bool remember) {
   if (side < 0 || side > 1) return;
   std::lock_guard<std::mutex> lock(g_mu);
   g_dyn[size_t(side)] = members;
-  if (side == 0 && members.size() >= 2) g_mine = members;
+  if (remember && side == 0 && members.size() >= 2) g_mine = members;
 }
 
 std::vector<int> MyLastTeam() {

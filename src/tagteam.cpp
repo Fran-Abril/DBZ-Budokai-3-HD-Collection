@@ -81,6 +81,7 @@ struct Team {
   Phase phase = Phase::kIdle;
   int target = -1;                 // miembro que entra
   uint32_t since = 0;              // tick en que empezo la carga
+  int retries = 0;                 // cargas pedidas de nuevo por no terminar
   uint32_t new_cam = 0;            // ficheros pedidos para el que entra (aun no son del luchador)
   uint32_t new_lang = 0;
   uint32_t rec = 0;                // registro de 372 B provisional (forma kLoad = su forma 0)
@@ -183,12 +184,31 @@ bool Free(uint8_t* base, uint32_t x) { return x && REX_LOAD_U16(x + 3244) <= 2; 
 // Pelea en marcha: 0x823F39A0 vale 1 solo entre el FIGHT! y el final del asalto (0 en la
 // presentacion, el READY?, el KO/ganador y el menu final; medido 2026-10-11 con volcados de un
 // Duelo, US). En la EU no esta medido: se deja pasar.
-bool Fighting(uint8_t* base) { return dbz3::g_guest_eu || REX_LOAD_U32(0x823F39A0) != 0; }
+// Estado del combate del juego (US): mgr = *0x823D6CF4, mgr+35128 = 1-3 presentacion/READY, 4 pelea,
+// 5 combate acabado (KO o tiempo; mgr+35188 = perdedor). Medido 2026-10-12: es fiable donde
+// 0x823F39A0 no (en un COM vs COM se quedo a 0 todo el combate; en otro, a 1 sobre el menu final).
+uint32_t BattleState(uint8_t* base) {
+  const uint32_t mgr = dbz3::g_guest_eu ? 0 : REX_LOAD_U32(0x823D6CF4);
+  return mgr ? REX_LOAD_U32(mgr + 35128) : 0;
+}
+bool Fighting(uint8_t* base) {
+  if (const uint32_t st = BattleState(base)) return st == 4;
+  return dbz3::g_guest_eu || REX_LOAD_U32(0x823F39A0) != 0;
+}
+// Presentacion / READY? (antes del FIGHT!): sin relevos ni SELECT
+bool PreFight(uint8_t* base) {
+  const uint32_t st = BattleState(base);
+  return st != 0 && st < 4;
+}
 // Combate acabado (KO final o tiempo; el menu "Battle Again?"): la bandera de pelea estuvo a 1 en este
 // combate y ha vuelto a 0. Sin relevos ni fichas del equipo desde ahi (seguian sobre el menu final,
 // 2026-10-12). Si un escenario no la pone nunca a 1, no se bloquea nada.
 std::atomic<bool> g_fight_seen{false};
-bool Over(uint8_t* base) { return !dbz3::g_guest_eu && g_fight_seen.load() && REX_LOAD_U32(0x823F39A0) == 0; }
+bool Over(uint8_t* base) {
+  if (dbz3::g_guest_eu) return false;
+  if (const uint32_t st = BattleState(base)) return st >= 5;
+  return g_fight_seen.load() && REX_LOAD_U32(0x823F39A0) == 0;
+}
 
 // Solo para el ordenador (COM): los dos luchadores libres.
 bool BothFree(uint8_t* base) { return Free(base, Fighter(base, 0)) && Free(base, Fighter(base, 1)); }
@@ -200,7 +220,9 @@ constexpr uint32_t kKoMin = 90, kCooldown = 90, kSelectBuffer = 120, kRefusedSho
 bool KoLanded(uint8_t* base, uint32_t x, const Team& t, uint32_t now) {
   if (now - t.ko_at < kKoMin) return false;
   const uint16_t a = REX_LOAD_U16(x + 3244);
-  return (t.seen25 && a != 25) || a == 18 || a == 35 || a == 36 || a <= 2;
+  // 19 (tumbado) tambien, y a los 5 s de la caida en cualquier caso (un ring out no pasa por la 25 y el
+  // relevo no llegaba nunca)
+  return (t.seen25 && a != 25) || a == 18 || a == 19 || a == 35 || a == 36 || a <= 2 || now - t.ko_at > 300;
 }
 // El rival en modo hiper (43/44) no se releva a mitad de la escena.
 bool RivalHyper(uint8_t* base, int p) {
@@ -491,7 +513,7 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   // efectos de sus tecnicas, solo en la ranura A del jugador (estudio 18): los del que sale se guardan
   // (no se sueltan hasta el final del combate, ver Team::tech) y entran los del nuevo: los guardados de
   // un relevo anterior o los recien cargados, procesados con sub_82126490
-  if (!dbz3::g_guest_eu && (t.new_tech || t.tech_ok[size_t(k)])) {
+  if (!dbz3::g_guest_eu && (t.new_tech || t.tech_ok[size_t(k)]) && REX_LOAD_U32(kTechBlock) && SideOf(base, x) >= 0) {
     const int side = SideOf(base, x);
     const uint32_t slot = REX_LOAD_U32(kTechBlock) + 1152 * uint32_t(side) + 80;
     if (t.tech_owner >= 0) {
@@ -542,6 +564,7 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   REX_STORE_U16(x + 3252, 0);
   t.active = k;
   t.phase = Phase::kIdle;
+  t.retries = 0;
   t.done_at = g_frame.load();
   const float mx = LoadF(base, x + kHpMax);
   StoreF(base, x + kHp, std::min(t.hp[size_t(k)], mx > 0 ? mx : t.hp[size_t(k)]));
@@ -626,6 +649,27 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     }
   }
   if (!dbz3::g_guest_eu && REX_LOAD_U32(0x823F39A0) != 0) g_fight_seen = true;
+  // DIAGNOSTICO (fin por tiempo): cambios de la bandera de pelea y de la accion de cada luchador
+  if (static const bool fdiag = std::getenv("DBZ3_TAG_FLAGDIAG") != nullptr; fdiag && !dbz3::g_guest_eu) {
+    static uint32_t last_flag = 0xFFFFFFFFu;
+    const uint32_t fl = REX_LOAD_U32(0x823F39A0);
+    if (fl != last_flag) {
+      const uint32_t a = Fighter(base, 0), b = Fighter(base, 1);
+      REXLOG_INFO("dbz3 tag: bandera de pelea {:08X} -> {:08X} (acciones {} {}, 39A4 {:08X} 39A8 {:08X})", last_flag, fl,
+                  a ? REX_LOAD_U16(a + 3244) : 0, b ? REX_LOAD_U16(b + 3244) : 0, REX_LOAD_U32(0x823F39A4),
+                  REX_LOAD_U32(0x823F39A8));
+      last_flag = fl;
+    }
+    static uint32_t tick = 0;
+    if (++tick % 60 == 0 && g_in_battle.load()) {   // cada segundo: acciones, pantalla y zona de la bandera
+      const uint32_t a = Fighter(base, 0), b = Fighter(base, 1);
+      char zone[160] = {};
+      for (uint32_t i = 0; i < 16; ++i)
+        std::snprintf(zone + 9 * i, sizeof(zone) - 9 * i, "%08X ", REX_LOAD_U32(0x823F3980 + 4 * i));
+      REXLOG_INFO("dbz3 tag: estado acciones {} {} pantalla {} zona {}", a ? REX_LOAD_U16(a + 3244) : 0,
+                  b ? REX_LOAD_U16(b + 3244) : 0, base[dbz3::GuestAddr(0x824BA110, 0x824BA100)], zone);
+    }
+  }
   const bool over = Over(base);
   std::lock_guard<std::mutex> lock(g_mu);
   for (int p = 0; p < 2; ++p) {
@@ -660,7 +704,7 @@ void Tick(PPCContext& ctx, uint8_t* base) {
           t.pending = -1;
           StartSwap(ctx, base, x, t, k);
         }
-      } else if (Free(base, x) && Cooled(t, now)) {      // SELECT: solo el propio libre
+      } else if (Free(base, x) && Cooled(t, now) && !PreFight(base)) {   // SELECT: solo el propio libre
         const int k = t.pending;
         t.pending = -1;
         StartSwap(ctx, base, x, t, k);
@@ -674,6 +718,9 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     const bool online = dbz3::net::Session::Get().active();
     if (t.phase != Phase::kLoading) g_net_local &= uint16_t(~bit);
     if (t.phase == Phase::kLoading) {
+      // PRUEBA (DBZ3_TEST_STALL=1: la primera carga no llega; =2: ninguna): el modelo que entra se pierde
+      static const char* stall = std::getenv("DBZ3_TEST_STALL");
+      if (stall && (stall[0] == '2' || t.retries == 0)) REX_STORE_U32(x + kModel0 + 4 * kLoad, 0);
       bool loaded = now - t.since >= kSwapMin && Loaded(base, x, t);
       if (online) {
         if (loaded) g_net_local |= bit;
@@ -699,7 +746,10 @@ void Tick(PPCContext& ctx, uint8_t* base) {
         Call(ctx, base, sub_82103908, x, 0);
       }
       // efectos del que sale aun vivos: se espera (como mucho kFxWaitMax desde que empezo la carga)
-      if (loaded && now - g_tech_seen[size_t(p)].load() < kFxQuiet && now - t.since < kFxWaitMax && !online) loaded = false;
+      // (tambien los del rival: una tecnica suya pegada al que sale hizo caer el cambio de cuerpo,
+      // sub_82115270 -> sub_82155858 -> sub_821527C0 leyendo 0x3, 2026-10-12)
+      const uint32_t fx = std::max(g_tech_seen[0].load(), g_tech_seen[1].load());
+      if (loaded && now - fx < kFxQuiet && now - t.since < kFxWaitMax && !online) loaded = false;
       if (loaded && Free(base, x)) {
         FinishSwap(ctx, base, x, t);
         g_net_local &= uint16_t(~bit);
@@ -707,6 +757,37 @@ void Tick(PPCContext& ctx, uint8_t* base) {
         const uint32_t cam = t.new_cam, model = REX_LOAD_U32(x + kModel0 + 4 * kLoad);
         REXLOG_WARN("dbz3 tag: luchador {:08X}: la carga no termina (camara {:08X} +192 {:08X}, modelo {:08X} +36 {:08X})",
                     x, cam, cam ? REX_LOAD_U32(cam + 192) : 0, model, model ? REX_LOAD_U32(model + 36) : 0);
+        // se quedaba asi el resto del combate, con el que sale suspendido en el aire (2026-10-12: el modelo
+        // del que entra no llego tras un modo hiper a mitad de carga). Se pide otra vez y, si tampoco
+        // llega, se cancela el relevo y el que salio vuelve a su sitio.
+        const float home[3] = {t.home[0], t.home[1], t.home[2]};
+        const int k = t.target, tries = t.retries;
+        t.phase = Phase::kIdle;
+        if (tries < 1) StartSwap(ctx, base, x, t, k);
+        if (t.phase == Phase::kLoading) {   // pedido otra vez
+          std::copy(home, home + 3, t.home);
+          if (t.slide == 1) {   // ya estaba fuera: se queda donde esta
+            float cur[3];
+            for (uint32_t i = 0; i < 3; ++i) cur[i] = LoadF(base, x + 64 + 4 * i);
+            StartSlide(t, 1, cur, cur);
+          }
+          t.retries = tries + 1;
+        } else {                            // cancelado (o StartSwap no pudo empezar)
+          if (t.slide == 1) {               // el que salio vuelve a su sitio (un caido sigue tumbado)
+            float cur[3];
+            for (uint32_t i = 0; i < 3; ++i) cur[i] = LoadF(base, x + 64 + 4 * i);
+            StartSlide(t, 2, cur, home);
+          }
+          t.target = -1;
+          t.retries = 0;
+          t.done_at = now;
+          // KO: el relevo se vuelve a pedir (si no, el caido se quedaba tumbado con vida 1 para siempre)
+          if (t.down[size_t(t.active)]) {
+            t.pending = Pick(t, false);
+            t.pending_until = 0;
+          }
+          REXLOG_WARN("dbz3 tag: luchador {:08X}: relevo cancelado", x);
+        }
         t.since = now;
       }
     }
@@ -760,7 +841,7 @@ bool OnPad(PPCContext& ctx, uint8_t* base, uint32_t user, uint16_t buttons, uint
   std::lock_guard<std::mutex> lock(g_mu);
   Team* t = x ? TeamOf(base, x) : nullptr;
   if (!t) return false;
-  if (pressed && !Over(base)) {
+  if (pressed && !Over(base) && !PreFight(base)) {
     const uint32_t now = g_frame.load();
     const int k = Pick(*t, (buttons & kLb) || lt > 64);
     // se apunta aunque el luchador este a mitad de un golpe o en el aire: el relevo llega en cuanto

@@ -28,6 +28,7 @@
 #include <cstring>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -87,7 +88,12 @@ void Load() {
         continue;
       }
       if ((in_forms || in_suits || in_models || in_map_suits || in_map_anims) && eq != std::string::npos) {   // palabra = forma / traje / modelo
-        (in_forms ? g_start_form : in_suits ? g_rival_suit : in_models ? g_map_model : in_map_suits ? g_map_suit : g_map_anim)[uint32_t(std::strtoul(line.c_str(), nullptr, 10))] = int(std::strtol(line.c_str() + eq + 1, nullptr, 10));
+        const long v = std::strtol(line.c_str() + eq + 1, nullptr, 10);
+        if (v < -1 || v > 255) {   // van a un byte del juego: fuera de rango seria otro personaje o basura
+          REXLOG_WARN("dbz3 campanas: '{}': valor fuera de rango ignorado: {}", mod.name, line);
+          continue;
+        }
+        (in_forms ? g_start_form : in_suits ? g_rival_suit : in_models ? g_map_model : in_map_suits ? g_map_suit : g_map_anim)[uint32_t(std::strtoul(line.c_str(), nullptr, 10))] = int(v);
         continue;
       }
       if ((!in_codes && !in_story) || eq == std::string::npos) continue;
@@ -330,7 +336,8 @@ struct MapLook {
 };
 MapLook PickLook(uint8_t* base, const char* how, bool quiet = false) {
   MapLook l;
-  if (g_map_model.empty() && g_map_suit.empty() && g_map_anim.empty()) return l;
+  // EU: la casilla de DU (0x824A58A0) no esta localizada en la europea: sin cambio de aspecto
+  if (dbz3::g_guest_eu || (g_map_model.empty() && g_map_suit.empty() && g_map_anim.empty())) return l;
   const uint32_t slot = REX_LOAD_U8(0x824A58A0);
   const uint32_t blk = 0x8247A9B0 + 128 + 4624 * (slot < 38 ? slot : 0);
   std::vector<uint32_t> words = {REX_LOAD_U32(blk + 4564), REX_LOAD_U32(blk + 4568), g_last_battle.load()};
@@ -444,7 +451,22 @@ REX_HOOK_RAW(sub_82096FF0) {
     const uint32_t rel = offs >= 0x10000 && idx >= 0 && idx < 4096 ? REX_LOAD_U32(offs + 4 * uint32_t(idx)) : 0xFFFFFFFFu;
     const uint32_t entry = rel < 0x01000000u ? bank + rel : 0;
     const uint32_t res = entry ? REX_LOAD_U32(entry + 20) : 0;
-    const bool ok = entry && (!res || (res >= 0x10000 && code(REX_LOAD_U32(res)) && code(REX_LOAD_U32(REX_LOAD_U32(res) + 4))));
+    // el recurso tiene que ser de la clase de los efectos (vtable 8201CAA0, la unica vista en 14 relevos
+    // con tecnicas, DBZ3_FX_VTDIAG 2026-10-12): uno liberado por un relevo y reutilizado por otra clase
+    // pasaba el control anterior y el juego acababa en sub_822F5460 -> sub_822F8988 (cierre)
+    constexpr uint32_t kFxVtable = 0x8201CAA0;
+    const bool ok = entry && (!res || (res >= 0x10000 && REX_LOAD_U32(res) == kFxVtable &&
+                                       code(REX_LOAD_U32(REX_LOAD_U32(res) + 4))));
+    static const bool vtdiag = std::getenv("DBZ3_FX_VTDIAG") != nullptr;
+    if (ok && res && vtdiag) {   // DIAGNOSTICO: clases de recurso que usa el juego
+      static std::mutex mu;
+      static std::set<uint64_t> seen;
+      const uint32_t vt = REX_LOAD_U32(res);
+      std::lock_guard<std::mutex> lock(mu);
+      if (seen.size() < 32 && seen.insert((uint64_t(vt) << 32) | REX_LOAD_U32(vt + 4)).second)
+        REXLOG_INFO("dbz3 fxdiag: recurso {:08X} vtable {:08X} [1]={:08X} id {} desde {:08X}", res, vt,
+                    REX_LOAD_U32(vt + 4), id, uint32_t(ctx.lr));
+    }
     if (!ok) {
       static int warned = 0;
       if (warned++ < 8)

@@ -25,7 +25,13 @@ golpes = "donante"
 voces = "donante"
 
 [b2.original]
-descripcion = "Budokai 2: modelos de B2 (sus golpes aun no se portan: los del donante)"
+descripcion = "Budokai 2: golpes y combos de B2 sobre el cuerpo del donante (tecnicas, definitiva y voz del donante)"
+golpes = "fuente"
+voces = "donante"
+fisica = "auto"
+
+[b2.solo_modelos]
+descripcion = "Budokai 2: solo el modelo; golpes, tecnicas y voz del donante"
 golpes = "donante"
 voces = "donante"
 

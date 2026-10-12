@@ -363,6 +363,10 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
       }
       if (role_ == Role::kGuest) {
         delay_ = delay;
+        if (save_size > (16u << 20)) {   // una partida guardada no pasa de unos KB: paquete roto o hostil
+          Fail(Link::kError, T::T("datos del otro PC no validos", "invalid data from the other PC"));
+          return;
+        }
         if (save_size_ != save_size || save_have_.empty()) {
           save_size_ = save_size;
           save_.assign(save_size, 0);
@@ -458,7 +462,10 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
     case kTeam: {   // su equipo de Tag Team (se aplica al empezar, TakeStart)
       const uint8_t n = r.u8();
       std::vector<int> ids;
-      for (uint8_t i = 0; i < n && i < 3 && r.need(2); ++i) ids.push_back(int(r.u16()));
+      for (uint8_t i = 0; i < n && i < 3 && r.need(2); ++i) {
+        const int id = int(r.u16());
+        if (id < 64) ids.push_back(id);   // IDs del juego 0-43 y extra 44-63: otro valor se saldria de la tabla
+      }
       std::lock_guard<std::mutex> lock(mu_);
       peer_team_ = ids;
       break;
@@ -550,7 +557,7 @@ std::vector<uint8_t> StartPacket(uint32_t seed, const std::vector<uint8_t>& snap
 }  // namespace
 
 void Session::RequestStart() {
-  if (role_ != Role::kHost || link_ != Link::kConnected) return;
+  if (role_ != Role::kHost || link_ != Link::kConnected || !mods_match_) return;
   link_ = Link::kStarting;
   start_sent_ = true;
   seed_ = uint32_t(NowMs() * 2654435761u) | 1u;
@@ -601,8 +608,8 @@ bool Session::TakeStart(uint8_t* base) {
   {   // Tag Team: lado 1 el anfitrion, lado 2 el invitado, igual en los dos PCs (sin COM)
     std::vector<int> mine = dbz3::tag::MyLastTeam(), peer;
     { std::lock_guard<std::mutex> lock(mu_); peer = peer_team_; }
-    dbz3::tag::SetDynamicTeam(0, role_ == Role::kHost ? mine : peer);
-    dbz3::tag::SetDynamicTeam(1, role_ == Role::kHost ? peer : mine);
+    dbz3::tag::SetDynamicTeam(0, role_ == Role::kHost ? mine : peer, false);   // el invitado no hace suyo el del anfitrion
+    dbz3::tag::SetDynamicTeam(1, role_ == Role::kHost ? peer : mine, false);
     dbz3::tag::SetComSide(0, false);
     dbz3::tag::SetComSide(1, false);
     REXLOG_INFO("dbz3 online: equipos de Tag Team {} y {} luchadores", mine.size(), peer.size());
@@ -823,6 +830,7 @@ void Session::RunTick(const Pad& local, uint32_t rng) {
       bool got = false;
       while (Recv(pkt)) {
         if (!pkt.empty()) { Handle(pkt, true); got = true; }
+        if (!active()) return;   // BYE u otro fallo: sin esperar 10 s a que caduque
         pkt.clear();
       }
       if (theirs_[t % kRing].tick == t) break;

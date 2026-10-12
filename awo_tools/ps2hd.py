@@ -407,6 +407,36 @@ def conv_amo(b):
 HANDLERS[b"#AMO"] = conv_amo
 
 
+def convert_with_wigs(body, wigs):
+    """#AMB PS2 [AMO, AMT] del cuerpo + pelucas #AMB PS2 [AMO, AMT] (Budokai 2: pelo y cara aparte,
+    en el espacio de *_HEAD) -> un #AMB HD con todo junto (las pelucas rigidas a la cabeza)."""
+    import amo2awo  # noqa: PLC0415
+    import amt_ps2  # noqa: PLC0415
+
+    def kids(b):
+        n, tbl = struct.unpack("<II", b[0x10:0x18])
+        out = {}
+        for k in range(n):
+            off, size = struct.unpack("<II", b[tbl + 16 * k:tbl + 16 * k + 8])
+            if size:
+                out.setdefault(bytes(b[off:off + 4]), bytes(b[off:off + size]))
+        return out
+    bk = kids(body)
+    wk = [kids(w) for w in wigs]
+    attach, off = [], struct.unpack("<I", bk[b"#AMT"][0x10:0x14])[0]
+    for k in wk:
+        attach.append((k[b"#AMO"], off))
+        off += struct.unpack("<I", k[b"#AMT"][0x10:0x14])[0]
+    saved = dict(HANDLERS)
+    HANDLERS[b"#AMO"] = lambda b: amo2awo.convert_amo(bytes(b), attach=attach)
+    HANDLERS[b"#AMT"] = lambda b: amt_ps2.to_azt(b, extra=[k[b"#AMT"] for k in wk])
+    try:
+        return conv_container(body)
+    finally:
+        HANDLERS.clear()
+        HANDLERS.update(saved)
+
+
 def convert_block(b):
     h = HANDLERS.get(b[:4])
     if h is None:
