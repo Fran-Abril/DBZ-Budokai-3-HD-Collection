@@ -41,5 +41,12 @@ bool OnSelectPicked(int player, int id);
 // Menu de capsulas del juego tras confirmar (select_ext.cpp): elegido o atras, opcion (0 Normal,
 // 1 Custom) y la lista Custom de la casilla (7 IDs, 0xFFFF = hueco).
 void OnCapsuleChoice(int player, bool chosen, int option, const uint16_t* custom);
+// Forma inicial en la rueda (fuera del Tag Team y del online): LT/RT del mando `user` baja/sube la
+// forma con la que empieza el lado que esta eligiendo. StartForm(side) = 0 normal.
+void FormPickPad(int user, uint8_t lt, uint8_t rt);
+int StartForm(int side);
+// La elegida ahora (sin gastarla) y si cambio desde la ultima vez (la vista previa se rehace).
+int ChosenForm(int side);
+bool TakeFormDirty(int side);
 
 }  // namespace dbz3::ingame

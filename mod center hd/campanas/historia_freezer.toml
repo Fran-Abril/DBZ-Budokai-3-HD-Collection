@@ -73,8 +73,8 @@ reparar = true
 [[retrato]]
 entrada = 4501
 png = "retratos/mecha_freezer.png"
-escala = 0.85                     # mas pequeno y mas abajo (salia alto y grande)
-desplazamiento = [0, 40]
+escala = 1.15                     # retrato nuevo del usuario (2026-10-12): mismo tamaño que los oficiales
+desplazamiento = [0, 0]
 
 [[panel_limpio]]
 cmn = 1411

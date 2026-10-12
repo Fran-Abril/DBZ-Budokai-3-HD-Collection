@@ -130,6 +130,7 @@ DBZ3_HOOK(sub_8221C178, dbz3eu_sub_8221A940) {
         res = dbz3::ingame::TeamPickFilter(res, 1);
         if (res != real) REX_STORE_U16(out + 4, res);
       }
+      dbz3::ingame::FormPickPad(int(user), REX_LOAD_U8(out + 6), REX_LOAD_U8(out + 7));
       TagPad(ctx, base, user, out);
       ctx.r3.u64 = r3;
     }
@@ -150,6 +151,7 @@ DBZ3_HOOK(sub_8221C178, dbz3eu_sub_8221A940) {
   WritePad(base, out, s.Applied(user), s.tick());
   dbz3::tag::NetApplied(user, s.Applied(user).buttons);   // el juego no ve los bits del relevo
   REX_STORE_U16(out + 4, uint16_t(REX_LOAD_U16(out + 4) & ~0x0C00));
+  dbz3::ingame::FormPickPad(int(user), REX_LOAD_U8(out + 6), REX_LOAD_U8(out + 7));   // misma forma inicial
   TagPad(ctx, base, user, out);                          // mismo mando en los dos PCs: mismo relevo
   ctx.r3.u64 = 0;                                        // X_ERROR_SUCCESS: los dos conectados
 }

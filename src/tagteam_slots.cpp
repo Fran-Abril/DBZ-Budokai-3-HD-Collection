@@ -137,6 +137,33 @@ void BeforeBattleSetup(uint8_t* base, uint32_t sel) {
     dbz3::roster::SetPickedCell(int(k), -1, -1);
     REXLOG_INFO("dbz3 tag: lado {} empieza con el id {} ({} miembros)", k + 1, team[0], team.size());
   }
+  // forma inicial elegida con LT/RT en la rueda (en Tag Team, el primer miembro; online, la misma en los dos PCs): forma minima = la
+  // elegida (empieza en ella), la maxima no baja de ahi; tope = formas del personaje (char96 +7)
+  for (uint32_t k = 0; k < 2; ++k) {
+    const uint32_t rec = sel + 16 + 80 * k;
+    const int id = int(REX_LOAD_U16(rec + 16));
+    if (k == 0 && dbz3::campaigns::PlayerStartForm() > 0) continue;
+    const int want = dbz3::ingame::StartForm(int(k));
+    if (want <= 0 || id < 0 || id >= 105) continue;   // ponytail: IDs del char96 nativo/ampliado (<105)
+    const int forms = REX_LOAD_U8(0x8234ABB8u + uint32_t(id) * 96 + 7);
+    // como en el juego: cada forma pide su capsula (char372 +212 + 20*forma); sin ella equipada (las
+    // del lado: rec+52 = n y 7 IDs) se empieza en la mas alta que si tenga
+    const uint32_t c372 = 0x82329CF0u + 372u * uint32_t(id);
+    const uint32_t n = std::min<uint32_t>(REX_LOAD_U16(rec + 52), 7);
+    auto equipped = [&](uint32_t cap) {
+      for (uint32_t i = 0; i < n; ++i) {
+        if (REX_LOAD_U16(rec + 54 + 2 * i) == cap) return true;
+      }
+      return false;
+    };
+    int f = std::min(want, forms - 1);
+    // medido 2026-10-12: Goku forma g pide la capsula g; con las Normales solo lleva el Kaioken (1)
+    while (f > 0 && !equipped(REX_LOAD_U16(c372 + 212 + 20 * uint32_t(f)))) --f;
+    if (f <= 0) continue;
+    REX_STORE_U16(rec + 20, uint16_t(f));
+    if (REX_LOAD_U16(rec + 22) < f) REX_STORE_U16(rec + 22, uint16_t(f));
+    REXLOG_INFO("dbz3 forma: lado {} (id {}) empieza en la forma {} de {}", k + 1, id, f, forms);
+  }
 }
 
 }  // namespace dbz3::tag

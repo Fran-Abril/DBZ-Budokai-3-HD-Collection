@@ -23,6 +23,8 @@
 #include <cstdlib>
 #include <array>
 #include <atomic>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -108,6 +110,10 @@ struct Team {
   std::array<std::array<uint8_t, 544>, 5> tech{};
   std::array<bool, 5> tech_ok{};
   int tech_owner = -1;             // miembro cuyos efectos estan en la ranura del juego
+  // transformacion en curso (forma actual X+2980 / destino X+2984): SELECT a mitad de la subida de
+  // forma dejaba la camara lejos y el luchador sin dibujar (jugador, 2026-10-12): el relevo espera
+  uint32_t last_form = 0xFFFFFFFF;
+  uint32_t form_at = 0;            // tick del ultimo cambio de forma (o mientras actual != destino)
 };
 
 std::mutex g_mu;
@@ -214,6 +220,8 @@ bool Over(uint8_t* base) {
 bool BothFree(uint8_t* base) { return Free(base, Fighter(base, 0)) && Free(base, Fighter(base, 1)); }
 
 constexpr uint32_t kKoMin = 90, kCooldown = 90, kSelectBuffer = 120, kRefusedShow = 30;   // ticks
+// tras un cambio de forma el relevo espera esto (la subida de forma sigue animandose tras el cambio)
+constexpr uint32_t kFormQuiet = 120;
 // Tras un KO: el caido ya ha aterrizado (acabo la accion 25, o esta en pie / levantandose) y han
 // pasado 90 ticks desde la caida. Ticks y no reloj de pared: online el relevo tiene que caer en el
 // mismo tick en los dos PCs.
@@ -462,6 +470,7 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
 // registro y capsulas) y se termina como al empezar un combate.
 void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   const int k = t.target;
+  const bool ko = t.down[size_t(t.active)];   // entra por un KO (el que sale esta en el suelo)
   const uint8_t near_death = REX_LOAD_U8(x + kNearDeath);
   const uint32_t id = uint32_t(t.ids[size_t(k)]);
   const uint32_t model = REX_LOAD_U32(x + kModel0 + 4 * kLoad);
@@ -545,9 +554,16 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
     SwapAura(ctx, base, SideOf(base, x), t.new_aura);
     t.new_aura = 0;
   }
-  // llegada sin el destello de transformacion: el que entra baja desde donde subio el que salio (o
-  // desde encima del caido) y aterriza en su sitio
-  {
+  // llegada: el que entra baja desde donde subio el que salio y aterriza en su sitio. Tras un KO
+  // (como Freezer al volver como Mecha Freezer) aparece donde cayo el derrotado con el destello de
+  // transformacion del juego (abajo)
+  if (ko) {
+    if (t.slide == 1) {   // cayo mientras salia de un relevo pedido: aparece en el suelo, no en el aire
+      for (const uint32_t o : {48u, 64u, 80u})
+        for (uint32_t i = 0; i < 3; ++i) StoreF(base, x + o + 4 * i, t.home[i]);
+    }
+    t.slide = 0;
+  } else {
     float dx, dz;
     AwayDir(base, x, &dx, &dz);
     float home[3];
@@ -562,6 +578,7 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   REX_STORE_U16(x + 3244, 0);
   REX_STORE_U16(x + 3246, 0);
   REX_STORE_U16(x + 3252, 0);
+  if (ko) TAG_CALL(sub_820FB5D0, dbz3eu_sub_820FB6D0, x + kBody, 0);   // destello (forma 0)
   t.active = k;
   t.phase = Phase::kIdle;
   t.retries = 0;
@@ -678,6 +695,20 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     g_hud[size_t(p)] = HudSide{};
     if (!tp || over) continue;
     Team& t = *tp;
+    // posicion no valida (NaN): tras algunas caidas por KO quedaba asi y golpearle cerraba el juego
+    // (2026-10-12, logs 960/962). Vuelve a la ultima buena de ese lado.
+    {
+      static std::array<std::array<float, 3>, 2> good{};
+      const float px = LoadF(base, x + 64), py = LoadF(base, x + 68), pz = LoadF(base, x + 72);
+      if (std::isfinite(px) && std::isfinite(py) && std::isfinite(pz)) {
+        good[size_t(p)] = {px, py, pz};
+      } else {
+        for (const uint32_t o : {48u, 64u, 80u})
+          for (uint32_t i = 0; i < 3; ++i) StoreF(base, x + o + 4 * i, good[size_t(p)][i]);
+        REXLOG_WARN("dbz3 tag: luchador {:08X} con posicion no valida: vuelve a {:.1f} {:.1f} {:.1f}", x,
+                    good[size_t(p)][0], good[size_t(p)][1], good[size_t(p)][2]);
+      }
+    }
     if (!t.down[size_t(t.active)] && LoadF(base, x + kHp) <= 0.0f && Alive(t, t.active) > 0 && !t.zero_logged) {
       t.zero_logged = true;   // diagnostico: KO que no paso por sub_8211A5A8
       REXLOG_WARN("dbz3 tag: luchador {:08X} a vida 0 sin pasar por el golpe (accion {})", x, REX_LOAD_U16(x + 3244));
@@ -693,7 +724,14 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       t.pending = Pick(t, false);
       t.pending_until = now + kSelectBuffer;
     }
+    {
+      const uint32_t form = REX_LOAD_U32(x + kForm);
+      if (form != t.last_form || REX_LOAD_U32(x + kNextForm) != form) t.form_at = now;
+      t.last_form = form;
+    }
+    const bool form_quiet = now - t.form_at >= kFormQuiet;
     if (t.phase == Phase::kIdle && t.pending >= 0) {
+      if (!form_quiet && t.pending_until) t.pending_until = std::max(t.pending_until, now + kSelectBuffer);   // espera a la forma
       if (t.pending_until && now > t.pending_until) {   // SELECT viejo (0x823F39A0 no vale en todos los escenarios)
         t.pending = -1;
       } else if (t.down[size_t(t.active)]) {
@@ -704,7 +742,7 @@ void Tick(PPCContext& ctx, uint8_t* base) {
           t.pending = -1;
           StartSwap(ctx, base, x, t, k);
         }
-      } else if (Free(base, x) && Cooled(t, now) && !PreFight(base)) {   // SELECT: solo el propio libre
+      } else if (Free(base, x) && form_quiet && Cooled(t, now) && !PreFight(base)) {   // SELECT: solo el propio libre
         const int k = t.pending;
         t.pending = -1;
         StartSwap(ctx, base, x, t, k);
@@ -741,6 +779,7 @@ void Tick(PPCContext& ctx, uint8_t* base) {
           Call(ctx, base, sub_82103908, x, 0);
         }
       }
+      if (!t.down[size_t(t.active)] && !form_quiet) loaded = false;   // transformandose: se espera
       if (loaded && !Free(base, x) && t.slide == 1 && now - t.slide_at >= SlideTicks(1) && act != 15 && act != 43 &&
           act != 44 && act < 46 && !dbz3::g_guest_eu) {
         Call(ctx, base, sub_82103908, x, 0);
@@ -917,7 +956,7 @@ DBZ3_HOOK(sub_8211A5A8, dbz3eu_sub_8211A6A8) {
   {
     std::lock_guard<std::mutex> lock(dbz3::tag::g_mu);
     dbz3::tag::Team* t = dbz3::tag::TeamOf(base, x);
-    if (t && delta > 0 && t->down[size_t(t->active)] && t->phase == dbz3::tag::Phase::kIdle) {
+    if (t && delta > 0 && t->down[size_t(t->active)]) {   // (tambien con el relevo cargando: un segundo KO)
       ctx.r4.s64 = 0;                                    // ya cayo: no mas golpes letales hasta el relevo
     } else if (t && delta > 0) {
       const bool lethal = dbz3::tag::LoadF(base, x + dbz3::tag::kHp) - float(delta) <= 0.0f;
@@ -926,7 +965,9 @@ DBZ3_HOOK(sub_8211A5A8, dbz3eu_sub_8211A6A8) {
         old_nd = REX_LOAD_U8(x + dbz3::tag::kNearDeath);
         REX_STORE_U8(x + dbz3::tag::kNearDeath, 1);   // sub_8211A5A8: vida = f30, sin KO
         protect = true;
-        ko = lethal && !loading;
+        // tambien con el relevo cargando: antes el golpe letal se perdia y parecia invencible hasta
+        // que entraba el compañero (2026-10-12); ahora cae y el que entra aparece donde cayo
+        ko = lethal;
       }
     }
   }
@@ -938,6 +979,7 @@ DBZ3_HOOK(sub_8211A5A8, dbz3eu_sub_8211A6A8) {
   dbz3::tag::Team* t = dbz3::tag::TeamOf(base, x);
   if (!t) return;
   t->down[size_t(t->active)] = true;
+  if (t->slide == 1) t->slide = 0;   // salia de un relevo: deja de sostenerlo en el aire y cae
   // KO con compañero vivo: en el tick siguiente (tras la reaccion al golpe que pone el juego) sale
   // despedido con la accion 25 del juego (la del golpe fuerte) y el relevo espera a que se levante
   dbz3::tag::g_fall_x = x;

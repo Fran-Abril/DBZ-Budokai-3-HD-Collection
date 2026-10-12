@@ -68,6 +68,7 @@
 
 #include "roster_ext.h"
 #include "tagteam.h"
+#include "ingame/tagteam_panel.h"
 
 #include "mods.h"
 
@@ -1164,9 +1165,49 @@ DBZ3_HOOK(sub_82136328, dbz3eu_sub_82136430) {
 // Select preview model (r3 = task, +48 = model object: +178 player, +180 character
 // ID, +196..+220 position/scale/rotation read from 0x82372950[ID][player]). That
 // table ends at ID 44: IDs >= 44 get their framing from roster.toml.
+// Forma inicial elegida con LT/RT en la rueda: sub_8217FF20 rehace el modelo de la vista previa con
+// sub_82135B00(ID, forma 0, traje, jugador + 1, poses 3881-3883); se le pasa la forma elegida (la
+// valida mas alta hasta ella: del mismo ID y con modelo en el traje). Solo cambia el modelo 3D.
+namespace {
+thread_local int t_preview_form = 0;
+std::atomic<uint32_t> g_preview_task[2] = {0, 0};
+
+int PreviewForm(int id, int want) {
+  if (want <= 0 || id < 0 || id >= 105 || !dbz3::roster::g_memory) return 0;
+  dbz3::roster::Guest g(dbz3::roster::g_memory);
+  const uint32_t c96 = dbz3::roster::kChar96 + uint32_t(id) * 96;
+  for (int f = std::min(want, int(g.U8(c96 + 7)) - 1); f > 0; --f) {
+    if (g.U16(c96 + 16 + 8 * f) == uint32_t(id) && g.U8(c96 + 18 + 8 * f) != 0xFF) return f;
+  }
+  return 0;
+}
+}  // namespace
+
+// Forma mas alta que puede enseñar la vista previa del lado (0 = el personaje no se transforma; -1 =
+// aun no hay vista previa): LT/RT no pasa de ahi y sin formas no se ofrece.
+int dbz3_select_preview_max_form(int side) {
+  if (side < 0 || side > 1 || !dbz3::roster::g_memory) return -1;
+  dbz3::roster::Guest g(dbz3::roster::g_memory);
+  const uint32_t task = g_preview_task[size_t(side)].load();
+  const uint32_t obj = task ? g.U32(task + 48) : 0;
+  if (!obj || g.U16(obj + 178) != uint32_t(side)) return -1;
+  return PreviewForm(int16_t(g.U16(obj + 180)), 7);
+}
+
+DBZ3_HOOK(sub_82135B00, dbz3eu_sub_82135C08) {
+  if (t_preview_form > 0 && ctx.r4.u32 == 0) ctx.r4.u64 = uint64_t(t_preview_form);
+  orig(ctx, base);
+}
+
 DBZ3_HOOK(sub_8217FF20, dbz3eu_sub_8217FED8) {
   const uint32_t obj = ctx.r3.u32 ? REX_LOAD_U32(ctx.r3.u32 + 48) : 0;
+  const int side = obj ? int(REX_LOAD_U16(obj + 178)) : -1;
+  if (side == 0 || side == 1) {
+    g_preview_task[size_t(side)] = ctx.r3.u32;
+    t_preview_form = PreviewForm(int16_t(REX_LOAD_U16(obj + 180)), dbz3::ingame::ChosenForm(side));
+  }
   orig(ctx, base);
+  t_preview_form = 0;
   if (!obj) return;
   const int16_t id = int16_t(REX_LOAD_U16(obj + 180));
   uint32_t v[7];
@@ -1175,6 +1216,20 @@ DBZ3_HOOK(sub_8217FF20, dbz3eu_sub_8217FED8) {
     for (uint32_t k = 0; k < 3; ++k) REX_STORE_U32(obj + 212 + 4 * k, v[4 + k] & 0xFFFF);
   }
 }
+
+// LT/RT cambio la forma de un lado: su vista previa se rehace (desde la tarea de la rueda, cada tick).
+void dbz3_select_refresh_preview(PPCContext& ctx, uint8_t* base) {
+  for (int side = 0; side < 2; ++side) {
+    if (!dbz3::ingame::TakeFormDirty(side)) continue;
+    const uint32_t task = g_preview_task[side].load();
+    const uint32_t obj = task ? REX_LOAD_U32(task + 48) : 0;
+    if (!obj || REX_LOAD_U16(obj + 178) != uint32_t(side)) continue;
+    PPCContext c = ctx;
+    c.r3.u64 = task;
+    DBZ3_CALL2(sub_8217FF20, dbz3eu_sub_8217FED8)(c, base);
+  }
+}
+
 
 // ID -> slot (r3 = ID; the table at 0x82020668 has 44 entries but IDs < 64 are read
 // from it): roster IDs >= 44 answer their host slot.

@@ -215,6 +215,9 @@ public:
               "o yae3_xenon.xex / DBZ3/yae3_xenon.xex si lo copiaste del disco) y la\n"
               "carpeta us/ (y/o eu/). Tambien vale dentro de una subcarpeta 'assets/',\n"
               "o elegir una imagen de disco (.iso) en el launcher.\n\n"
+              "Si el juego esta en un .zip, .rar o .7z, extraelo antes. Una copia\n"
+              "en formato 'Games on Demand' (carpeta Content/0000...) no sirve:\n"
+              "hace falta la imagen de disco (.iso) o sus archivos extraidos.\n\n"
               "Carpeta buscada:\n" +
               game_root.string();
 #if REX_PLATFORM_WIN32

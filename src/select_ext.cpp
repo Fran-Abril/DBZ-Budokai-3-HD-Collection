@@ -519,10 +519,13 @@ DBZ3_HOOK(sub_8217CB10, dbz3eu_sub_8217CAC8) {
   Leave(base);
 }
 
+void dbz3_select_refresh_preview(PPCContext& ctx, uint8_t* base);   // roster_ext.cpp
+
 // Confirmar personaje (sub_8217ADE8 escribe el ID del jugador en 0x824BA12F + jugador
 // desde las tablas casilla -> ID, cambiadas mientras esta en una casilla nueva): se
 // recuerda la eleccion para el inicio del combate (dbz3::roster::PickedCellFor).
 DBZ3_HOOK(sub_8217CC68, dbz3eu_sub_8217CC20) {
+  dbz3_select_refresh_preview(ctx, base);   // LT/RT: la vista previa en la forma elegida
   constexpr uint32_t kPicked = 0x824BA12F;   // US (la EU no esta localizada: sin recuerdo)
   const bool us = !dbz3::g_guest_eu;
   uint8_t before[2] = {us ? REX_LOAD_U8(kPicked) : uint8_t(0), us ? REX_LOAD_U8(kPicked + 1) : uint8_t(0)};

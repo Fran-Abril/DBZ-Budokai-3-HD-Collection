@@ -807,21 +807,32 @@ std::filesystem::path FindIsoInDir(const std::filesystem::path& dir) {
   }
   for (auto [it_1, iec_1] = std::pair{std::filesystem::directory_iterator(dir, ec), std::error_code{}}; !iec_1 && it_1 != std::filesystem::directory_iterator(); it_1.increment(iec_1)) {
     const auto& entry = *it_1;
-    if (!entry.is_regular_file()) continue;
-    const auto ext = entry.path().extension().string();
-    if (ext == ".iso" || ext == ".ISO" || ext == ".xiso" || ext == ".XISO") {
-      return entry.path();
-    }
+    if (entry.is_regular_file() && IsValidIso(entry.path())) return entry.path();
   }
   return {};
 }
 
+// .iso/.xiso en cualquier mayuscula ("Juego.Iso"), o una imagen de disco de 360 con otra extension
+// o sin ella (Windows oculta las extensiones: un jugador la renombro): se mira la marca del disco
+// en los mismos sitios que el lector (disc_image_device.cpp).
 bool IsValidIso(const std::filesystem::path& iso) {
-  if (!std::filesystem::is_regular_file(iso)) {
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(iso, ec)) {
     return false;
   }
-  const auto ext = iso.extension().string();
-  return ext == ".iso" || ext == ".ISO" || ext == ".xiso" || ext == ".XISO";
+  std::string ext = iso.extension().string();
+  std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+  if (ext == ".iso" || ext == ".xiso") return true;
+  if (std::filesystem::file_size(iso, ec) < (256u << 20) || ec) return false;
+  std::ifstream f(iso, std::ios::binary);
+  for (const uint64_t off : {0x00000000ull, 0x0000FB20ull, 0x00020600ull, 0x02080000ull, 0x0FD90000ull}) {
+    char magic[20] = {};
+    if (f.seekg(std::streamoff(off + 32 * 2048)) && f.read(magic, 20) && std::memcmp(magic, "MICROSOFT*XBOX*MEDIA", 20) == 0) {
+      return true;
+    }
+    f.clear();
+  }
+  return false;
 }
 
 // Portable MD5 (RFC 1321), public-domain style. Used to fingerprint the ~4.9MB

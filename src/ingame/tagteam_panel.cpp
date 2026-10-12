@@ -12,6 +12,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -25,12 +27,14 @@
 #include "../launcher/launcher_state.h"
 #include "../roster_ext.h"
 #include "../tagteam.h"
+#include "../net/netplay.h"
 #include "game_style.h"
 #include "menu_pilot.h"
 #include "online_panel.h"
 
 
 bool dbz3_select_live();   // select_ext.cpp
+int dbz3_select_preview_max_form(int side);   // roster_ext.cpp
 int64_t dbz3_select_browse_ms(int k);
 int64_t dbz3_select_now_ms();
 int dbz3_select_capsule_option(int k);
@@ -68,6 +72,10 @@ std::array<bool, 2> g_converted{};    // su A se convirtio en Y (el "atras" que 
 std::array<bool, 2> g_eat_a{};        // A comida hasta soltarla (ya convertida)
 std::array<int, 2> g_choice{};        // opcion de capsulas del ultimo miembro: 0 Normal, 1 Custom
 std::array<uint16_t, 2> g_prev{};
+std::array<std::atomic<int>, 2> g_start_form{};     // forma inicial elegida con LT/RT por lado
+std::array<std::atomic<bool>, 2> g_form_dirty{};    // la vista previa de la rueda se rehace
+std::atomic<bool> g_form_used{false};              // ya empezo un combate con la forma elegida
+std::array<std::array<bool, 2>, 2> g_trig_prev{};  // LT/RT pulsados el tick anterior por mando
 constexpr const char* kFormats[] = {"2 VS 1", "1 VS 2", "2 VS 2", "3 VS 3"};
 constexpr int kNumFormats = 4;
 // Ultimo aviso de la eleccion (lado, que paso y cuando), para el letrero sobre la tira.
@@ -272,6 +280,81 @@ uint16_t TeamPickFilter(uint16_t real, int user) {
     g_notice = {side, Event::kRemoved, Now()};
   }
   return uint16_t(real & ~kY);
+}
+
+bool Online() { return dbz3::net::Session::Get().link() != dbz3::net::Link::kIdle; }
+
+// Lado que maneja este mando en la rueda. Online: el suyo siempre (los dos PCs leen el mismo mando
+// en el mismo tick: misma cuenta sin depender del reloj). Local: el que esta eligiendo (los dos a la
+// vez = 1P VS 2P: el suyo).
+int FormSide(int user) {
+  if (Online()) return user;
+  const int64_t now = dbz3_select_now_ms();
+  const bool b0 = now - dbz3_select_browse_ms(0) < 250, b1 = now - dbz3_select_browse_ms(1) < 250;
+  return b0 && b1 ? user : b0 ? 0 : b1 ? 1 : -1;
+}
+
+// Forma inicial con LT/RT en la rueda (tambien en Tag Team, para el primer miembro, y online).
+void FormPickPad(int user, uint8_t lt, uint8_t rt) {
+  if (user < 0 || user > 1) return;
+  auto& prev = g_trig_prev[size_t(user)];
+  const bool l = lt > 64, r = rt > 64, lp = l && !prev[0], rp = r && !prev[1];
+  prev = {l, r};
+  if (!dbz3_select_live() || dbz3::ingame::pilot::Busy()) return;
+  if (g_form_used.exchange(false)) {   // primera rueda tras un combate: todos en forma normal
+    g_start_form[0] = 0;
+    g_start_form[1] = 0;
+  }
+  const int side = FormSide(user);
+  if (side < 0 || !(lp || rp)) return;
+  auto& f = g_start_form[size_t(side)];
+  const int was = f.load();
+  const int top = dbz3_select_preview_max_form(side);   // formas del personaje de la vista previa
+  f = std::clamp(was + (rp ? 1 : 0) - (lp ? 1 : 0), 0, top >= 0 ? top : 7);
+  if (f.load() != was) g_form_dirty[size_t(side)] = true;
+}
+
+int ChosenForm(int side) {
+  if (side < 0 || side > 1) return 0;
+  if (const char* env = std::getenv("DBZ3_START_FORM")) {
+    const char* comma = std::strchr(env, ',');
+    return std::atoi(side == 0 || !comma ? env : comma + 1);
+  }
+  return g_start_form[size_t(side)].load();
+}
+
+bool TakeFormDirty(int side) { return side >= 0 && side < 2 && g_form_dirty[size_t(side)].exchange(false); }
+
+int StartForm(int side) {
+  if (side < 0 || side > 1) return 0;
+  if (const char* env = std::getenv("DBZ3_START_FORM")) {   // pruebas: "2,1" = forma de cada lado
+    const char* comma = std::strchr(env, ',');
+    return std::atoi(side == 0 || !comma ? env : comma + 1);
+  }
+  g_form_used = true;   // se gasta en este combate (y en sus revanchas); la rueda siguiente empieza de 0
+  return g_start_form[size_t(side)].load();
+}
+
+void DrawFormPick(ImGuiIO& io, bool team) {
+  const S::Area a = S::GameArea(io);
+  auto* dl = ImGui::GetForegroundDrawList();
+  for (int side = 0; side < 2; ++side) {
+    if (dbz3_select_now_ms() - dbz3_select_browse_ms(side) > 300) continue;
+    const int top = dbz3_select_preview_max_form(side);
+    if (top == 0) continue;                       // no se transforma: no se ofrece
+    const int f = top > 0 ? std::min(g_start_form[size_t(side)].load(), top) : g_start_form[size_t(side)].load();
+    char text[96];
+    if (f > 0) {
+      std::snprintf(text, sizeof(text), "%s %d  (%s)",
+                    team ? T::T("El primero empieza transformado (beta):", "First member starts transformed (beta):")
+                         : T::T("Empieza transformado (beta):", "Starts transformed (beta):"), f,
+                    T::T("con su capsula", "needs its capsule"));
+    } else {
+      std::snprintf(text, sizeof(text), "LT/RT: %s", T::T("forma inicial (beta)", "starting form (beta)"));
+    }
+    // bajo el nombre del juego; en Tag Team la tira del equipo ocupa ese sitio: debajo de sus avisos
+    S::MenuText(dl, a.At(side == 0 ? 190 : 1010, team ? 480 : 292), 28 * a.s, text, f > 0, false);
+  }
 }
 
 TagTeamPanel::TagTeamPanel(rex::ui::ImGuiDrawer* drawer)
@@ -495,6 +578,11 @@ void TagTeamPanel::OnDraw(ImGuiIO& io) {
       dbz3::tag::ClearDynamicTeams();
     }
     if (!battle && dbz3_select_live()) DrawPicking(io);
+  }
+  if (!battle && dbz3_select_live() && !dbz3::ingame::pilot::Busy()) DrawFormPick(io, g_team_mode.load());
+  if (GameScreen() == kMainScreen && !Online()) {   // fuera de los combates (historias incluidas); online lo hace FormPickPad
+    g_start_form[0] = 0;
+    g_start_form[1] = 0;
   }
   const bool show = g_wanted.load() && !battle && !dbz3::ingame::pilot::Busy();
   auto* in = Input();
