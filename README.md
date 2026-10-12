@@ -43,18 +43,28 @@
 | Plataforma | Windows / Linux |
 | Motor | Xbox 360 (ReXGlue SDK) |
 | Género | Lucha 3D |
-| Versión | **v1.4.4.3** (1.4.4 EX++) |
+| Versión | **v1.4.4.4** (1.4.4 EX MAX) |
 
 ---
 
 ## Novedades
 
-### 1.4.4 EX++ (v1.4.4.3)
+### 1.4.4 EX MAX (v1.4.4.4)
+
+- **Tag Team (beta):** al elegir un modo en TAG TEAM se va **directo a la selección de personajes**, con un fundido como los del juego. Arreglado: A en TAG TEAM podía abrir el Torneo o la Tienda. Salir de la selección vuelve a TAG TEAM.
+- **Relevos (beta):** cada luchador vuelve con la transformación que tenía al salir.
+- **Selector de transformación (beta):** se puede apagar en el launcher. Viene activado.
+- **"No encuentro el juego":** el aviso deja elegir la imagen de disco ahí mismo.
+
+<details>
+<summary><b>1.4.4 EX++ (v1.4.4.3)</b></summary>
 
 - **Selector de transformación (beta):** en la selección de personaje, LT/RT elige con qué forma empiezas. Necesitas llevar la cápsula de esa forma.
 - **Tag Team (beta):** destello al caer un luchador, KO más fiable y el relevo espera a que termine una transformación.
 - **Imágenes de disco:** se detectan aunque la extensión esté en mayúsculas o cambiada, y el aviso de "no encuentro el juego" explica qué hacer.
 - **Historia de Freezer (Nova's Mods) 1.1:** retrato nuevo de Mecha Freezer.
+
+</details>
 
 <details>
 <summary><b>1.4.4 EX+ (v1.4.4.2) y 1.4.4 EX (v1.4.4.1)</b></summary>
@@ -208,9 +218,9 @@ En la página de [**Releases**](../../releases/latest):
 
 | Archivo | Para qué |
 |---|---|
-| `DBZ-Budokai-3-HD-Collection-v1.4.4.3.zip` | **El juego para Windows** (obligatorio). |
-| `DBZ-Budokai-3-HD-Collection-v1.4.4.3-linux-amd64.tar.gz` | El juego para Linux (Vulkan). |
-| `DBZ3HD-1.4.4.3-Kit-Modding.zip` | Opcional: herramientas para crear e importar personajes. |
+| `DBZ-Budokai-3-HD-Collection-v1.4.4.4.zip` | **El juego para Windows** (obligatorio). |
+| `DBZ-Budokai-3-HD-Collection-v1.4.4.4-linux-amd64.tar.gz` | El juego para Linux (Vulkan). |
+| `DBZ3HD-1.4.4.4-Kit-Modding.zip` | Opcional: herramientas para crear e importar personajes. |
 | [`DBZ3HD-1.4.3-Personajes.zip`](https://drive.google.com/file/d/1jDRwzd_idmeIxwAMN4q4bC89JKFiGXX7/view?usp=sharing) | Opcional, alternativa manual: los 7 personajes nuevos (Google Drive; WIP). |
 
 ### Paso 2: añade los datos de tu copia del juego

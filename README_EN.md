@@ -43,18 +43,28 @@
 | Platform | Windows / Linux |
 | Engine | Xbox 360 (ReXGlue SDK) |
 | Genre | 3D fighting |
-| Version | **v1.4.4.3** (1.4.4 EX++) |
+| Version | **v1.4.4.4** (1.4.4 EX MAX) |
 
 ---
 
 ## What's new
 
-### 1.4.4 EX++ (v1.4.4.3)
+### 1.4.4 EX MAX (v1.4.4.4)
+
+- **Tag Team (beta):** picking a mode in TAG TEAM goes **straight to character select** with a fade like the game's own. Fixed: A on TAG TEAM could open the Tournament or the Shop. Leaving character select returns to TAG TEAM.
+- **Tag switches (beta):** each fighter comes back in the transformation they left with.
+- **Transformation selector (beta):** can be turned off in the launcher. On by default.
+- **"Game not found":** the message lets you pick the disc image right there.
+
+<details>
+<summary><b>1.4.4 EX++ (v1.4.4.3)</b></summary>
 
 - **Transformation selector (beta):** at character select, LT/RT picks the form you start in. You need that form's capsule equipped.
 - **Tag Team (beta):** KO flash when a fighter falls, a more reliable KO, and the swap waits for a transformation to finish.
 - **Disc images:** detected even with an uppercase or renamed extension, and the "game not found" message explains what to do.
 - **Freezer story (Nova's Mods) 1.1:** new Mecha Freezer portrait.
+
+</details>
 
 <details>
 <summary><b>1.4.4 EX+ (v1.4.4.2) and 1.4.4 EX (v1.4.4.1)</b></summary>
@@ -208,9 +218,9 @@ From the [**Releases**](../../releases/latest) page:
 
 | File | What it is |
 |---|---|
-| `DBZ-Budokai-3-HD-Collection-v1.4.4.3.zip` | **The game for Windows** (required). |
-| `DBZ-Budokai-3-HD-Collection-v1.4.4.3-linux-amd64.tar.gz` | The game for Linux (Vulkan). |
-| `DBZ3HD-1.4.4.3-Kit-Modding.zip` | Optional: tools to create and import characters. |
+| `DBZ-Budokai-3-HD-Collection-v1.4.4.4.zip` | **The game for Windows** (required). |
+| `DBZ-Budokai-3-HD-Collection-v1.4.4.4-linux-amd64.tar.gz` | The game for Linux (Vulkan). |
+| `DBZ3HD-1.4.4.4-Kit-Modding.zip` | Optional: tools to create and import characters. |
 | [`DBZ3HD-1.4.3-Personajes.zip`](https://drive.google.com/file/d/1jDRwzd_idmeIxwAMN4q4bC89JKFiGXX7/view?usp=sharing) | Optional, manual alternative: the 7 new characters (Google Drive; WIP). |
 
 ### Step 2: add the data from your copy of the game
