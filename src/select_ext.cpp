@@ -25,12 +25,20 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+
+namespace dbz3::ingame {
+bool OnSelectPicked(int player, int id);   // ingame/tagteam_panel.cpp
+void OnCapsuleChoice(int player, bool chosen, int option, const uint16_t* custom);
+bool TagTeamMode();
+}
 
 // trazas de diagnostico (roster_trace.cpp, dbz1_diag_logging)
 void dbz3_trace_sub_8217F3F0(PPCContext& ctx, uint8_t* base);
@@ -62,13 +70,18 @@ std::unordered_map<uint32_t, uint32_t> g_wheel_objs;
 std::unordered_map<uint32_t, int> g_portrait_obj;
 
 // Casillas nuevas que aparecen en una rueda: en los modos libres (la rueda tiene la
-// casilla aleatoria), siempre disponibles (el slot anfitrion solo aporta los datos
-// guardados por slot, aunque no este desbloqueado).
+// casilla aleatoria, o casi todos los personajes: Practica y "1P VS COM" no la tienen
+// si la partida no lo ha desbloqueado todo), siempre disponibles (el slot anfitrion solo
+// aporta los datos guardados por slot, aunque no este desbloqueado). Ahi el rival sale
+// de una lista que vuelve a escribir los IDs por casilla: el inicio del combate pone el
+// elegido (SetPickedCell / PickedCellFor). Las ruedas del modo historia llevan pocos.
 std::vector<int> NewCellsFor(uint64_t mask) {
   std::vector<int> out;
-  if (!((mask >> kRandomSlot) & 1)) return out;
   uint32_t n = 0;
   for (uint32_t s = 0; s < kRealSlots; ++s) n += (mask >> s) & 1;
+  // ponytail: "libre" = aleatoria o >= 20 casillas; si un modo de rueda corta las
+  // necesitara, marcarlo por su hook en vez de contar casillas
+  if (!((mask >> kRandomSlot) & 1) && n < 20) return out;
   for (int i = 0; i < VirtualCellCount() && n < kCells; ++i, ++n) out.push_back(i);
   return out;
 }
@@ -229,7 +242,17 @@ void Apply(uint8_t* base, int vc) {
 
 // r3 = task object; +48 = player state, or (nested: sub_82182210 / 82182930) a
 // confirm-task state whose +16 is the player state.
+// Ultima vez que corrio la logica de un jugador de la rueda (la seleccion de personajes comparte
+// el byte de pantalla con el menu de Duelo, 14): lo usan las pantallas propias del port.
+std::atomic<int64_t> g_select_seen_ms{0};
+
+int64_t NowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 void Enter(uint8_t* base, uint32_t obj, bool nested) {
+  g_select_seen_ms = NowMs();
   if (t_depth++ == 0 && VirtualCellCount() > 0 && GuestPtr(obj)) {
     uint32_t st = REX_LOAD_U32(obj + 48);
     if (nested && GuestPtr(st)) st = REX_LOAD_U32(st + 16);
@@ -247,6 +270,28 @@ void Leave(uint8_t* base) {
 // Casilla nueva activa para el jugador cuyo estado del select se esta ejecutando en este
 // hilo (-1 = casilla original). La usa el cambio de traje (roster_ext, sub_8217A5A0).
 int dbz3_select_active_cell() { return t_active; }
+bool dbz3_select_live() { return NowMs() - g_select_seen_ms.load() < 300; }
+
+// Por jugador de la rueda: ultima vez que estaba eligiendo (estado sub_8217CC68 sin confirmar) y
+// si ya confirmo. Con los dos confirmados lo siguiente es la eleccion de escenario, que comparte
+// la pantalla 14 con el menu de Duelo.
+namespace {
+std::atomic<int64_t> g_browse_ms[2] = {0, 0};
+std::atomic<uint8_t> g_confirmed{0};   // bit por jugador
+}  // namespace
+int64_t dbz3_select_browse_ms(int k) { return k == 0 || k == 1 ? g_browse_ms[k].load() : 0; }
+// Menu de capsulas abierto (Normal / Custom / Edit Skills, sub_8217CB10): opcion resaltada del jugador
+// k, o -1 si su menu no esta abierto ahora.
+namespace {
+std::atomic<int> g_cap_opt[2] = {-1, -1};
+std::atomic<int64_t> g_cap_ms[2] = {0, 0};
+}  // namespace
+int dbz3_select_capsule_option(int k) {
+  return (k == 0 || k == 1) && NowMs() - g_cap_ms[k].load() < 200 ? g_cap_opt[k].load() : -1;
+}
+int64_t dbz3_select_now_ms() { return NowMs(); }
+bool dbz3_select_to_stage() { return g_confirmed.load() == 3; }
+void dbz3_select_reset_flow() { g_confirmed = 0; }
 
 #include "select_wheel_gen.inc"
 #if defined(DBZ3_DUAL_REGION)
@@ -341,6 +386,7 @@ DBZ3_HOOK(sub_8217E490, dbz3eu_sub_8217E448) {
 // new cell right after its `after` slot (else at the end), then the random cell.
 DBZ3_HOOK(sub_8217E030, dbz3eu_sub_8217DFE8) {
   const uint32_t d = ctx.r3.u32;
+  dbz3::roster::ClearPickedCells();     // select nuevo: nada elegido aun
   const uint64_t mask = REX_LOAD_U64(d + 16);
   std::array<int8_t, kCells> map;
   map.fill(-1);
@@ -421,13 +467,101 @@ DBZ3_HOOK(sub_82179880, dbz3eu_sub_82179838) {
     orig(ctx, base);                               \
     Leave(base);                                   \
   }
-DBZ3_SELECT_PLAYER_HANDLER(sub_8217CB10, dbz3eu_sub_8217CAC8, false)
-DBZ3_SELECT_PLAYER_HANDLER(sub_8217CC68, dbz3eu_sub_8217CC20, false)
 DBZ3_SELECT_PLAYER_HANDLER(sub_8217CFC8, dbz3eu_sub_8217CF80, false)
 DBZ3_SELECT_PLAYER_HANDLER(sub_82180E90, dbz3eu_sub_82180E48, false)
 DBZ3_SELECT_PLAYER_HANDLER(sub_82182210, dbz3eu_sub_821821C8, true)
 DBZ3_SELECT_PLAYER_HANDLER(sub_82182930, dbz3eu_sub_821828E8, true)
 #undef DBZ3_SELECT_PLAYER_HANDLER
+
+// Tras confirmar el personaje: menu de capsulas del jugador (estado +48: +2 resultado, 1 elegido y -1
+// atras; +7 jugador; +10 tipo de menu, 2-4 el de opciones; +12 opcion, 0 Normal, 1 Custom, 2 Edit Skills; +4
+// casilla; +120 copia de la partida, listas Custom en +68 + 14*casilla; estudio 2026-10-12). En
+// TAG TEAM cada miembro lleva lo que se elige aqui (tagteam_panel.cpp). Dentro de Enter: con una
+// casilla nueva la lista de la copia ya es la del personaje nuevo.
+DBZ3_HOOK(sub_8217CB10, dbz3eu_sub_8217CAC8) {
+  Enter(base, ctx.r3.u32, false);
+  const uint32_t tobj = ctx.r3.u32;
+  const uint32_t tst = GuestPtr(tobj) ? REX_LOAD_U32(tobj + 48) : 0;
+  const int8_t before = tst && GuestPtr(tst) ? int8_t(REX_LOAD_U8(tst + 2)) : 0;
+  orig(ctx, base);
+  if (!dbz3::g_guest_eu && tst && GuestPtr(tst) && dbz3::ingame::TagTeamMode()) {
+    // opcion resaltada del menu de opciones (tipo 2-4: objeto en +52, su interior en +48, opcion en +0)
+    const uint8_t pk = REX_LOAD_U8(tst + 7), pkind = REX_LOAD_U8(tst + 10);
+    const uint32_t w = REX_LOAD_U32(tst + 52);
+    const uint32_t inner = GuestPtr(w) ? REX_LOAD_U32(w + 48) : 0;
+    if (pk < 2 && pkind >= 2 && pkind <= 4 && GuestPtr(inner)) {
+      if (NowMs() - g_cap_ms[pk].load() > 1000)
+        REXLOG_INFO("dbz3 tag: menu de capsulas del jugador {} abierto (estado {:08X}, menu {:08X}, interior {:08X})", pk + 1, tst,
+                    w, inner);
+      const int opt = REX_LOAD_U8(inner);   // medido 2026-10-12: 0 Normal, 1 Custom, 2 Edit Skills (igual en estado +12)
+      if (opt != g_cap_opt[pk].load()) REXLOG_INFO("dbz3 tag: menu de capsulas del jugador {}: opcion {}", pk + 1, opt);
+      g_cap_opt[pk] = opt;
+      g_cap_ms[pk] = NowMs();
+    }
+    const int8_t after = int8_t(REX_LOAD_U8(tst + 2));
+    // elegido: +2 pasa a 1; atras: la tarea vuelve a la rueda (sub_8217CC68). +2 = -1 no basta: puede
+    // valer ya -1 de un atras anterior (2026-10-12, el atras no llegaba)
+    const bool back = REX_LOAD_U32(tobj + 28) == 0x8217CC68u && after != 1;
+    if ((after != before && after == 1) || back) {
+      const uint8_t kind = REX_LOAD_U8(tst + 10), option = REX_LOAD_U8(tst + 12);
+      const int8_t cell = int8_t(REX_LOAD_U8(tst + 4));
+      const uint32_t buf = REX_LOAD_U32(tst + 120);
+      uint16_t custom[7];
+      std::fill(custom, custom + 7, uint16_t(0xFFFF));
+      if (GuestPtr(buf) && cell >= 0 && cell < 38) {
+        for (uint32_t k = 0; k < 7; ++k) custom[k] = REX_LOAD_U16(buf + 68 + 14 * uint32_t(cell) + 2 * k);
+      }
+      REXLOG_INFO("dbz3 tag: menu de capsulas del jugador {}: {} (menu {}, opcion {}, casilla {})", REX_LOAD_U8(tst + 7) + 1,
+                  back ? "atras" : "elegido", kind, option, cell);
+      dbz3::ingame::OnCapsuleChoice(REX_LOAD_U8(tst + 7), !back, kind >= 2 && kind <= 4 ? option : 0, custom);
+    }
+  }
+  Leave(base);
+}
+
+// Confirmar personaje (sub_8217ADE8 escribe el ID del jugador en 0x824BA12F + jugador
+// desde las tablas casilla -> ID, cambiadas mientras esta en una casilla nueva): se
+// recuerda la eleccion para el inicio del combate (dbz3::roster::PickedCellFor).
+DBZ3_HOOK(sub_8217CC68, dbz3eu_sub_8217CC20) {
+  constexpr uint32_t kPicked = 0x824BA12F;   // US (la EU no esta localizada: sin recuerdo)
+  const bool us = !dbz3::g_guest_eu;
+  uint8_t before[2] = {us ? REX_LOAD_U8(kPicked) : uint8_t(0), us ? REX_LOAD_U8(kPicked + 1) : uint8_t(0)};
+  Enter(base, ctx.r3.u32, false);
+  const int vc = t_active;
+  // confirmar = la tarea pasa de este estado (la rueda) al siguiente; jugador en st+7
+  const uint32_t tobj = ctx.r3.u32, tst = GuestPtr(tobj) ? REX_LOAD_U32(tobj + 48) : 0;
+  const uint32_t handler = GuestPtr(tobj) ? REX_LOAD_U32(tobj + 28) : 0;
+  orig(ctx, base);
+  if (tst && GuestPtr(tst) && REX_LOAD_U8(tst + 7) < 2) {
+    const uint8_t k = REX_LOAD_U8(tst + 7);
+    if (REX_LOAD_U32(tobj + 28) == handler) {
+      g_browse_ms[k] = NowMs();
+      g_confirmed &= uint8_t(~(1u << k));
+    } else {
+      g_confirmed |= uint8_t(1u << k);
+    }
+  }
+  if (us && tst && GuestPtr(tst) && REX_LOAD_U32(tobj + 28) != handler && dbz3::ingame::TagTeamMode()) {
+    const uint8_t k = REX_LOAD_U8(tst + 7);
+    if (k < 2) {
+      const uint8_t id = REX_LOAD_U8(kPicked + k);
+      if (dbz3::ingame::OnSelectPicked(k, id)) {   // TAG TEAM: miembro elegido, sigue en la rueda
+        Leave(base);
+        return;
+      }
+    }
+  }
+  for (int k = 0; us && k < 2; ++k) {
+    const uint8_t now = REX_LOAD_U8(kPicked + k);
+    if (now == before[k]) continue;
+    if (vc >= 0 && now == GetVirtualCell(vc).id) {
+      dbz3::roster::SetPickedCell(k, int(now), int(t_saved_ids[0]));
+    } else {
+      dbz3::roster::SetPickedCell(k, -1, -1);
+    }
+  }
+  Leave(base);
+}
 
 DBZ3_HOOK(sub_82180AA0, dbz3eu_sub_82180A58) {
   dbz3_trace_sub_82180AA0(ctx, base);

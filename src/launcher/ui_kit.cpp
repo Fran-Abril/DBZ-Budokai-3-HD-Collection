@@ -115,6 +115,10 @@ void LoadFonts(ImFontAtlas* atlas) {
   g_fonts.title = AddFont(atlas, black.empty() ? bold_path : black, 30.0f, {}, density);
   // Same face as the generated name banners (roster_build.py FONT).
   g_fonts.banner = AddFont(atlas, FirstExisting({"C:\\Windows\\Fonts\\comicbd.ttf"}), 44.0f, {}, density);
+  // Same face as the generated capsule names (capsulas.py); menus of the game look like it.
+  const std::string rounded = FirstExisting({"C:\\Windows\\Fonts\\ARLRDBD.TTF"});
+  g_fonts.menu = AddFont(atlas, rounded.empty() ? bold_path : rounded, 48.0f, {}, density);
+  g_fonts.speech = AddFont(atlas, bold_path, 30.0f, {}, density);
   REXLOG_INFO("dbz3 launcher: fonts {} / {} (icons: {}), density {:.2f}", regular, bold_path,
               icons.empty() ? "none" : icons, density);
 }

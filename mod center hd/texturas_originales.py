@@ -49,7 +49,8 @@ PHRASES = (("ficha_habilidades", "skill_sheet"), ("fichas_habilidades", "skill_s
            ("cartas_habilidad", "skill_cards"), ("retratos_select", "select_portraits"),
            ("texturas_efectos_hud", "hud_effect_textures"), ("personajes_sin_nombre", "unnamed_characters"),
            ("efectos_personajes", "character_effects"), ("escenarios_mesh", "stage_meshes"),
-           ("caras_hud", "hud_faces"), ("catalogo_capsulas", "capsule_catalog"))
+           ("caras_hud", "hud_faces"), ("catalogo_capsulas", "capsule_catalog"),
+           ("time_bolic_chamber", "hyperbolic_time_chamber"))
 LABELS = os.path.join(HERE, "texturas_etiquetas.json")
 
 
@@ -115,11 +116,67 @@ class Labels:
         return "%s/%s_%04d" % (cat, stem, entry)
 
 
+# Escenarios (data_cmn): cada textura va al escenario que la usa, no a la primera entrada donde
+# aparece (antes el set comun de Cell Ring/Llanura/Desierto acababa entero en Cell Ring). Dentro
+# de cada escenario, por el grupo de piezas que la lleva: escombros (GROUND/ROCKn, lo que salta al
+# romperse el suelo), efectos (MODEL_Lnn_EFT) y el resto = el escenario en si.
+STAGE_ENTRIES = list(range(44, 70)) + list(range(3735, 3848))
+STAGE_GROUPS = (("effects", ("_EFT", "EFT_", "SMOKE", "FIRE", "SMO")),
+                ("debris_rocks", ("GROUND", "ROCK")),
+                ("water", ("SEA", "MIZU", "UMI", "WATER")),
+                ("sky", ("SKY", "SORA", "KUMO", "CLOUD", "SUN")))
+
+
+def stage_groups(b, base=0, names=(), out=None):
+    """[(inicio, fin, subcarpeta)] de los #AZT de un bin de escenario, segun los nombres de pieza
+    del #AWO/#AWG que los precede ("" = sin grupo reconocible)."""
+    from capsulas import amb_children
+    out = [] if out is None else out
+    try:
+        kids = amb_children(b)
+    except Exception:  # noqa: BLE001 - no es un contenedor
+        return out
+    for k in kids:
+        sub = b[k[0]:k[0] + k[1]]
+        tag = bytes(sub[:4])
+        if tag in (b"#AWO", b"#AWG"):
+            names = tuple(x.decode() for x in re.findall(rb"[A-Z][A-Z0-9_]{3,}", sub[:20000]))
+        elif tag == b"#AZT":
+            group = next((g for g, keys in STAGE_GROUPS if any(any(key in n for key in keys) for n in names)), "")
+            out.append((base + k[0], base + k[0] + k[1], group))
+        elif tag == b"#AMB":
+            stage_groups(sub, base + k[0], names, out)
+    return out
+
+
+def stage_map(game, labels):
+    """hash -> carpeta de los escenarios: stages/<escenario>[/grupo], o stages/_shared si la usan
+    dos o mas escenarios."""
+    import xxhash
+    import afs_pair
+    path = os.path.join(game, "data_cmn.afs")
+    owners = {}
+    for n in STAGE_ENTRIES:
+        try:
+            b = afs_pair.decompress(afs_pair.entry(path, n), "data_cmn.afs_%d" % n)
+        except Exception:  # noqa: BLE001
+            continue
+        groups = stage_groups(b)
+        stage = labels.folder("data_cmn.afs", n)
+        for off, w, h, fmt, base in dds_textures(b):
+            g = next((g for s, e, g in groups if s <= off < e), "")
+            hh = xxhash.xxh3_64_intdigest(base)
+            owners.setdefault(hh, {}).setdefault(stage, g)
+    return {hh: "stages/_shared" if len(st) > 1 else "%s/%s" % next((s, g or "environment") for s, g in st.items())
+            for hh, st in owners.items()}
+
+
 def scan(game):
     """Fase 1: hash de cada textura -> primera aparicion. {(afs, entrada): [(off, nombre)]}."""
     import xxhash
     import afs_pair
     labels = Labels()
+    stages = stage_map(game, labels)
     seen, work, total = set(), {}, 0
     for afs, prefix in AFS:
         path = os.path.join(game, afs)
@@ -137,6 +194,8 @@ def scan(game):
                     continue
                 seen.add(hh)
                 folder = labels.folder(afs, n)
+                if afs == "data_cmn.afs" and n >= STAGE_ENTRIES[0]:   # las auras (0-43) se quedan
+                    folder = stages.get(hh, folder)
                 if prefix:
                     folder = prefix + "/" + folder
                 work.setdefault((path, afs, n), []).append((off, "%s/%016X_%dx%d_%s.png" % (folder, hh, w, h, fmt)))
@@ -217,11 +276,19 @@ NOTAS
 # Carpeta (y mod) de cada zip: el principal y el de los textos de cada idioma.
 PACK_MAIN = "HD Textures"
 PACK_LANGS = "HD Textures - Languages"
+STAGES_EN = ("\n\nStages (v2): stages/<stage>/ has environment/ (the stage itself: floor, walls, "
+             "buildings, sky), effects/ (the stage's own effects) and debris_rocks/ (the floor and "
+             "rocks that fly when the ground breaks). stages/_shared/ = used by two or more stages "
+             "(editing one changes all of them). stages/stage_meshes/<entry>/ = extra stage pieces.")
+STAGES_ES = ("\n\nEscenarios (v2): stages/<escenario>/ tiene environment/ (el escenario: suelo, "
+             "paredes, edificios, cielo), effects/ (sus efectos propios) y debris_rocks/ (el suelo y "
+             "las rocas que saltan al romperse). stages/_shared/ = las usan dos o mas escenarios (si "
+             "editas una cambia en todos). stages/stage_meshes/<entrada>/ = piezas extra.")
 EXTRA = ("Text that changes with the game language (mostly Dragon Universe text) is in the "
-         "separate \"Languages\" zip.",
+         "separate \"Languages\" zip." + STAGES_EN,
          "The \"languages\" folder holds the text that changes with the game language "
          "(es, fr, de, it, en_gb): only needed if you also remaster text.")
-EXTRA_ES = ("Los textos que cambian segun el idioma van en el zip aparte \"Languages\".",
+EXTRA_ES = ("Los textos que cambian segun el idioma van en el zip aparte \"Languages\"." + STAGES_ES,
             "La carpeta \"languages\" tiene los textos de cada idioma (es, fr, de, it, en_gb).")
 
 
@@ -233,7 +300,7 @@ def write_docs(dst, folder, count, langs):
     with open(os.path.join(dst, "LEEME.txt"), "w", encoding="utf-8") as f:
         f.write(LEEME.format(count=count, folder=folder, extra_es=EXTRA_ES[k]))
     with open(os.path.join(dst, "manifest.txt"), "w", encoding="utf-8") as f:
-        f.write("name=%s\nauthor=\nversion=1.0\ndescription=%s\n" % (
+        f.write("name=%s\nauthor=\nversion=2.0\ndescription=%s\n" % (
             folder, "HD texture pack (language text)" if langs else "HD texture pack"))
 
 

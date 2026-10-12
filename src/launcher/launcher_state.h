@@ -29,10 +29,13 @@ namespace dbz3::launcher {
 // The app hands the launcher its immediate drawer so it can show image previews
 // (new-character icon / name banner / portraits). Null = previews disabled.
 void SetPreviewDrawer(rex::ui::ImmediateDrawer* drawer);
+rex::ui::ImmediateDrawer* PreviewDrawer();   // para texturas propias (caras del Tag Team)
 // Runs a function on the UI thread after the current paint (the app's
 // CallInUIThreadDeferred). The launcher reads the controllers through it:
 // reading them may pump window events, which must not happen mid-paint.
 void SetUiDefer(std::function<void(std::function<void()>)> defer);
+// Ejecuta fn en el hilo de la interfaz fuera del pintado (lectura de mandos de los paneles).
+void DeferUi(std::function<void()> fn);
 // A file dropped on the window (any thread). The launcher installs .zip mods and copies
 // edited texture PNGs into "Mi pack de texturas" on its next frame.
 void QueueDroppedFile(const std::filesystem::path& path);
@@ -220,6 +223,10 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   int imp_pending_ = 0;              // 1 sources, 2 character list, 3 importing
   int imp_selected_ = -1;
   int imp_donor_idx_ = -1;           // -1 = the importer's suggestion
+  int imp_preset_ = 0;               // indice en imp_presets_ (presets_importar.toml)
+  std::vector<std::pair<std::string, std::string>> imp_presets_;   // nombre, descripcion (importar.py lista)
+  bool imp_physics_ = false;         // fisica = "donante"
+  bool imp_ground_ = true;           // altura (pies al suelo)
   bool imp_loaded_ = false;
   char imp_search_[64] = {};
   char imp_name_[64] = {};

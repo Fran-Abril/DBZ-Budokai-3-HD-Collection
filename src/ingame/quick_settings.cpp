@@ -177,6 +177,12 @@ void ConfigureQuickMenu(rex::ui::QuickMenuConfig& menu, std::function<void()> op
       {{"0", T::T("No", "Off")}, {"2", "2x"}, {"3", "4x"}, {"4", "8x"}, {"5", "16x"}},
       T::T("Mantiene nitido el suelo y lo que se ve de lado.",
            "Keeps the floor and anything seen at an angle sharp.")));
+  image.items.push_back(Toggle(
+      T::T("Pack HD de texturas", "HD texture pack"), "dbz3_texture_packs_on",
+      T::T("Usa los packs de texturas HD instalados en mods. NO vuelve a las texturas "
+           "originales al momento, sin reiniciar.",
+           "Uses the HD texture packs installed in mods. OFF switches back to the original "
+           "textures right away, no restart.")));
   {
     Item& rim = image.items.emplace_back(Number(
         T::T("Brillo HD", "HD shine"), "dbz3_hd_rim_light", 0.0, 1.0, 0.25,

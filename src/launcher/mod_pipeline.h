@@ -87,8 +87,12 @@ class ModPipeline {
     std::string mod;     // folder under mods/
     std::string name;    // select name banner
     int donor = -1;      // -1 = the importer's suggestion
+    std::string preset;  // presets_importar.toml (original | solo_modelos)
+    std::vector<std::string> options;  // --opcion clave=valor
   };
   void ImportCharacter(const ImportRequest& r);
+  // Tag Team: equipo de 2-4 personajes de B3 (roster_build.py equipo -> mods/equipo_*).
+  void CreateTeam(const std::vector<int>& members, const std::string& name);
   void ClearOutput();
   // The modding kit (mod center hd/ with the importer) is next to the game.
   // roster_build.py presente (kit de modding instalado).
@@ -108,6 +112,9 @@ class ModPipeline {
 
   bool IsRunning() const { return running_.load(); }
   std::string Output() const;
+  // Last "@progreso k/n text" line printed by the running tool (roster_build): 0..1,
+  // or -1 if none yet. `what` gets the text (the character being built).
+  float Progress(std::string* what = nullptr) const;
 
   // Monotonic counter bumped each time an async run finishes; the launcher uses
   // it to refresh its cached mod list when a new mod appears on disk.

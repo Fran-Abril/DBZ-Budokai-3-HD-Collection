@@ -170,6 +170,28 @@ Qué hace el importador (`mod center hd/importar.py importar sb2 GHF --mod … -
 Si `sbport.py` falla o no está, el personaje se importa igual con **los golpes del donante** (y
 tantas formas como tenga el donante) y el registro lo dice.
 
+### 5.1b Presets (qué se trae del juego de origen)
+Cada fuente tiene presets estándar en `mod center hd/presets_importar.toml`; el launcher y el Mod
+Kit los muestran en un desplegable (con su descripción) y cualquier opción se cambia al crear el
+personaje (`--opcion clave=valor`):
+
+| Fuente | `original` | `solo_modelos` |
+|---|---|---|
+| Budokai 1 (`b1`) | golpes, combos, gritos y definitiva de B1 | solo el modelo |
+| Budokai 2 (`b2`) | modelos de B2 (sus golpes aún no se portan) | — |
+| Shin Budokai (`sb1`) / Another Road (`sb2`) | formas, golpes, técnicas que evolucionan, definitiva y voces | solo los modelos (voces de SB) |
+| Infinite World (`iw`) | formas, golpes, técnicas, hiper, definitiva y voces de IW | solo los modelos y sus formas |
+| Budokai 3 comunidad (`b3`), Heroes (`sdbh`) | lo que traiga el port / el modelo sobre el donante | — |
+
+Opciones: `golpes` (fuente/donante), `voces` (fuente/donante/ninguna), `fisica`
+(auto/donante/ninguna), `altura`, `pose_select`, `combos_tecnica`. El preset y las opciones usadas
+quedan apuntados en el `personaje.toml` del mod (`preset`, `preset_opciones`), así otra persona
+puede recrear el mismo port:
+```powershell
+python "mod center hd/importar.py" presets iw                     # presets y sus opciones
+python "mod center hd/importar.py" importar iw <ID> --mod <mod> --nombre "<nombre>" --preset original --opcion voces=donante
+```
+
 ### 5.2 Ajustar después (Mod Kit → Personajes)
 - **Formas, física y aspecto:** formas, ki base por forma, modelo por forma, física de pelo y
   cinturón, transformación del donante.
@@ -210,3 +232,20 @@ Guía para usuarios: `docs/02_mods/STUDIO_CAMARAS.md`. Formato: `docs/03_formato
 - Consola: `python "mod center hd/studio/studio_core.py" info 0` (clips y guiones de Goku),
   `exportar-glb`, `importar-glb`, `selftest`.
 
+
+## Historias propias de Dragon Universe
+
+0. Lo más fácil: abre el **Editor de historias** del Mod Kit (categoría "Campañas de Dragon Universe", `editor_historias.py`). Ahí eliges rival, formas, trajes, premios, retratos y textos con listas y botones, y "Montar mod" hace el resto. Si prefieres editar a mano:
+1. Copia `mod center hd/campanas/plantilla_historia.toml` con otro nombre (por ejemplo `mi_historia.toml`).
+2. Cambia los textos. Cada `[[capitulo]]` es un combate con una charla antes (`dialogo_es`/`dialogo_en`) y otra después (`victoria_es`/`victoria_en`). Un capítulo con `saga = true` abre una saga nueva: antes salen el cierre de la anterior (`cierre_es`), la pantalla de "¿guardar?" y el mapa nuevo. El último capítulo, sin combate, es el final.
+3. Monta el mod: en el Mod Kit, categoría "Campañas de Dragon Universe", herramienta `campana.py`, orden `montar` con tu archivo. Desde la consola es `python campana.py montar campanas/mi_historia.toml`.
+4. Activa el mod en el launcher como cualquier otro.
+
+Los textos se convierten en imágenes en los 6 idiomas; si falta un idioma se usa el inglés. Si prefieres dibujar tú una página o un bocadillo, pon en la lista el nombre de un PNG (por ejemplo `"pagina1.png"`, junto al `.toml`) y se usa tal cual. Tienes un ejemplo completo y probado en `campanas/historia_freezer.toml` (la historia recortada de Freezer). El detalle técnico está en `docs/11_campanas/CAMPANAS.md`.
+
+Novedades para historias propias (la plantilla trae ejemplos comentados de cada una):
+- **Idioma único**: `idioma = "en"` en `[historia]` muestra ese idioma en todos, útil mientras faltan traducciones.
+- **Imágenes en lugar de paneles**: en una saga, `imagen` (intro) o `cierre_imagen` (cierre) pueden ser una foto .png, .webp, .jpg o .avif tuya, que se recorta sola a 660x420.
+- **Estilo del texto**: `[historia.estilos.dialogo]`, `narracion` y `final` cambian fuente, tamaño, color y borde de cada tipo de texto. Por defecto narración y final salen como los del juego.
+- **Fondo del final**: `fondo = "heroe"` (Goku) o `"villano"` (Broly).
+- **Editor de historias**: en el Mod Kit, pestaña «Historias». Tiene selector de idioma, el botón «Rellenar traducciones que faltan» (marca como pendientes las que copia), la pestaña «Estilos de texto» con vista previa en vivo, selector de imagen para la narración y vista previa de los retratos.

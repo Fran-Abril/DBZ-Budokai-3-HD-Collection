@@ -45,6 +45,7 @@
 //   casilla = 10            # (pruebas) reasigna esta casilla EXISTENTE al ID
 //   nombre = "JANEMBA"      # nombre interno (IDs sin registro de nombre, 44-63)
 //   formas = 1              # numero de formas (por defecto, las del donante)
+//   formas_donante = [0, 2, 4, 5]  # o que formas de combate del donante, en que orden
 //   modelo_forma = [0, 1, 2, 3]  # modelo dentro del traje de cada forma (char96 formas +2)
 //   ki_base = [3, 4, 4, 5]  # barras de ki a las que tiende cada forma (char372 +212+20f +9)
 //   fisica = 4              # cadenas de fisica (pelo/cinturon) de los modelos de ese ID
@@ -66,9 +67,11 @@
 //   u32 = [1, 2]            # o u16 = [...] / u8 = [...]
 
 #include "roster_ext.h"
+#include "tagteam.h"
 
 #include "mods.h"
 
+#include <cstdlib>
 #include <rex/cvar.h>
 #include <rex/filesystem/afs.h>
 #include <rex/hook.h>
@@ -124,6 +127,8 @@ std::vector<VirtualCell> g_cells;
 rex::memory::Memory* g_memory = nullptr;
 // donante de cada ID de la plantilla extendida (-1 = ninguno)
 std::atomic<int> g_donor[kIds];
+std::atomic<int> g_team_size[kIds];   // Tag Team: miembros (equipo = [...])
+std::atomic<int> g_team_member[kIds][5];
 // trajes anadidos por mods a personajes del juego (traje.toml)
 std::atomic<int> g_extra_costumes[kIds];
 // trajes reales de cada personaje anadido por roster.toml (0 = no anadido)
@@ -204,6 +209,7 @@ class Guest {
     return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
   }
   uint8_t U8(uint32_t a) const { return *P(a); }
+  uint16_t U16(uint32_t a) const { return uint16_t((U8(a) << 8) | U8(a + 1)); }
   // Writes through the page protection (the per-character tables live in the
   // read-only data of the image).
   void Write(uint32_t a, const void* src, uint32_t n) {
@@ -553,6 +559,47 @@ void ApplyCharacter(Guest& g, const toml::table& t, const std::string& mod) {
           g.W16(c96 + 16 + 8 * f, uint16_t(id));
         }
       }
+      // formas_donante = [0, 2, 4, 5]: formas de combate del donante que se quedan, en ese
+      // orden (Goku GT de Infinite World: normal, SSJ, SSJ3, SSJ4; sin Kaioken ni SSJ2).
+      // Cada una pasa a ser del ID propio (la del SSJ4 de Goku era del ID 91: cargaba su
+      // modelo) con su entrada de char96.formas (aura...) en el mismo indice.
+      // formas_de = [ID, forma, ID, forma...]: cada forma del registro de combate de OTRO
+      // personaje (Tag Team: forma k = miembro k en su forma normal). Igual que formas_donante.
+      std::vector<int64_t> fsrc;
+      const auto fde = Ints(t["formas_de"]);
+      const auto fdon = Ints(t["formas_donante"]);
+      if (fde.size() >= 4) {
+        fsrc = fde;
+      } else {
+        for (auto f : fdon) { fsrc.push_back(donor); fsrc.push_back(f); }
+      }
+      if (!fsrc.empty()) {
+        const uint32_t nf = uint32_t(std::min<size_t>(fsrc.size() / 2, 8));
+        std::array<std::array<uint8_t, 20>, 8> recs{};
+        std::array<std::array<uint8_t, 8>, 8> fms{};
+        for (uint32_t f = 0; f < nf; ++f) {
+          const int64_t src_id = fsrc[2 * f] >= 0 && fsrc[2 * f] < 105 ? fsrc[2 * f] : donor;
+          const uint32_t d372 = kChar372 + uint32_t(src_id) * 372;
+          const uint32_t dn = std::clamp<uint32_t>(g.U32(d372 + 0xD0), 1, 8);
+          const uint32_t s = uint32_t(std::clamp<int64_t>(fsrc[2 * f + 1], 0, dn - 1));
+          for (uint32_t b = 0; b < 20; ++b) recs[f][b] = g.U8(d372 + 212 + 20 * s + b);
+          uint32_t sid = (recs[f][2] << 8) | recs[f][3];
+          const uint32_t si = std::min<uint32_t>((recs[f][4] << 8) | recs[f][5], 7);
+          if (sid >= 105 || !g.U32(kChar96 + sid * 96 + 8)) sid = uint32_t(src_id);
+          for (uint32_t b = 0; b < 8; ++b) fms[f][b] = g.U8(kChar96 + sid * 96 + 16 + 8 * si + b);
+        }
+        for (uint32_t f = 0; f < nf; ++f) {
+          recs[f][2] = uint8_t(id >> 8), recs[f][3] = uint8_t(id);
+          recs[f][4] = 0, recs[f][5] = uint8_t(f);
+          fms[f][0] = uint8_t(id >> 8), fms[f][1] = uint8_t(id);
+          for (uint32_t b = 0; b < 20; ++b) g.W8(c372 + 212 + 20 * f + b, recs[f][b]);
+          for (uint32_t b = 0; b < 8; ++b) g.W8(c96 + 16 + 8 * f + b, fms[f][b]);
+        }
+        g.W32(c372 + 0xD0, nf);
+        g.W8(c96 + 7, uint8_t(nf));
+        REXLOG_INFO("dbz3 roster [{}]: id {}: {} formas ({})", mod, id, nf,
+                    fde.size() >= 4 ? "de varios personajes: equipo" : "del donante");
+      }
     }
     // modelo de cada forma dentro del traje (char96 formas[f] +2; el aura va en +4/+5 y
     // sigue siendo la del donante: el SSJ2 conserva los rayos con su propio modelo).
@@ -653,6 +700,9 @@ void ApplyCharacter(Guest& g, const toml::table& t, const std::string& mod) {
   }
   g_unlock.fetch_or(uint64_t(1) << id);
   g_donor[id].store(int(donor));
+  const auto team = Ints(t["equipo"]);
+  g_team_size[id].store(int(team.size()));
+  for (size_t k = 0; k < 5; ++k) g_team_member[id][k].store(k < team.size() ? int(team[k]) : -1);
   REXLOG_INFO("dbz3 roster [{}]: personaje id={} donante={} modelos={} anm={}", mod, id, donor,
               models.size(), anm.size());
 }
@@ -708,6 +758,37 @@ void AddExtraCostumes(uint8_t* base) {
 bool SlotHasExtraCostumes(uint32_t slot) { return slot < 64 && ((g_extra_slots.load() >> slot) & 1); }
 
 int DonorOf(uint32_t id) { return id < uint32_t(kIds) ? g_donor[id].load() : -1; }
+int TeamSize(uint32_t id) { return id < uint32_t(kIds) ? g_team_size[id].load() : 0; }
+int TeamMember(uint32_t id, int k) {
+  return id < uint32_t(kIds) && k >= 0 && k < 5 ? g_team_member[id][k].load() : -1;
+}
+
+std::string InternalName(uint32_t id) {
+  if (!g_memory || id >= 105) return {};
+  Guest g(g_memory);
+  const uint32_t rec = g.U32(kChar96 + id * 96);
+  if (!rec) return {};
+  std::string out;
+  for (uint32_t k = 0; k < 28 && g.U8(rec + k); ++k) out += char(g.U8(rec + k));
+  return out;
+}
+
+
+namespace {
+std::atomic<int> g_pick_id[2] = {-1, -1}, g_pick_host[2] = {-1, -1};
+}  // namespace
+void SetPickedCell(int player, int id, int host) {
+  if (player < 0 || player > 1) return;
+  g_pick_id[player].store(id);
+  g_pick_host[player].store(host);
+}
+int PickedCellFor(int player, int host) {
+  if (player < 0 || player > 1 || g_pick_id[player].load() < 0) return -1;
+  return g_pick_host[player].load() == host ? g_pick_id[player].load() : -1;
+}
+void ClearPickedCells() {
+  for (int k = 0; k < 2; ++k) SetPickedCell(k, -1, -1);
+}
 
 int VirtualCellCount() { return int(g_cells.size()); }
 
@@ -1021,6 +1102,14 @@ thread_local bool t_in_setup = false;
 
 DBZ3_HOOK(sub_820FE668, dbz3eu_sub_820FE768) {
   const uint32_t sel = ctx.r3.u32;
+  dbz3::tag::BeforeBattleSetup(base, sel);   // Tag Team al vuelo: ranuras de equipo
+  for (uint32_t k = 0; sel && k < 2; ++k) {     // casilla nueva que la lista del rival deshizo
+    const int now = int(REX_LOAD_U16(sel + 32 + 80 * k));
+    if (const int id = dbz3::roster::PickedCellFor(int(k), now); id >= 0 && id != now) {
+      REX_STORE_U16(sel + 32 + 80 * k, uint16_t(id));
+      REXLOG_INFO("dbz3 roster: jugador {}: casilla nueva -> id {} (la seleccion decia {})", k + 1, id, now);
+    }
+  }
   for (uint32_t k = 0; k < 4; ++k) {
     const int id = sel ? int(REX_LOAD_U16(sel + 32 + 80 * k)) : -1;
     t_sel_ids[k] = (id >= 0 && id < 64 && dbz3::roster::DonorOf(uint32_t(id)) >= 0) ? id : -1;
@@ -1052,6 +1141,9 @@ DBZ3_HOOK(sub_821007E8, dbz3eu_sub_821008E8) {
 // 3881-3883), which have no pose for the cut IDs: use the donor's pose.
 DBZ3_HOOK(sub_82136328, dbz3eu_sub_82136430) {
   const uint32_t inst = ctx.r3.u32;
+  // Sonda (DBZ3_ANIM_PROBE=1): que movimiento pone el juego a cada modelo (para la caida del relevo)
+  static const bool probe = std::getenv("DBZ3_ANIM_PROBE") != nullptr;
+  if (probe) REXLOG_INFO("dbz3 animprobe: inst={:08X} motion={} lr={:08X}", inst, ctx.r4.u32, uint32_t(ctx.lr));
   if (inst && ctx.r4.u32 < 64) {
     const uint32_t mt = REX_LOAD_U32(inst + 656);
     if (mt) {

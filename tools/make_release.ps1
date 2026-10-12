@@ -164,6 +164,15 @@ if (Test-Path -LiteralPath $dlss) {
     Write-Warning "Falta nvngx_dlss.dll: ejecuta tools\copy_sdk_dlls.ps1 (DLSS caera a FSR 3)"
 }
 
+# Pantallas propias (TAG TEAM, ONLINE): solo nuestros titulos (tools/ingame_ui.py); las piezas del juego
+# las saca el propio juego de los AFS del jugador (src/ingame/native_ui.cpp), no se publican
+$ingame_ui = Join-Path $root "res\ingame_ui"
+if (Test-Path -LiteralPath $ingame_ui) {
+    Copy-Item -LiteralPath $ingame_ui (Join-Path $OutDir "ingame_ui") -Recurse
+} else {
+    Write-Warning "Falta res\ingame_ui: ejecuta tools\ingame_ui.py (las pantallas propias usaran sustitutos)"
+}
+
 # Modding toolkit (runtime subset)
 if (Test-Path -LiteralPath $modcenter) {
     $mcd = Join-Path $OutDir "mod center hd"

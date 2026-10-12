@@ -62,6 +62,8 @@ struct Fonts {
   ImFont* title = nullptr;  // header title
   ImFont* banner = nullptr; // Comic Sans Bold: the in-game name banner style
   ImFont* sm = nullptr;     // help lines, chips
+  ImFont* menu = nullptr;   // Arial Rounded Bold, large: rows of the in-game menus (Duelo, Tag Team)
+  ImFont* speech = nullptr; // Segoe UI Semibold, large: the game's speech-bubble text
 };
 
 // Loads the launcher fonts into the shared atlas (called from the app's

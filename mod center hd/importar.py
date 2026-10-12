@@ -106,7 +106,9 @@ def find_iso(*patterns):
 
 def iw_dir():
     """Infinite World: carpeta extraida o ISO (cualquier region)."""
-    hits = sorted(glob.glob(os.path.join(PS2, "*Infinite World*")), key=lambda p: not os.path.isdir(p))
+    # sin distinguir mayusculas (Linux): "infinite world", ".ISO"...
+    hits = sorted((p for p in glob.glob(os.path.join(PS2, "*")) if "infinite world" in os.path.basename(p).lower()),
+                  key=lambda p: not os.path.isdir(p))
     return next((p for p in hits if os.path.isdir(os.path.join(p, "USR")) or os.path.isdir(os.path.join(p, "usr"))
                  or p.lower().endswith(".iso")), None)
 
@@ -303,7 +305,29 @@ def community_files(roots):
 
 
 SKIP = re.compile(r"scouter|hair\.amb|forearms|\[npc\]|\[cutscene|\[select|\[overworld|question mark|"
-                  r"shenron \[|bubbles|giru", re.I)
+                  r"shenron \[|bubbles|giru|kamikaze ghost", re.I)
+# orden de las formas (el de los movesets por forma de IW y B3); las demas, detras
+FORM_ORDER = ("", "kaioken", "ssj", "ssj2", "ssj3", "ssj4", "lssj")
+
+
+def form_token(name):
+    """'Super Saiyan 1 - Goku' / 'SSJ' -> 'ssj'; 'SSJ3' -> 'ssj3'; 'Kaio Ken' -> 'kaioken'."""
+    t = re.sub(r"\s*-\s*.*$", "", str(name or "")).lower()
+    if "legendary" in t or "lssj" in t:
+        return "lssj"
+    if "kaio" in t:
+        return "kaioken"
+    m = re.search(r"(?:super saiyan|ssj)\s*([1-4])?", t)
+    if m:
+        return "ssj" + (m.group(1) if m.group(1) and m.group(1) != "1" else "")
+    return re.sub(r"[^a-z0-9]", "", t)
+
+
+def form_pretty(name):
+    t = form_token(name)
+    if t.startswith("ssj"):
+        return "Super Saiyan" + (" " + t[3:] if t[3:] else "")
+    return {"kaioken": "Kaioken", "lssj": "Legendary Super Saiyan"}.get(t, str(name).strip() or "Transform")
 
 
 def donor_by_name(name):
@@ -328,29 +352,93 @@ def donor_by_name(name):
 def community_list(roots):
     """Un personaje por modelo base: 'Goku (GT) (Default).amb' con sus formas
     'Goku (GT) (Default) - SSJ.amb'... (la misma pieza en .amb y .amo cuenta una vez)."""
-    groups = {}
+    items = []
     for path, fn in sorted(community_files(roots).items()):
-        if SKIP.search(fn):
-            continue
         if fn.lower().endswith(".amo") and not os.path.exists(os.path.splitext(path)[0] + ".amt"):
+            continue
+        items.append((fn, path))
+    return group_models(items)
+
+
+# ---------------------------------------------------------------- Infinite World desde su disco
+# El ejecutable de IW lleva una tabla de juegos de modelos de 0x54 B por ID (+0 inicio y +4 fin de
+# sus filas {#AMO, #AMT, puntero, 0} de 16 B, +8 el ID): filas = trajes x formas. Las formas
+# extra van en IDs propios (91 SSJ4 de Goku GT, 92 SSJ4 de Vegeta GT). iw_modelos.json da el
+# nombre de cada fila (ID -> [nombre por fila]); los modelos salen siempre del disco del usuario.
+IW_NAMES = os.path.join(HERE, "iw_modelos.json")
+IW_SET_SIZE = 0x54
+
+
+def iw_model_sets(elf, seg):
+    """{ID: [(#AMO, #AMT) por fila]} de la tabla de juegos de modelos del ejecutable de IW."""
+    off, va = seg
+    u32 = lambda o: struct.unpack_from("<I", elf, o)[0] if 0 <= o <= len(elf) - 4 else None  # noqa: E731
+    in_seg = lambda v: va <= (v or 0) < va + len(elf)                                       # noqa: E731
+    base = next((p for p in range(0, len(elf) - IW_SET_SIZE * 12, 4)
+                 if all(u32(p + IW_SET_SIZE * k + 8) == k and in_seg(u32(p + IW_SET_SIZE * k))
+                        for k in (2, 3, 4, 6, 7, 8, 10))), None)
+    if base is None:
+        raise ValueError("no encuentro la tabla de modelos en el ejecutable de Infinite World")
+    out = {}
+    for cid in range(128):
+        o = base + IW_SET_SIZE * cid
+        if o + IW_SET_SIZE > len(elf):
+            break
+        a, b = u32(o), u32(o + 4)
+        if not (in_seg(a) and a < b and b - a < 0x2000):
+            continue
+        out[cid] = [struct.unpack_from("<2I", elf, r) for r in range(a - va + off, b - va + off, 16)]
+    return out
+
+
+def iso_list(iw):
+    """Lista de IW leida del disco (como community_list; ref de cada forma = ('iw', #AMO, #AMT))."""
+    import voces  # noqa: PLC0415
+    v = voces.IwVoices(iw)
+    names = json.load(open(IW_NAMES, encoding="utf-8"))
+    afs = iw_afs(iw)
+    items = []
+    for cid, rows in iw_model_sets(v.elf, v._seg).items():
+        for k, (amo, amt) in enumerate(rows):
+            nm = (names.get(str(cid)) or [])[k:k + 1]
+            if nm and nm[0] and 0 < amo < afs.n and 0 < amt < afs.n:
+                items.append((nm[0] + ".amb", ("iw", amo, amt)))
+    return group_models(items)
+
+
+def group_models(items):
+    """[(nombre de fichero, ref)] -> personajes {clave, nombre, ficheros (refs por forma), formas}."""
+    groups = {}
+    for fn, path in items:
+        if SKIP.search(fn):
             continue
         stem = re.sub(r"^\d+[a-z]?\.\s*", "", os.path.splitext(fn)[0]).strip()
         parts = stem.split(" - ")    # 'Goku (EoZ) - (Halo) - SSJ': variante (Halo), forma SSJ
+        if len(parts) > 1 and re.match(r"alt colou?r pall?ete$", parts[-1], re.I):
+            parts = parts[:-1] + ["(%s)" % parts[-1]]       # 'Cooler - ALT Colour Pallete': paleta, no forma
         if len(parts) > 1 and not parts[-1].startswith("("):
             base, form = " - ".join(parts[:-1]), parts[-1]
+            m = re.match(r"(.+?)\s*(\(.+\))$", form)    # 'SSJ (ALT Colour Pallete)': forma SSJ de la variante
+            if m:
+                base, form = base + " - " + m.group(2), m.group(1)
         else:
-            base, form = stem, ""
+            base, form = " - ".join(parts), ""
         g = groups.setdefault(base.lower(), {"nombre": base.replace(" - ", " "), "formas": {}})
         g["formas"].setdefault(form.lower(), path)        # duplicados .amb/.amo: el primero
     out = []
     for k, g in sorted(groups.items()):
-        files = [g["formas"][f] for f in sorted(g["formas"], key=lambda f: (f != "", ))]
+        fs = sorted(g["formas"], key=lambda f: (FORM_ORDER.index(form_token(f)) if form_token(f) in FORM_ORDER
+                                                 else len(FORM_ORDER), f))
+        files = [g["formas"][f] for f in fs]
         nm = re.sub(r"\s*\((default|default armour)\)", "", g["nombre"], flags=re.I).strip()
-        out.append({"clave": "c:" + k, "nombre": nm, "ficheros": files, "donante": donor_by_name(nm)})
+        out.append({"clave": "c:" + k, "nombre": nm, "ficheros": files, "formas": fs, "donante": donor_by_name(nm)})
     return out
 
 
 def community_model(path):
+    if isinstance(path, (tuple, list)):          # ('iw', #AMO, #AMT): modelo del disco de IW
+        afs = iw_afs(source_path("iw"))
+        return amb_pair(afs.entry(path[1]), afs.entry(path[2]))
     if path.lower().endswith(".amo"):
         return amb_pair(open(path, "rb").read(), open(os.path.splitext(path)[0] + ".amt", "rb").read())
     return open(path, "rb").read()
@@ -466,14 +554,9 @@ def sb_game_of(code):
 
 
 def voice_key(sb_game, code):
-    """voces = "sb2:XXX" si voces.py ya entiende el prefijo (agente de voces); los gritos siguen a
-    las voces de SB en roster_build."""
-    try:
-        with open(os.path.join(HERE, "voces.py"), encoding="utf-8", errors="replace") as fh:
-            src = fh.read()
-    except OSError:
-        return None
-    return '"%s:%s"' % (sb_game, code) if '"%s:' % sb_game in src else None
+    """voces = "sb1:XXX" / "sb2:XXX" (voces.py -> sb_voces.py; los gritos siguen a las voces de SB en
+    roster_build). Antes se buscaba el texto '"sb1:' en voces.py y SB1 se quedaba sin voces."""
+    return '"%s:%s"' % (sb_game, code) if sb_game in ("sb1", "sb2") and code else None
 
 
 def sb_import(game, e, donor, work, us):
@@ -568,6 +651,50 @@ def sb_import(game, e, donor, work, us):
     return models[:forms], forms, keys, files
 
 
+def iw_donor_forms(donor, fnames):
+    """Formas de combate del donante para las de un personaje de IW (por nombre: SSJ, SSJ3,
+    SSJ4...; si no, la siguiente libre) -> ([i0, i1...] = formas_donante, cuantas por nombre).
+    La 1a es la normal salvo que su nombre case (Gogeta empieza en SSJ: con su aura dorada)."""
+    import roster_build as rb  # noqa: PLC0415
+    caps = rb.IDS[donor].get("form_caps") or [0]
+    names = rb.b3_cap_names()
+    toks = [None] + [form_token(names.get(x) or "") if x else None for x in caps[1:]]
+    fd, used, exact = [], set(), 0
+    for k, nm in enumerate(fnames):
+        t = form_token(nm)
+        i = next((i for i in range(1, len(caps)) if i not in used and t and toks[i] == t), None)
+        if i is not None:
+            exact += 1
+        elif k == 0:
+            i = 0
+        else:
+            i = next((i for i in range(1, len(caps)) if i not in used and caps[i]), None)
+        if i is None:
+            break
+        fd.append(i)
+        used.add(i)
+    return fd, exact
+
+
+def iw_best_donor(donor, fnames):
+    """El donante propuesto si tiene sitio para todas las formas; si no, el personaje de B3 que
+    mas formas cubre (y mas por nombre): Gohan adulto con el traje del Gran Saiyaman (SSJ) no
+    cabe en el Gran Saiyaman (1 forma) -> Gohan adulto. -> (donante, formas_donante)."""
+    import roster_build as rb  # noqa: PLC0415
+    fd, exact = iw_donor_forms(donor, fnames)
+    if len(fd) >= len(fnames):
+        return donor, fd
+    best = (len(fd), exact, 1, donor, fd)      # empate: el propuesto; luego el ID mas cercano
+    for d in range(44):
+        if d == donor or not (rb.IDS.get(d) or {}).get("form_caps") or rb.IDS[d].get("cam") is None:
+            continue
+        f2, e2 = iw_donor_forms(d, fnames)
+        cand = (len(f2), e2, -abs(d - donor) - (d > donor) * 0.5, d, f2)
+        if cand[:3] > best[:3]:
+            best = cand
+    return best[3], best[4]
+
+
 def sb_transform_caps(donor, forms):
     """Texto TOML de las [[capsula]] de transformacion (formas 1..n-1) con el nombre de las del donante
     (lista de B3); sin `ki`: la plantilla es la capsula nativa del donante para esa forma (sus barras)."""
@@ -625,7 +752,9 @@ def iw_afs(iw):
     """DATA_CMN.AFS de Infinite World, de su carpeta extraida o de su ISO."""
     if os.path.isfile(iw):
         return AfsFile(iw, "/USR/DATA_CMN.AFS")
-    return AfsFile(os.path.join(iw, "USR", "DATA_CMN.AFS"))
+    usr = next((os.path.join(iw, d) for d in os.listdir(iw) if d.lower() == "usr"), os.path.join(iw, "USR"))
+    return AfsFile(next((os.path.join(usr, f) for f in os.listdir(usr) if f.lower() == "data_cmn.afs"),
+                        os.path.join(usr, "DATA_CMN.AFS")) if os.path.isdir(usr) else os.path.join(usr, "DATA_CMN.AFS"))
 
 
 def _kid_magics(afs, i):
@@ -765,10 +894,18 @@ def list_source(game, extra=None):
     if game == "b2":
         return group_by_character(scan_models(AfsFile(source_path("b2"), "/USR/DATA_CMN.AFS")))
     if game == "iw":
-        if os.path.isdir(IW_MODELS):      # la coleccion de modelos de IW ya trae los nombres
+        # del disco del usuario (ISO o carpeta); la coleccion de la comunidad solo si no se lee
+        iw = source_path("iw")
+        try:
+            lst = iso_list(iw) if iw else []
+        except Exception as e:  # noqa: BLE001
+            print("aviso: modelos de IW sin leer del disco (%s)" % e, file=sys.stderr)
+            lst = []
+        if not lst and os.path.isdir(IW_MODELS):
             lst = community_list([IW_MODELS])
-        else:
-            lst = group_by_character(scan_models(iw_afs(source_path("iw"))))
+        if not lst:
+            sys.exit("Infinite World: no encuentro su disco (ISO o carpeta) / Infinite World: "
+                     "its disc (ISO or folder) was not found.")
         ports = iw_ports()
         for e in lst:
             e["port"] = port_for(e["nombre"], ports)
@@ -854,7 +991,8 @@ def iw_voice_name(nombre):
         return None
     key = re.sub(r"[^a-z0-9]", "", nombre.lower())
     alias = {"janemba": "janenba", "pikkon": "paikuhan", "gokugt": "gtgokou", "vegetagt": "gtvegeta",
-             "babyvegeta": "vegetababy", "super17": "superandroidno17", "greatsaiyaman2": "greatsaiyaman2"}
+             "babyvegeta": "vegetababy", "baby": "vegetababy", "superbabyvegeta2": "vegetababy",
+             "superbabyvegeta": "vegetababy", "super17": "superandroidno17", "greatsaiyaman2": "greatsaiyaman2"}
     key = alias.get(key, key)
     for nm in iw.names:
         if re.sub(r"[^a-z0-9]", "", nm.lower()) == key:
@@ -862,9 +1000,69 @@ def iw_voice_name(nombre):
     return None
 
 
+PRESETS = os.path.join(HERE, "presets_importar.toml")
+PRESET_DEFAULTS = {"golpes": "fuente", "voces": "fuente", "fisica": "auto", "altura": True,
+                   "pose_select": True, "combos_tecnica": True}
+
+
+def presets(game):
+    """{nombre: {descripcion, opciones...}} de presets_importar.toml para una fuente."""
+    import roster_build as rb  # noqa: PLC0415
+    try:
+        with open(PRESETS, "rb") as fh:
+            return rb.tomllib.load(fh).get(game, {})
+    except OSError:
+        return {}
+
+
+def preset_name(game, name=None):
+    """Preset pedido (o el primero de la fuente); uno que no existe es un error, no otro en silencio."""
+    pre = presets(game)
+    if name and name not in pre:
+        raise SystemExit("preset '%s' no existe para %s (hay: %s)" % (name, game, ", ".join(pre) or "ninguno"))
+    return name or next(iter(pre), "")
+
+
+def preset_options(game, name=None, overrides=()):
+    """Opciones finales: valores por defecto < preset (o el primero de la fuente) < --opcion k=v."""
+    opt = dict(PRESET_DEFAULTS)
+    opt.update(presets(game).get(preset_name(game, name), {}))
+    for kv in overrides or ():
+        k, _, v = kv.partition("=")
+        k, v = k.strip(), v.strip()
+        opt[k] = {"true": True, "false": False}.get(v.lower(), v)
+    return opt
+
+
+def apply_preset(keys, opt):
+    """Claves de personaje.toml segun las opciones del preset (sobre lo que puso la fuente)."""
+    if opt.get("golpes") == "donante":
+        for k in ("moveset", "camara", "tecnicas", "definitiva_animaciones"):
+            keys.pop(k, None)
+    if opt.get("voces") == "donante":
+        keys.pop("voces", None)
+        keys.pop("gritos", None)
+    elif opt.get("voces") == "ninguna":
+        keys["voces"] = '"ninguna"'
+    if opt.get("fisica") in ("donante", "ninguna"):
+        if opt["fisica"] == "donante":
+            keys["fisica"] = '"donante"'
+        else:
+            keys.pop("fisica", None)
+    for k in ("altura", "pose_select", "combos_tecnica"):
+        if opt.get(k) is False:
+            keys[k] = "false"
+    return keys
+
+
 def do_import(a):
     import roster_build as rb  # noqa: PLC0415
     game = a.fuente
+    opt = preset_options(game, getattr(a, "preset", None), getattr(a, "opcion", None))
+    if opt.get("golpes") == "donante":
+        a.golpes_donante = True
+    pname = preset_name(game, getattr(a, "preset", None))
+    rb.log("preset %s: %s" % (pname, ", ".join("%s=%s" % kv for kv in sorted(opt.items()) if kv[0] != "descripcion")))
     work = tempfile.mkdtemp(prefix="importar_")
     lst = list_source(game, a.carpeta)
     e = next((x for x in lst if x["clave"] == a.clave), None)
@@ -900,7 +1098,8 @@ def do_import(a):
     rb.log("importando %s de %s: %d modelos, donante %d" % (e["nombre"], dict((g, n) for g, n, s in GAMES)[game],
                                                          len(models), donor))
     files, own_donor = {}, donor
-    if port:
+    # con golpes del donante (preset "solo_modelos") el port de la comunidad no cambia el donante elegido
+    if port and not getattr(a, "golpes_donante", False):
         pd, files = port_files(port)
         if pd is not None and files.get("anm"):
             donor = pd
@@ -913,8 +1112,15 @@ def do_import(a):
             pc = rb.load_bin(files["cam"], work)
             at = capsulas.ccm_child(pc)
             sm = capsulas.bcm_summary(pc[at[0]:at[0] + at[1]]) if at else {}
+            pforms = next((x.get("forms") or 1 for x in rb.DB["ids"] if x["id"] == donor), 1)
+            oforms = next((x.get("forms") or 1 for x in rb.DB["ids"] if x["id"] == own_donor), 1)
             if not (sm.get("hiper") or sm.get("aura_iw")):
                 rb.log("aviso: el port de la comunidad esta incompleto (sin modo hiper): moveset original de IW")
+                files, port, donor = {}, None, own_donor
+            elif pforms < len(models) <= oforms:
+                # el port de Goku GT sustituia a Gohan joven (3 formas): perderia el SSJ4
+                rb.log("aviso: el port de la comunidad solo admite %d formas de %d: moveset original de IW"
+                       % (pforms, len(models)))
                 files, port, donor = {}, None, own_donor
         except Exception as ex:  # noqa: BLE001
             rb.log("aviso: port de la comunidad sin comprobar (%s)" % ex)
@@ -944,6 +1150,30 @@ def do_import(a):
         if any(ln.startswith("transformacion:") for ln in rep) and len(models) >= 2 and len(models) % 2 == 0:
             forms = 2
         b1_anm, b1_cam = bytes(ps2hd.convert_block(anm)), bytes(ps2hd.convert_block(cam))
+    iw_forms = None               # IW con su moveset: sus formas sobre las del donante con el mismo nombre
+    if game == "iw" and (port == "iw" or a.golpes_donante) and e.get("formas") and len(models) > 1:
+        if a.donante is None:
+            nd, fd = iw_best_donor(donor, e["formas"][:len(models)])
+            if nd != donor:
+                rb.log("donante: %s no tiene sitio para sus %d formas: %s" % (
+                    rb.IDS[donor]["name"], len(models), rb.IDS[nd]["name"]))
+                donor = nd
+        else:
+            fd = iw_donor_forms(donor, e["formas"][:len(models)])[0]
+        if len(fd) < len(models):
+            rb.log("aviso: el donante solo tiene %d formas: se usan los %d primeros modelos" % (len(fd), len(fd)))
+            models = models[:len(fd)]
+        forms = len(models)
+        iw_forms = fd[:forms]
+        if files.get("anm"):
+            files["anm"] = (files["anm"] + files["anm"][:1] * forms)[:forms]
+        keys.update(formas_donante=str(iw_forms), modelo_forma=str(list(range(forms))))
+        rb.log("formas: %s sobre las del donante %s" % (
+            ", ".join(form_pretty(f) if f else "normal" for f in e["formas"][:forms]), iw_forms))
+    if game == "iw" and port == "iw" and not iw_forms:
+        keys["formas"] = "1"          # sin transformaciones (si no, las del donante: Baby con las de Vegeta)
+    if game == "iw":
+        keys["nombre_iw"] = json.dumps(re.sub(r"\s*\(alt colou?r pall?ete\)", "", e["nombre"], flags=re.I))
     ns = argparse.Namespace(mods=a.mods, us=a.us, mod=a.mod, nombre=a.nombre, donante=donor, id=a.id,
                             modelo=models, cara=None, icono=None, retrato=None, retrato_p1=None,
                             retrato_p2=None, captura=None, despues_de=a.despues_de, por_traje=forms)
@@ -991,12 +1221,17 @@ def do_import(a):
         if vn:
             keys["voces"] = '"iw:%s"' % vn
             rb.log("voces y gritos de Infinite World: %s" % vn)
+    keys = apply_preset(keys, opt)
+    # de que preset sale el personaje (y lo que se cambio con --opcion): asi se puede rehacer igual
+    keys["preset"] = json.dumps("%s.%s" % (game, pname))
+    if getattr(a, "opcion", None):
+        keys["preset_opciones"] = json.dumps(";".join(a.opcion))
     if keys:
         rb.set_toml_keys(toml, keys)
     sb_caps = False
     if game in ("sb1", "sb2", "sdbh"):    # capsulas: tecnicas con nombre oficial (sb_tecnicas) + formas
         extra = ""
-        if sb_files.get("capsulas.toml"):
+        if sb_files.get("capsulas.toml") and not a.golpes_donante:
             with open(sb_files["capsulas.toml"], encoding="utf-8") as fh:
                 extra += "\n" + fh.read().strip() + "\n"
             sb_caps = True
@@ -1024,6 +1259,9 @@ def do_import(a):
                 caps = (caps or []) + [{"nombre": nm, "tipo": "definitiva", "reemplaza": cu}]
                 rb.log("definitiva de Budokai 1 traducida: %s (sobre la cinematica de %s)" % (nm, dn["name"])
                        if b1_ult.get("receta") else "definitiva: %s (la del donante)" % nm)
+            if iw_forms:              # sus transformaciones (la plantilla: la del donante en esa forma)
+                caps = [{"nombre": form_pretty(f), "tipo": "transformacion", "forma": k}
+                        for k, f in enumerate(e["formas"][1:len(iw_forms)], 1)] + (caps or [])
             if caps:
                 rb.write_caps(toml, caps)
                 rb.log("capsulas propias: %d (renombralas en el editor si quieres)" % len(caps))
@@ -1053,7 +1291,19 @@ def main():
     i.add_argument("--us")
     i.add_argument("--golpes-donante", action="store_true",
                    help="iw: golpes del donante en vez de los de Infinite World")
+    i.add_argument("--preset", help="preset de presets_importar.toml (por defecto, el primero de la fuente)")
+    i.add_argument("--opcion", action="append", default=[], metavar="CLAVE=VALOR",
+                   help="cambia una opcion del preset (golpes, voces, fisica, altura, pose_select...)")
+    p = sub.add_parser("presets")
+    p.add_argument("fuente")
     a = ap.parse_args()
+    if a.cmd == "presets":
+        for nm, pre in presets(a.fuente).items():
+            o = preset_options(a.fuente, nm)
+            emit("preset", nm, pre.get("descripcion", ""),
+                 ";".join("%s=%s" % (k, str(v).lower() if isinstance(v, bool) else v)
+                          for k, v in sorted(o.items()) if k != "descripcion"))
+        return 0
     if a.cmd == "fuentes":
         for g, nm, st in GAMES:
             path = source_path(g)
@@ -1067,6 +1317,8 @@ def main():
             kind, n = entry_kind(a.fuente, e)
             emit("personaje", e["clave"], e["nombre"], "" if e.get("donante") is None else e["donante"],
                  kind, n, 1 if e.get("port") else 0, suggested_name(a.fuente, e))
+        for nm, pre in presets(a.fuente).items():    # los presets de la fuente (el launcher los lista)
+            emit("preset", nm, pre.get("descripcion", ""))
         return 0
     return do_import(a)
 

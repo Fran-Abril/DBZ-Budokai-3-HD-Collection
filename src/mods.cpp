@@ -101,8 +101,8 @@ void InferTypeAndCount(const std::filesystem::path& dir, ModInfo& info) {
   bool has_data = false, has_audio = false;
   int count = 0;
   std::error_code ec;
-  for (const auto& entry :
-       std::filesystem::recursive_directory_iterator(dir, ec)) {
+  for (auto [it_1, iec_1] = std::pair{std::filesystem::recursive_directory_iterator(dir, ec), std::error_code{}}; !iec_1 && it_1 != std::filesystem::recursive_directory_iterator(); it_1.increment(iec_1)) {
+    const auto& entry = *it_1;
     if (!entry.is_regular_file()) {
       continue;
     }
@@ -173,13 +173,14 @@ bool ImageSize(const std::filesystem::path& p, uint32_t& w, uint32_t& h) {
 
 bool HasModContent(const std::filesystem::path& d) {
   std::error_code ec;
-  for (const char* n : {"us", "eu", "personaje.toml", "traje.toml", "roster.toml", "manifest.txt"}) {
+  for (const char* n : {"us", "eu", "personaje.toml", "traje.toml", "roster.toml", "manifest.txt", "ui_ingame"}) {
     if (std::filesystem::exists(d / n, ec)) return true;
   }
   uint32_t w, h;
   // Los packs de texturas pueden ir en subcarpetas (el runtime las recorre).
-  for (const auto& e : std::filesystem::recursive_directory_iterator(
-           d, std::filesystem::directory_options::skip_permission_denied, ec)) {
+  for (auto [it_2, iec_2] = std::pair{std::filesystem::recursive_directory_iterator(
+           d, std::filesystem::directory_options::skip_permission_denied, ec), std::error_code{}}; !iec_2 && it_2 != std::filesystem::recursive_directory_iterator(); it_2.increment(iec_2)) {
+    const auto& e = *it_2;
     if (e.is_regular_file() && PackStem(e.path().stem().string(), w, h)) return true;
   }
   return false;
@@ -210,7 +211,8 @@ void CheckProblems(const std::filesystem::path& dir, ModInfo& info) {
   }
   if (!HasModContent(dir)) {
     std::vector<std::filesystem::path> subs;
-    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+    for (auto [it_3, iec_3] = std::pair{std::filesystem::directory_iterator(dir, ec), std::error_code{}}; !iec_3 && it_3 != std::filesystem::directory_iterator(); it_3.increment(iec_3)) {
+    const auto& e = *it_3;
       if (e.is_directory()) subs.push_back(e.path());
     }
     if (subs.size() == 1 && HasModContent(subs[0])) {
@@ -232,8 +234,9 @@ void CheckProblems(const std::filesystem::path& dir, ModInfo& info) {
   // Pack de texturas: nombres que el juego no reconoce y tamanos que no son x1-x4 del original.
   int pack = 0, bad_name = 0;
   std::string bad_size;
-  for (const auto& e : std::filesystem::recursive_directory_iterator(
-           dir, std::filesystem::directory_options::skip_permission_denied, ec)) {
+  for (auto [it_4, iec_4] = std::pair{std::filesystem::recursive_directory_iterator(
+           dir, std::filesystem::directory_options::skip_permission_denied, ec), std::error_code{}}; !iec_4 && it_4 != std::filesystem::recursive_directory_iterator(); it_4.increment(iec_4)) {
+    const auto& e = *it_4;
     if (!e.is_regular_file()) continue;
     std::string ext = e.path().extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
@@ -255,14 +258,16 @@ bool FixNestedMod(const std::string& mod_name) {
   const std::filesystem::path dir = ModsRoot() / mod_name;
   std::error_code ec;
   std::filesystem::path inner;
-  for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+  for (auto [it_5, iec_5] = std::pair{std::filesystem::directory_iterator(dir, ec), std::error_code{}}; !iec_5 && it_5 != std::filesystem::directory_iterator(); it_5.increment(iec_5)) {
+    const auto& e = *it_5;
     if (e.is_directory()) {
       if (!inner.empty()) return false;
       inner = e.path();
     }
   }
   if (inner.empty() || !HasModContent(inner)) return false;
-  for (const auto& e : std::filesystem::directory_iterator(inner, ec)) {
+  for (auto [it_6, iec_6] = std::pair{std::filesystem::directory_iterator(inner, ec), std::error_code{}}; !iec_6 && it_6 != std::filesystem::directory_iterator(); it_6.increment(iec_6)) {
+    const auto& e = *it_6;
     const auto to = dir / e.path().filename();
     if (std::filesystem::exists(to, ec)) return false;   // nunca se pisa nada
     std::filesystem::rename(e.path(), to, ec);
@@ -280,8 +285,12 @@ std::vector<ModInfo> ListMods() {
   if (!std::filesystem::is_directory(mods_root, ec)) {
     return {};
   }
-  for (const auto& mod_entry : std::filesystem::directory_iterator(mods_root, ec)) {
-    if (!mod_entry.is_directory()) {
+  for (auto [it_7, iec_7] = std::pair{std::filesystem::directory_iterator(mods_root, ec), std::error_code{}}; !iec_7 && it_7 != std::filesystem::directory_iterator(); it_7.increment(iec_7)) {
+    const auto& mod_entry = *it_7;
+    // A mod that cannot be read (path too long, odd name...) is skipped, never a crash.
+    try {
+    std::error_code fec;
+    if (!mod_entry.is_directory(fec)) {
       continue;
     }
     const std::string raw_name = rex::path_to_utf8(mod_entry.path().filename());
@@ -296,6 +305,9 @@ std::vector<ModInfo> ListMods() {
     InferTypeAndCount(mod_entry.path(), info);
     CheckProblems(mod_entry.path(), info);
     result.push_back(std::move(info));
+    } catch (const std::exception& ex) {
+      REXLOG_WARN("dbz3: mod '{}' skipped while listing: {}", rex::path_to_utf8(mod_entry.path()), ex.what());
+    }
   }
   std::stable_sort(result.begin(), result.end(),
                    [](const ModInfo& a, const ModInfo& b) {
@@ -579,7 +591,8 @@ bool InstallModFromZip(const std::string& zip_path_utf8, std::string& out_name,
   {
     bool loose_file = false;
     std::vector<fs::path> subdirs;
-    for (const auto& e : fs::directory_iterator(temp_dir, ec)) {
+    for (auto [it_8, iec_8] = std::pair{fs::directory_iterator(temp_dir, ec), std::error_code{}}; !iec_8 && it_8 != fs::directory_iterator(); it_8.increment(iec_8)) {
+    const auto& e = *it_8;
       if (e.is_regular_file()) {
         loose_file = true;
       } else if (e.is_directory()) {
@@ -676,7 +689,8 @@ bool InstallModFromZip(const std::string& zip_path_utf8, std::string& out_name,
   fs::path base_dir = temp_dir;
   bool loose_file = false;
   std::vector<fs::path> subdirs;
-  for (const auto& entry : fs::directory_iterator(temp_dir, ec)) {
+  for (auto [it_9, iec_9] = std::pair{fs::directory_iterator(temp_dir, ec), std::error_code{}}; !iec_9 && it_9 != fs::directory_iterator(); it_9.increment(iec_9)) {
+    const auto& entry = *it_9;
     if (entry.is_regular_file()) loose_file = true;
     else if (entry.is_directory()) subdirs.push_back(entry.path());
   }

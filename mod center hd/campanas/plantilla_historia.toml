@@ -1,0 +1,104 @@
+# Plantilla de historia propia para Dragon Universe. Copia este archivo, cambia los textos y monta:
+#   python campana.py montar campanas/mi_historia.toml
+# El mod aparece en mods/<mod> y se activa como cualquier otro. Ejemplo completo y probado:
+# campanas/historia_freezer.toml. Forma de las historias del juego: cada combate lleva una charla
+# antes (dialogo_*) y otra despues (victoria_*); los paneles con texto solo abren y cierran sagas.
+# Cualquier linea puede ser una imagen tuya: "pagina1.png" (RGBA, junto a este archivo) se usa tal cual.
+
+[campana]
+nombre = "Mi historia"
+mod = "mi_historia"
+descripcion = "Una historia nueva de Dragon Universe."
+
+# Personajes que salen en la rueda de Dragon Universe (ID del personaje; Freezer = 27).
+[rueda]
+personajes = [27]
+
+# La introduccion del personaje (codigo 102 = saga de Namek, entrada = su casilla de DU) deja en el
+# mapa la marca del primer combate (palabra "<combates.codigo>.0"). Copia la de historia_freezer.toml
+# y cambia solo la marca (24, 1, "5522.0", icono, zona, x, y, z, escala). Debe acabar en
+# [20, 0, "<codigo>.0"] (su llegada al mapa, como el juego; la frase es `llegada_es` del primer
+# capitulo): sin ella el personaje sale volando a ras del suelo.
+
+[historia]
+codigo = 5122                 # escenas del mapa: 5000 + 100*saga + casilla
+contenedor = 1820
+altura_mapa = 400            # altura a la que vuelas por el mapa al volver de un combate
+# idioma = "en"             # opcional: ese idioma en todos (si aun no hay traducciones)
+# musica_narracion = 135269   # opcional: musica de los paneles de narracion (135269 = la de las introducciones del juego)
+# imagenes_desde = 4510       # opcional: primera entrada libre de data_cmn para tus imagenes ("imagen", "cierre_imagen" y [[imagen]])
+textos_desde = 3600           # entradas nuevas de texto (lejos de las de otros mods)
+fondo = 1411                  # panel de los textos de saga
+final = { contenedor = 1728, codigo = 1, entrada = 39, fondo = "heroe" }   # entrada libre; fondo "heroe" (azul) o "villano" (el de Broly)
+# plantilla: combate del juego que da el escenario (709 Namek; 717 la Tierra)
+combates = { codigo = 5522, contenedor = 2132, plantilla = 709 }
+dialogos = { codigo = 5922, contenedor = 1659, textos_desde = 3620 }
+
+# Estilo de los textos (opcional). Son tres: dialogo (charlas), narracion (paneles de saga) y final.
+# Cada uno acepta fuente, tamano, interlineado, ancho, borde, color y color_borde. Los valores de
+# abajo son los de por defecto. color y color_borde son [R, G, B]. fuente: un .ttf junto a este
+# archivo o el nombre de una fuente de Windows. narracion y final ya salen como los del juego.
+# [historia.estilos.dialogo]
+# fuente = "arialbd.ttf"
+# tamano = 17
+# interlineado = 22
+# ancho = 205
+# borde = 0
+# color = [8, 8, 8]
+# color_borde = [0, 0, 0]
+# [historia.estilos.narracion]
+# fuente = "verdanab.ttf"
+# tamano = 19
+# interlineado = 41
+# ancho = 290
+# borde = 2
+# color = [0, 40, 33]
+# color_borde = [239, 235, 239]
+# [historia.estilos.final]
+# (mismas claves que narracion)
+
+[[capitulo]]
+combate = 654                 # combate (#BPC) que se rehace; su rival es el del archivo, o `rival = ID`
+# forma_rival = 2             # forma con la que empieza el rival (0 normal)
+# forma_jugador = 1           # forma con la que empiezas tu
+# traje_rival = 3            # traje del rival (0 el normal; Vegeta 3 = armadura de Namek)
+# premio = 96                 # capsula que ganas (numero de capsula del juego)
+# nivel = 2                   # nivel del rival 0..7 (por defecto sube con la historia)
+retratos = [1436, 1463]       # rival (izquierda) y tu personaje (derecha)
+marca = [1, 2, 4918, 67, -4916, 1000]   # icono, zona, x, y, z, escala de la marca (icono 1 = marca de historia: letrero y punto rojo del minimapa; zona 2 la normal; 577 = Battle Point suelto)
+dialogo_es = ["Frase del rival.", "Respuesta de tu personaje."]
+dialogo_en = ["Rival line.", "Your character's answer."]
+victoria_es = ["El rival cae.", "Tu personaje remata."]
+victoria_en = ["The rival falls.", "Your character finishes it."]
+
+# Capitulo que abre saga nueva: al ganar el anterior salen el cierre, "guardar?" y el mapa nuevo.
+[[capitulo]]
+saga = true
+planeta = 0                   # 0 la Tierra, 1 Namek
+salida = [5700, 100, 1700]    # donde aparece en el mapa nuevo
+plantilla = 717               # escenario de la Tierra
+fondo_dialogo = 1549          # fondo de la charla de despues (1536 Namek, 1549 la Tierra)
+combate = 664
+retratos = [1443, 1486]
+marca = [1, 2, 3213, 48, -6083, 1500]
+cierre_es = ["Texto del final de la saga anterior."]
+cierre_en = ["End of the previous saga."]
+# imagen = "intro.png"          # opcional: imagen (.png, .webp, .jpg o .avif, junto a este archivo) en lugar del panel verde de la intro
+# cierre_imagen = "cierre.png"  # opcional: lo mismo para el cierre de la saga anterior
+es = ["Texto de la introduccion de la saga nueva."]
+en = ["Intro of the new saga."]
+dialogo_es = ["Frase del rival.", "Respuesta."]
+dialogo_en = ["Rival line.", "Answer."]
+victoria_es = ["El rival cae.", "Remate."]
+victoria_en = ["The rival falls.", "Finisher."]
+
+# El ultimo capitulo sin combate es el final.
+[[capitulo]]
+es = ["Texto del final de la historia."]
+en = ["Ending of the story."]
+
+# Imagen propia para una escena hecha a mano (una [[escena]] puede usarla con el evento [10, 0, N]).
+# Opcional. entrada = una entrada libre de data_cmn (desde imagenes_desde); archivo junto a este archivo.
+# [[imagen]]
+# entrada = 4511
+# archivo = "escena.png"

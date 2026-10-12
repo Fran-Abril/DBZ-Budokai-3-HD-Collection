@@ -197,6 +197,87 @@ def scale_hips(anm, s, dy):
     return bytes(out)
 
 
+def code_anim(anm, code):
+    """Indice de la animacion del moveset (#ACM hijo 1) que usa el codigo, o None."""
+    e, kids = amb_kids(anm)
+    bsk = anm[kids[0][0]:kids[0][0] + kids[0][1]]
+    n, lst = struct.unpack(e + "II", bsk[0x10:0x18])
+    a0 = struct.unpack_from(e + "I", bsk, lst + 4 * code)[0] if code < n else 0
+    if not a0:
+        return None
+    anim, pool = struct.unpack_from(e + "HH", bsk, a0)
+    return anim if pool == 3 else None
+
+
+# Codigos de moverse por el suelo con los pies apoyados en casi todos los nativos (RE
+# 2026-10-10: 2 y 15-17 en el 80-100 % de los 34); en IW algunos levantan la cadera y el port
+# "flota" al andar.
+GROUND_CODES = (2, 15, 16, 17)
+
+
+def ground_moves(anm, skel, ref=None, codes=GROUND_CODES, tol=0.06):
+    """ANM con la cadera bajada en las animaciones de `codes` cuyo tobillo (fotograma 0) queda por
+    encima del de reposo mas de tol * pierna; `ref` = (esqueleto, anm) del donante: solo los
+    codigos que el tiene apoyados. -> (anm, {codigo: bajada})."""
+    if len(amb_kids(anm)[1]) < 2:
+        return anm, {}                        # forma que solo trae #BSK: usa las animaciones de la 1a
+    L = leg(skel) or 0
+    idle = idle_tracks(anm, 0)
+    base = ankle(skel, idle) if idle else None
+    if not L or base is None:
+        return anm, {}
+    if ref:
+        r_idle = idle_tracks(ref[1], 0)
+        r_base = ankle(ref[0], r_idle) if r_idle else None
+        r_leg = leg(ref[0]) or 1
+    fix = {}
+    for code in codes:
+        a = code_anim(anm, code)
+        tr = idle_tracks(anm, code)
+        if a is None or not tr or "WAIST" not in tr:
+            continue
+        if ref and r_base is not None:
+            rt = idle_tracks(ref[1], code)
+            ra = ankle(ref[0], rt) if rt else None
+            if ra is None or abs(ra - r_base) > tol * r_leg:
+                continue                      # el donante tampoco lo tiene apoyado
+        up = (ankle(skel, tr) or base) - base
+        if up > tol * L and a not in fix.values():
+            fix[code] = (a, up)
+    if not fix:
+        return anm, {}
+    e, kids = amb_kids(anm)
+    o = kids[1][0]
+    out = bytearray(anm)
+    n, t, nb, no = struct.unpack_from(e + "4I", out, o + 0x10)
+    w = [j for j in range(nb) if suffix(bytes(out[o + no + 32 * j:o + no + 32 * j + 32]).split(b"\0")[0]
+                                       .decode("latin1")) == "WAIST"]
+    users = {}                                # pista de posicion -> animaciones que la usan
+    for a in range(n):
+        flags, var, nf, off = struct.unpack_from(e + "4I", out, o + t + 16 * a)
+        per = 3 if flags & 0x10 else 2
+        for j in w if off else ():
+            pp = struct.unpack_from(e + "I", out, o + off + 4 * (per * j + 1))[0]
+            if pp:
+                users.setdefault(pp, set()).add(a)
+    done = {}
+    for code, (a, up) in fix.items():
+        flags, var, nf, off = struct.unpack_from(e + "4I", out, o + t + 16 * a)
+        per = 3 if flags & 0x10 else 2
+        for j in w if off else ():
+            pp = struct.unpack_from(e + "I", out, o + off + 4 * (per * j + 1))[0]
+            if not pp or users[pp] - {x for x, _ in fix.values()}:
+                continue                      # pista compartida con otra animacion (reposo...)
+            if pp in done:
+                continue
+            done[pp] = code
+            for q in range(struct.unpack_from(e + "I", out, o + pp + 8)[0]):
+                at = o + pp + 12 + 16 * q + 4
+                x, y, z = struct.unpack_from(e + "3f", out, at)
+                struct.pack_into(e + "3f", out, at, x, y - up, z)
+    return bytes(out), {c: round(fix[c][1], 2) for c in set(done.values())}
+
+
 ANKLES = ("LFOOT1", "RFOOT1")
 
 
@@ -224,6 +305,34 @@ def correccion(skel_dst, skel_src, idle):
     target = ankle(skel_src, idle) * s
     now = ankle(skel_dst, idle, (s, 0.0))
     return s, target - now
+
+
+def lift_waist(model, dy):
+    """#AMB PS2 (o #AMO suelto) con la cadera (WAIST) del esqueleto en bind subida dy: las
+    pistas de posicion se SUMAN al bind y los vertices van en el espacio de cada hueso, asi
+    que todo el cuerpo sube dy en cada animacion (SSJ4 adulto de Goku GT con los golpes de
+    nino: se hundia 3.4). None si no es un modelo PS2."""
+    out = bytearray(model)
+    amo = 0
+    if model[:4] == b"#AMB":
+        if not _is_ps2(model):
+            return None
+        n, t = struct.unpack("<II", model[0x10:0x18])
+        amo = next((o for o, s, _, _ in (struct.unpack_from("<4I", model, t + 16 * k) for k in range(n))
+                    if model[o:o + 4] == b"#AMO"), None)
+        if amo is None:
+            return None
+    elif model[:4] != b"#AMO":
+        return None
+    g = model.find(b"#AMG", amo)
+    nb, na = struct.unpack_from("<I", model, g + 0x10)[0], struct.unpack_from("<I", model, g + 0x1C)[0]
+    for i in range(nb):
+        nm = bytes(model[g + na + 32 * i:g + na + 32 * i + 32]).split(b"\0")[0].decode("latin1")
+        if suffix(nm) == "WAIST":
+            o = g + 0x20 + 80 * i + 20
+            struct.pack_into("<f", out, o, struct.unpack_from("<f", out, o)[0] + dy)
+            return bytes(out)
+    return None
 
 
 if __name__ == "__main__":

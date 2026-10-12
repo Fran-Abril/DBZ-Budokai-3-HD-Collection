@@ -461,6 +461,12 @@ def parse_sources(text):
     return out
 
 
+def preset_label(key):
+    """Nombre legible de un preset de presets_importar.toml (los nuevos, tal cual)."""
+    return {"original": T("Original (respeta el juego de origen)", "Original (faithful to the source)"),
+            "solo_modelos": T("Solo modelos (golpes del donante)", "Models only (donor moves)")}.get(key, key)
+
+
 def parse_entries(text):
     """Lineas 'personaje<TAB>clave<TAB>nombre<TAB>donante<TAB>clase<TAB>n<TAB>port<TAB>sugerido'."""
     out = []
@@ -603,6 +609,7 @@ CATS = [
     ("modelos", "Modelos y conversión", "Models & conversion"),
     ("moveset", "Moveset y habilidades", "Moveset & skills"),
     ("audio", "Voces y gritos", "Voices & yells"),
+    ("campanas", "Campañas de Dragon Universe", "Dragon Universe campaigns"),
     ("archivos", "AFS, ISO y archivos", "AFS, ISO & files"),
     ("validacion", "Validación", "Validation"),
     ("analisis", "Análisis / investigación (RE)", "Analysis / research (RE)"),
@@ -625,6 +632,17 @@ CURATED = {
                        "Changes a character's name banner on the select screen.", {"out": "mods"}),
     "portrait_hd.py": ("personajes", "Retrato del select de PS2 (B3/IW) → retrato HD.",
                        "PS2 select portrait (B3/IW) → HD portrait.", {"out": "mods"}),
+    "campana.py": ("campanas", "Campañas: textos nuevos (imágenes por idioma), rivales de los combates y "
+                   "escenas redirigidas de Dragon Universe. Historias propias: copia campanas/plantilla_historia.toml "
+                   "y usa «montar».",
+                   "Campaigns: new texts (images per language), battle rivals and redirected Dragon Universe "
+                   "scenes. Your own stories: copy campanas/plantilla_historia.toml and use 'montar'.", {"mods": "mods"}),
+    "editor_historias.py": ("campanas", "Editor visual de historias de Dragon Universe: capítulos, rivales, formas, "
+                            "trajes, premios, retratos y textos sin tocar archivos; monta el mod con un botón.",
+                            "Visual Dragon Universe story editor: chapters, rivals, forms, outfits, rewards, portraits "
+                            "and texts without editing files; builds the mod with one button.", {}),
+    "du_registro.py": ("campanas", "Saca del código del juego la tabla código de historia → escena (du_codigos.json).",
+                       "Extracts the story code → scene table from the game code (du_codigos.json).", {}),
     "capsulas.py": ("personajes", "Módulo de cápsulas (lo usa «roster_build capsulas»).",
                     "Capsule module (used by 'roster_build capsulas').", {}),
     "texture_b3.py": ("texturas", "Extrae las texturas de un personaje a PNG y reconstruye el mod con tus "
@@ -1461,7 +1479,7 @@ ICONS = {  # (Segoe MDL2 / Fluent, alternativa)
     "setup": ("\uE9D9", "⚙"), "mods": ("\uE8F1", "▤"), "importer": ("\uE896", "⇩"),
     "characters": ("\uE716", "☺"), "create": ("\uE8FA", "✚"), "textures": ("\uE790", "✎"),
     "swap": ("\uE8AB", "⇄"), "help": ("\uE897", "?"), "tools": ("\uE90F", "⚒"), "home": ("\uE80F", "⌂"),
-    "diag": ("\uE9D2", "♥"), "studio": ("\uE714", "◉"), "hex": ("\uE943", "#"),
+    "diag": ("\uE9D2", "♥"), "studio": ("\uE714", "◉"), "hex": ("\uE943", "#"), "stories": ("\uE8A5", "\u00B6"),
 }
 
 
@@ -2002,6 +2020,9 @@ PAGE_DEFS = [
     ("create", "Crear con mis modelos", "Create from my models",
      "Un personaje nuevo a partir de tus propios archivos de modelo.",
      "A new character from your own model files."),
+    ("stories", "Historias", "Stories",
+     "Crea tu campaña: capítulos con sus combates, rivales y retratos, y monta el mod.",
+     "Create your campaign: chapters with their fights, rivals and portraits, then build the mod."),
     ("textures", "Texturas", "Textures",
      "Saca las texturas de un personaje a PNG, edítalas y vuelve a montarlas.",
      "Export a character's textures to PNG, edit them and rebuild."),
@@ -2968,7 +2989,35 @@ class ImporterPage(Page):
         hint(g, T("El personaje del juego del que toma lo que le falte (agarres, modo hiper...).",
                   "The game character it takes whatever it lacks from (throws, hyper mode...)."),
              bg=C["card"]).grid(row=3, column=1, sticky="w")
-        r = 4
+        # preset de presets_importar.toml (respeta el juego de origen / solo el modelo) + opciones
+        label(g, T("Preset", "Preset"), bg=C["card"]).grid(row=4, column=0, sticky="w", padx=(0, 12), pady=4)
+        # la lista sale de presets_importar.toml (importar.py lista FUENTE): un preset nuevo aparece solo
+        self.preset_keys = ["original", "solo_modelos"]
+        self.preset = tk.StringVar(value=preset_label("original"))
+        self.preset_cb = ttk.Combobox(g, textvariable=self.preset, values=[preset_label(k) for k in self.preset_keys],
+                                      state="readonly", width=40)
+        self.preset_cb.grid(row=4, column=1, sticky="w", pady=4)
+        self.v_physics = tk.BooleanVar(value=False)
+        self.v_ground = tk.BooleanVar(value=True)
+        ttk.Checkbutton(g, text=T("Física del pelo y la ropa del donante", "Donor hair and cloth physics"),
+                        variable=self.v_physics).grid(row=5, column=1, sticky="w")
+        ttk.Checkbutton(g, text=T("Pies al suelo (ajustar la cadera)", "Feet on the ground (adjust hips)"),
+                        variable=self.v_ground).grid(row=6, column=1, sticky="w")
+        # golpes y voces: lo que diga el preset o cambiarlo aqui (--opcion golpes / voces de importar.py)
+        self.moves_opts = [(T("Golpes: los del preset", "Moves: as the preset says"), None),
+                           (T("Golpes: los del juego original", "Moves: the original game's"), "fuente"),
+                           (T("Golpes: los del personaje base", "Moves: the base character's"), "donante")]
+        self.voice_opts = [(T("Voces: las del preset", "Voices: as the preset says"), None),
+                           (T("Voces: las del juego original", "Voices: the original game's"), "fuente"),
+                           (T("Voces: las del personaje base", "Voices: the base character's"), "donante"),
+                           (T("Sin voces", "No voices"), "ninguna")]
+        self.moves_cb = ttk.Combobox(g, values=[x[0] for x in self.moves_opts], state="readonly", width=40)
+        self.moves_cb.current(0)
+        self.moves_cb.grid(row=7, column=1, sticky="w", pady=2)
+        self.voice_cb = ttk.Combobox(g, values=[x[0] for x in self.voice_opts], state="readonly", width=40)
+        self.voice_cb.current(0)
+        self.voice_cb.grid(row=8, column=1, sticky="w", pady=2)
+        r = 9
         if self.adv:
             self.slot = tk.StringVar()
             self.after_var = tk.StringVar()
@@ -3096,8 +3145,10 @@ class ImporterPage(Page):
 
         def done(job):
             lst = parse_entries(job.text)
+            pres = [ln.split("	")[1] for ln in job.text.splitlines() if ln.startswith("preset	")]
             if job.rc == 0:
                 self.app.cache.setdefault("entries", {})[key] = lst
+                self.app.cache.setdefault("presets", {})[key] = pres
             if self.alive and self.src == sid:
                 self.fill_entries()
                 if not lst:
@@ -3111,6 +3162,11 @@ class ImporterPage(Page):
         return "%s|%s" % (self.src, extra)
 
     def fill_entries(self):
+        pres = (self.app.cache.get("presets") or {}).get(self._entries_key()) or ["original"]
+        if pres != self.preset_keys:
+            self.preset_keys = pres
+            self.preset_cb.configure(values=[preset_label(k) for k in pres])
+            self.preset_cb.current(0)
         self.tree.delete(*self.tree.get_children())
         lst = (self.app.cache.get("entries") or {}).get(self._entries_key()) or []
         needle = self.search.get().lower().strip()
@@ -3166,7 +3222,16 @@ class ImporterPage(Page):
             self.set_status(self.c3_status, "warn", T("Escribe el nombre.", "Type the name."))
             return
         donor = donor_from_index(self.donor_cb.current(), True)
-        extra = []
+        i = max(0, self.preset_cb.current())
+        extra = ["--preset", self.preset_keys[i]] if i < len(self.preset_keys) else []
+        if self.v_physics.get():
+            extra += ["--opcion", "fisica=donante"]
+        if not self.v_ground.get():
+            extra += ["--opcion", "altura=false"]
+        for cb, opts, key in ((self.moves_cb, self.moves_opts, "golpes"), (self.voice_cb, self.voice_opts, "voces")):
+            v = opts[max(0, cb.current())][1]
+            if v:
+                extra += ["--opcion", "%s=%s" % (key, v)]
         mod = ""
         if self.adv:
             mod = self.mod.get().strip()
@@ -4638,6 +4703,13 @@ class ToolsPage(Page):
                    command=lambda: open_path(os.path.dirname(t.path))).pack(side="right")
         if t.desc:
             label(c.body, t.desc, bg=C["card"], wrap=820).pack(fill="x", pady=(6, 0))
+        if t.name == "editor_historias.py":     # editor con ventana propia: un boton, sin formulario
+            ttk.Button(c.body, text=T("Abrir el editor de historias", "Open the story editor"),
+                       style="Accent.TButton", command=self.app.open_story_editor).pack(anchor="w", pady=(12, 0))
+            hint(c.body, T("Se abre en su propia ventana, en el idioma del Mod Kit.",
+                           "It opens in its own window, in the Mod Kit's language."), bg=C["card"]).pack(
+                fill="x", pady=(6, 0))
+            return
         pe = ttk.Entry(c.body)
         pe.insert(0, t.path)
         pe.configure(state="readonly")
@@ -4806,6 +4878,45 @@ DOCS = [
     ("Inventario de herramientas", "Tools inventory", "Todas las herramientas del proyecto.",
      "Every tool in the project (technical list, Spanish only).", ["docs/04_herramientas/TOOLS.md"]),
 ]
+
+
+class StoriesPage(Page):
+    """Historias: el editor de historias (editor_historias.py) incrustado en el Mod Kit, sin ventana propia."""
+    key = "stories"
+
+    def build(self):
+        self.header(T("Historias", "Stories"),
+                    T("Crea tu campaña: capítulos con sus combates, rivales y retratos. Cuando esté lista, pulsa "
+                      "«Montar mod».",
+                      "Create your campaign: chapters with their fights, rivals and portraits. When it is ready, "
+                      "press 'Build mod'."))
+        ttk.Button(self.header_right, text=T("Ventana aparte", "Separate window"), style="Small.TButton",
+                   command=lambda: self.app.open_story_editor(self.editor.path if self.editor else None)).pack(
+            anchor="e")
+        sf = ScrollFrame(self)               # ventana baja: la página se desplaza (no se recorta)
+        sf.pack(fill="both", expand=True, padx=22, pady=(0, 10))
+        host = sf.inner
+        sf.canvas.bind("<Configure>", lambda e: sf.canvas.itemconfigure(
+            sf._win, height=max(e.height, host.winfo_reqheight())), add="+")
+        self.editor = None
+        try:
+            import editor_historias as ed
+            ed.LANG = LANG
+            self.editor = ed.App(host, None, embedded=True, runner=self._run,
+                                 log_fn=lambda msg: self.app.log_text(msg + "\n"))
+        except Exception:  # noqa: BLE001 - se avisa en la pantalla y el error va al registro
+            self.app.log_text(traceback.format_exc(), "err")
+            label(host, T("No se pudo abrir el editor aquí. Puedes usar «Ventana aparte» (arriba).",
+                          "The editor could not open here. You can use 'Separate window' (above)."),
+                  fg=C["warn"], wrap=760).pack(anchor="w", pady=20)
+
+    def focus_item(self, path=None, **_):
+        if path and self.editor is not None and self.editor.confirm_discard():
+            self.editor.open_path(path)
+
+    def _run(self, cmd, title):
+        """Montar / Probar: se ejecutan con el registro y la barra de tareas del Mod Kit."""
+        return self.app.run([self.env.python] + list(cmd[1:]), title, cwd=HERE)
 
 
 class HexPage(Page):
@@ -5259,11 +5370,13 @@ class StatusBar(tk.Frame):
 
 ADV_TABS = [("setup", "Entorno", "Environment"), ("mods", "Mods", "Mods"), ("importer", "Importar", "Import"),
             ("characters", "Personajes", "Characters"), ("create", "Crear", "Create"),
+            ("stories", "Historias", "Stories"),
             ("textures", "Texturas", "Textures"), ("swap", "Cambio de modelo", "Model swap"),
             ("tools", "Herramientas", "Tools"), ("hex", "Hex", "Hex"), ("diag", "Diagnóstico", "Diagnostics"),
             ("help", "Ayuda", "Help")]
 PAGE_CLASSES = {"home": HomePage, "setup": SetupPage, "mods": ModsPage, "importer": ImporterPage,
-                "characters": CharactersPage, "create": CreatePage, "textures": TexturesPage, "swap": SwapPage,
+                "characters": CharactersPage, "create": CreatePage, "stories": StoriesPage,
+                "textures": TexturesPage, "swap": SwapPage,
                 "tools": ToolsPage, "hex": HexPage, "diag": DiagPage, "help": HelpPage}
 
 
@@ -5433,6 +5546,19 @@ class App:
             self.log_text(T("Studio abierto (ventana aparte).\n", "Studio opened (separate window).\n"), "ok")
         except OSError as ex:
             self.info(T("No se pudo abrir el Studio: %s", "Could not open the Studio: %s") % ex)
+
+    def open_story_editor(self, path=None):
+        """Editor de historias (ventana propia), en el idioma del Mod Kit."""
+        cmd = [self.env.python, os.path.join(HERE, "editor_historias.py"), "--lang", LANG] + ([path] if path else [])
+        if self.selftest:
+            self.selftest_cmds.append(("editor", [str(c) for c in cmd]))
+            return
+        try:
+            subprocess.Popen([str(c) for c in cmd], cwd=self.env.cwd(), creationflags=NO_WINDOW)
+            self.log_text(T("Editor de historias abierto (ventana aparte).\n",
+                            "Story editor opened (separate window).\n"), "ok")
+        except OSError as ex:
+            self.info(T("No se pudo abrir el editor: %s", "Could not open the editor: %s") % ex)
 
     def goto(self, key, **kw):
         if key == "studio":
@@ -5635,6 +5761,13 @@ def selftest(lang=None):
                         app._tab_changed()
                         root.update_idletasks()
                 built.append("%s/%s:%d" % (lg, mode, len(app.pages)))
+                sp = app.pages.get("stories")          # Historias: el editor embebido debe existir y hablar el idioma
+                if sp is None or sp.editor is None:
+                    ok = False
+                    say("FAIL: Historias: el editor no se construye (%s/%s)" % (lg, mode))
+                elif sp.editor.nb.tab(0, "text") != ("1. Your story" if lg == "en" else "1. Tu historia"):
+                    ok = False
+                    say("FAIL: Historias: pestañas en otro idioma (%s/%s)" % (lg, mode))
         say("screens built: " + ", ".join(built))
         LANG = lang or "es"
         # diagnostico: un log sintetico con 30 FPS sostenidos en una version antigua

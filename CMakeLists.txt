@@ -28,6 +28,17 @@ set(DBZ3_SOURCES
     src/launcher/update_check.cpp
     src/ingame/menu.cpp
     src/ingame/quick_settings.cpp
+    src/ingame/game_style.cpp
+    src/ingame/native_ui.cpp
+    src/ingame/menu_pilot.cpp
+    src/ingame/online_panel.cpp
+    src/ingame/tagteam_panel.cpp
+    src/net/netplay.cpp
+    src/net/room.cpp
+    src/net/netplay_hooks.cpp
+    src/tagteam.cpp
+    src/tagteam_slots.cpp
+    src/campaigns.cpp
 )
 
 # Codegen output directory. Default is the US/NA build (generated/); a second
@@ -63,6 +74,7 @@ if(DBZ3_GENERATED_DIR STREQUAL "generated_eu" AND NOT DBZ3_DUAL_REGION)
     list(REMOVE_ITEM DBZ3_SOURCES src/hooks.cpp)
     list(REMOVE_ITEM DBZ3_SOURCES src/roster_trace.cpp)
     list(REMOVE_ITEM DBZ3_SOURCES src/roster_ext.cpp src/select_ext.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/net/netplay_hooks.cpp src/tagteam.cpp src/tagteam_slots.cpp src/campaigns.cpp)
 endif()
 
 if(WIN32)
@@ -100,7 +112,7 @@ target_link_libraries(dbz3 PRIVATE
 if(WIN32)
     # Launcher update check (GitHub releases over WinHTTP) and VERSIONINFO
     # reading (winver) for the running build.
-    target_link_libraries(dbz3 PRIVATE winhttp version)
+    target_link_libraries(dbz3 PRIVATE winhttp version ws2_32 ole32 oleaut32)   # ws2_32: online (src/net); ole32: UPnP del router
 endif()
 
 if(UNIX AND NOT APPLE)
@@ -129,6 +141,13 @@ if(EXISTS "${DBZ3_CONTROLLERDB}")
         COMMENT "Staging gamecontrollerdb.txt next to dbz3"
         VERBATIM)
 endif()
+
+# Recursos de las pantallas propias (TAG TEAM, ONLINE, fichas del Tag Team): tools/ingame_ui.py
+add_custom_command(TARGET dbz3 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/res/ingame_ui" "$<TARGET_FILE_DIR:dbz3>/ingame_ui"
+    COMMENT "Staging ingame_ui next to dbz3"
+    VERBATIM)
 
 # Codegen target - run 'cmake --build . --target dbz3_codegen'
 add_custom_target(dbz3_codegen

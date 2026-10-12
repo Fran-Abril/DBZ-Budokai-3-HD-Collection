@@ -38,8 +38,9 @@ IW_DIR = os.path.join(ROOT, "ps2_games", "Infinite World (USA)")
 def iw_source():
     """Infinite World en ps2_games: carpeta extraida o ISO, de cualquier region."""
     import glob  # noqa: PLC0415
-    hits = sorted(glob.glob(os.path.join(ROOT, "ps2_games", "*Infinite World*")),
-                  key=lambda p: not os.path.isdir(p))          # la carpeta primero
+    hits = sorted((p for p in glob.glob(os.path.join(ROOT, "ps2_games", "*"))
+                   if "infinite world" in os.path.basename(p).lower()),
+                  key=lambda p: not os.path.isdir(p))          # la carpeta primero (sin mayusculas: Linux)
     return next((p for p in hits if os.path.isdir(p) or p.lower().endswith(".iso")), IW_DIR)
 
 

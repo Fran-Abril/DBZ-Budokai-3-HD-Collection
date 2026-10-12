@@ -1,0 +1,21 @@
+# Ejemplo de campana (python campana.py montar campanas/ejemplo_freezer.toml).
+# Cambia la saga de Freezer de la historia de Goku (bloque 5500): textos nuevos, Freezer como
+# rival de los combates y una escena redirigida. Para ver que dice cada texto original:
+#   python campana.py escenas 5500      y      python campana.py ver 359
+
+[campana]
+nombre = "Ejemplo: la saga de Freezer"
+mod = "campana_ejemplo_freezer"
+
+[[texto]]
+entrada = 359
+estilo = "dialogo"
+en = ["You won't leave Namek alive, monkey.", "We'll see about that!"]
+es = ["No saldras vivo de Namek, mono.", "¡Eso ya lo veremos!"]
+
+[[combate]]
+bpl = 708
+rival = 27
+
+[codigos]
+5500 = 2138

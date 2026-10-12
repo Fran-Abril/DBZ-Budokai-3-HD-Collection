@@ -1,0 +1,75 @@
+# Presets de importacion (importar.py --preset NOMBRE [--opcion clave=valor ...]).
+#
+# Un preset dice de donde sale cada parte del personaje importado. "original" respeta el juego
+# de origen todo lo que el puerto sabe portar; "solo_modelos" deja el cuerpo nuevo con todo lo
+# demas del donante de Budokai 3. Cualquier opcion se cambia al crear el personaje (Kit,
+# launcher o --opcion), y despues en su personaje.toml.
+#
+# Opciones:
+#   golpes  = "fuente" | "donante"        moveset, camara, tecnicas y definitiva
+#   voces   = "fuente" | "donante" | "ninguna"
+#   fisica  = "auto" | "donante" | "ninguna"   pelo y colas con la fisica del donante
+#   altura  = true | false                pies al suelo (cadera ajustada a las piernas)
+#   pose_select = true | false            pose del select sacada de su moveset
+#   combos_tecnica = true | false         tecnicas al final de los combos, como el donante
+
+[b1.original]
+descripcion = "Budokai 1: golpes, combos, gritos y definitiva de B1 sobre el cuerpo del donante (B1 no tiene frases: solo sus gritos de combate)"
+golpes = "fuente"
+voces = "fuente"
+fisica = "auto"
+
+[b1.solo_modelos]
+descripcion = "Budokai 1: solo el modelo; golpes, tecnicas y voz del donante"
+golpes = "donante"
+voces = "donante"
+
+[b2.original]
+descripcion = "Budokai 2: modelos de B2 (sus golpes aun no se portan: los del donante)"
+golpes = "donante"
+voces = "donante"
+
+[iw.original]
+descripcion = "Infinite World: formas, golpes, tecnicas con su nombre, hiper, definitiva y voces de IW"
+golpes = "fuente"
+voces = "fuente"
+fisica = "auto"
+
+[iw.solo_modelos]
+descripcion = "Infinite World: solo los modelos y sus formas; golpes y tecnicas del donante"
+golpes = "donante"
+voces = "fuente"
+
+[sb1.original]
+descripcion = "Shin Budokai: formas, golpes, tecnicas que evolucionan, definitiva y voces de SB"
+golpes = "fuente"
+voces = "fuente"
+fisica = "donante"
+
+[sb1.solo_modelos]
+descripcion = "Shin Budokai: solo los modelos; golpes y tecnicas del donante"
+golpes = "donante"
+voces = "fuente"
+fisica = "donante"
+
+[sb2.original]
+descripcion = "Another Road: formas, golpes, tecnicas que evolucionan, definitiva y voces de SB2"
+golpes = "fuente"
+voces = "fuente"
+fisica = "donante"
+
+[sb2.solo_modelos]
+descripcion = "Another Road: solo los modelos; golpes y tecnicas del donante"
+golpes = "donante"
+voces = "fuente"
+fisica = "donante"
+
+[b3.original]
+descripcion = "Modelos de la comunidad (B3): golpes del port si lo trae, si no los del donante"
+golpes = "fuente"
+voces = "fuente"
+
+[sdbh.original]
+descripcion = "Dragon Ball Heroes: el modelo de SDBH sobre el cuerpo del donante (sus golpes no se portan)"
+golpes = "donante"
+voces = "donante"

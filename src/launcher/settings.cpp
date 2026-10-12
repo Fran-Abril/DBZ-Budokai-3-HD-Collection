@@ -11,6 +11,7 @@
 #include <toml++/toml.hpp>
 
 #include <filesystem>
+#include <utility>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -352,6 +353,12 @@ REXCVAR_DEFINE_STRING(dbz3_texture_dump, "", "DBZ3/Dev",
 REXCVAR_DEFINE_STRING(dbz3_texture_packs, "", "DBZ3/Dev",
                       "Active texture pack folders, ';'-separated (empty = off)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+// Live switch for the texture packs (F1 menu): off = original textures, no restart.
+// The GPU plugin reads it by name every frame.
+REXCVAR_DEFINE_BOOL(dbz3_texture_packs_on, true, "DBZ3/Video",
+                    "Use the installed HD texture packs (off = original textures)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(dbz3_gpu_backend, DBZ3_DEFAULT_GPU_BACKEND, "DBZ3/Video",
                       "Host graphics backend: d3d12 or vulkan")
@@ -798,7 +805,8 @@ std::filesystem::path FindIsoInDir(const std::filesystem::path& dir) {
   if (!std::filesystem::is_directory(dir, ec)) {
     return {};
   }
-  for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+  for (auto [it_1, iec_1] = std::pair{std::filesystem::directory_iterator(dir, ec), std::error_code{}}; !iec_1 && it_1 != std::filesystem::directory_iterator(); it_1.increment(iec_1)) {
+    const auto& entry = *it_1;
     if (!entry.is_regular_file()) continue;
     const auto ext = entry.path().extension().string();
     if (ext == ".iso" || ext == ".ISO" || ext == ".xiso" || ext == ".XISO") {
@@ -1181,7 +1189,8 @@ GameExecutable FindGameExecutable(const std::vector<std::filesystem::path>& root
     if (!std::filesystem::is_directory(dir, ec)) return false;
     ++visited_dirs;
     std::vector<std::filesystem::path> subdirs;
-    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    for (auto [it_2, iec_2] = std::pair{std::filesystem::directory_iterator(dir, ec), std::error_code{}}; !iec_2 && it_2 != std::filesystem::directory_iterator(); it_2.increment(iec_2)) {
+    const auto& entry = *it_2;
       if (entry.is_directory(ec)) {
         if (!SkipDir(entry.path())) subdirs.push_back(entry.path());
       } else if (entry.is_regular_file(ec)) {
@@ -1545,10 +1554,14 @@ std::filesystem::path LatestLogPath() {
   if (!std::filesystem::is_directory(logs_dir)) return {};
   std::filesystem::path newest;
   std::filesystem::file_time_type newest_time{};
-  for (const auto& entry : std::filesystem::directory_iterator(logs_dir)) {
-    if (!entry.is_regular_file()) continue;
+  std::error_code ec;
+  for (auto [it_3, iec_3] = std::pair{std::filesystem::directory_iterator(logs_dir, ec), std::error_code{}}; !iec_3 && it_3 != std::filesystem::directory_iterator(); it_3.increment(iec_3)) {
+    const auto& entry = *it_3;
+    std::error_code fec;
+    if (!entry.is_regular_file(fec)) continue;
     if (entry.path().extension() != ".log") continue;
-    const auto t = entry.last_write_time();
+    const auto t = entry.last_write_time(fec);
+    if (fec) continue;
     if (newest.empty() || t > newest_time) {
       newest = entry.path();
       newest_time = t;
@@ -1570,7 +1583,8 @@ static bool PreviousSessionLostGpu() {
   if (!std::filesystem::is_directory(logs_dir, ec)) return false;
   // La sesion actual ya ha creado su log (el mas reciente): mirar el anterior.
   std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> logs;
-  for (const auto& entry : std::filesystem::directory_iterator(logs_dir, ec)) {
+  for (auto [it_4, iec_4] = std::pair{std::filesystem::directory_iterator(logs_dir, ec), std::error_code{}}; !iec_4 && it_4 != std::filesystem::directory_iterator(); it_4.increment(iec_4)) {
+    const auto& entry = *it_4;
     if (entry.is_regular_file(ec) && entry.path().extension() == ".log") {
       logs.emplace_back(entry.last_write_time(ec), entry.path());
     }
@@ -2115,21 +2129,47 @@ bool LooksLikeTexturePackFile(const std::string& stem) {
   return pos < stem.size() && std::isdigit(static_cast<unsigned char>(stem[pos]));
 }
 
-bool IsTexturePackDir(const std::filesystem::path& dir) {
+// UTF-8 text of a path: path::string() throws on names outside the Windows code page.
+std::string PathUtf8(const std::filesystem::path& p) {
+  const std::u8string s = p.u8string();
+  return std::string(s.begin(), s.end());
+}
+
+// \\?\ path on Windows: a pack inside an already long game folder goes past 260
+// characters in its subfolders and the walk failed with "The system cannot find the
+// path specified" (user log 2026-10-09: HD pack + HD language pack).
+std::filesystem::path LongPath(const std::filesystem::path& p) {
+#ifdef _WIN32
   std::error_code ec;
+  std::filesystem::path full = std::filesystem::absolute(p, ec);
+  std::wstring w = full.lexically_normal().make_preferred().wstring();
+  if (ec || w.rfind(L"\\\\", 0) == 0) {
+    return p;
+  }
+  return std::filesystem::path(L"\\\\?\\" + w);
+#else
+  return p;
+#endif
+}
+
+bool IsTexturePackDir(const std::filesystem::path& plain_dir) {
+  std::error_code ec;
+  const std::filesystem::path dir = LongPath(plain_dir);
   // Recursivo: un pack puede ir ordenado en subcarpetas (personajes/, escenarios/...).
-  for (const auto& entry : std::filesystem::recursive_directory_iterator(
-           dir, std::filesystem::directory_options::skip_permission_denied, ec)) {
-    if (!entry.is_regular_file()) {
+  for (auto [it_5, iec_5] = std::pair{std::filesystem::recursive_directory_iterator(
+           dir, std::filesystem::directory_options::skip_permission_denied, ec), std::error_code{}}; !iec_5 && it_5 != std::filesystem::recursive_directory_iterator(); it_5.increment(iec_5)) {
+    const auto& entry = *it_5;
+    std::error_code fec;
+    if (!entry.is_regular_file(fec)) {
       continue;
     }
-    std::string ext = entry.path().extension().string();
+    std::string ext = PathUtf8(entry.path().extension());
     std::transform(ext.begin(), ext.end(), ext.begin(),
                    [](unsigned char c) { return char(std::tolower(c)); });
     if (ext != ".dds" && ext != ".png") {
       continue;
     }
-    if (LooksLikeTexturePackFile(entry.path().stem().string())) {
+    if (LooksLikeTexturePackFile(PathUtf8(entry.path().stem()))) {
       return true;
     }
   }
@@ -2153,15 +2193,21 @@ void RefreshTexturePacks() {
   std::vector<std::string> dirs;
   std::error_code ec;
   if (std::filesystem::is_directory(mods_root, ec)) {
-    for (const auto& mod_entry : std::filesystem::directory_iterator(mods_root, ec)) {
-      if (!mod_entry.is_directory()) {
+    for (auto [it_6, iec_6] = std::pair{std::filesystem::directory_iterator(mods_root, ec), std::error_code{}}; !iec_6 && it_6 != std::filesystem::directory_iterator(); it_6.increment(iec_6)) {
+    const auto& mod_entry = *it_6;
+      std::error_code fec;
+      if (!mod_entry.is_directory(fec)) {
         continue;
       }
-      if (std::filesystem::exists(mod_entry.path() / ".disabled")) {
+      if (std::filesystem::exists(mod_entry.path() / ".disabled", fec)) {
         continue;
       }
-      if (IsTexturePackDir(mod_entry.path())) {
-        dirs.push_back(mod_entry.path().string());
+      try {
+        if (IsTexturePackDir(mod_entry.path())) {
+          dirs.push_back(PathUtf8(mod_entry.path()));  // UTF-8: the GPU plugin reads it so
+        }
+      } catch (const std::exception& ex) {
+        REXLOG_WARN("dbz3: texture pack '{}' skipped: {}", PathUtf8(mod_entry.path()), ex.what());
       }
     }
   }
@@ -2176,7 +2222,7 @@ void RefreshTexturePacks() {
   // Set through the registry by name: the plugin's own storage is the ignored
   // duplicate, so a plain REXCVAR_SET here would not reach the plugin.
   rex::cvar::SetFlagByName("dbz3_texture_packs", list);
-  REXLOG_INFO("dbz3: texture packs detected in '{}': {} -> '{}'", mods_root.string(), dirs.size(),
+  REXLOG_INFO("dbz3: texture packs detected in '{}': {} -> '{}'", PathUtf8(mods_root), dirs.size(),
               list);
 }
 

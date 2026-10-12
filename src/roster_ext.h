@@ -6,6 +6,8 @@
 // roster_ext.cpp for the table map and the file format.
 #pragma once
 
+#include <string>
+
 #include <cstdint>
 
 namespace rex::memory {
@@ -35,6 +37,18 @@ int CostumeCountOf(uint32_t id);
 
 // Donor character ID declared for `id` (-1 if none).
 int DonorOf(uint32_t id);
+// Tag Team: miembros del equipo con ese ID (equipo = [...] en roster.toml); 0 si no es un equipo.
+int TeamSize(uint32_t id);
+// ID del miembro k del equipo (-1 si no hay).
+int TeamMember(uint32_t id, int k);
+// Nombre interno del ID (registro de char96: "GOKOU", "JANEMBA"...); vacio si no hay.
+std::string InternalName(uint32_t id);
+// Casilla nueva elegida por el jugador k (0 = 1P): el ID nuevo y el de su anfitrion. En
+// "1P VS COM" / Practica la lista del rival vuelve a escribir los IDs por casilla (sale
+// el anfitrion); el inicio del combate lo corrige. id < 0 = ninguna.
+void SetPickedCell(int player, int id, int host);
+int PickedCellFor(int player, int host);
+void ClearPickedCells();
 
 // New cell of the select wheel (roster.toml `celda = true`). It shares the saved
 // per-slot data (last costume) of the host slot `alias` (default: the donor's slot);

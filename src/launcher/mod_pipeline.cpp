@@ -298,6 +298,25 @@ std::string ModPipeline::Output() const {
   return output_;
 }
 
+float ModPipeline::Progress(std::string* what) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const size_t at = output_.rfind("@progreso ");
+  if (at == std::string::npos) {
+    return -1.0f;
+  }
+  const size_t eol = output_.find('\n', at);
+  const std::string line = output_.substr(at + 10, eol == std::string::npos ? std::string::npos : eol - at - 10);
+  int k = 0, n = 0, used = 0;
+  if (std::sscanf(line.c_str(), "%d/%d %n", &k, &n, &used) < 2 || n <= 0) {
+    return -1.0f;
+  }
+  if (what) {
+    *what = line.substr(size_t(used));
+    while (!what->empty() && (what->back() == '\r' || what->back() == ' ')) what->pop_back();
+  }
+  return std::clamp(float(k) / float(n), 0.0f, 1.0f);
+}
+
 void ModPipeline::SetAfsPath(const std::string& path) {
   std::lock_guard<std::mutex> lock(mutex_);
   afs_path_ = path;
@@ -657,12 +676,35 @@ void ModPipeline::ImportCharacter(const ImportRequest& r) {
     args.push_back("--donante");
     args.push_back(std::to_string(r.donor));
   }
+  if (!r.preset.empty()) {
+    args.push_back("--preset");
+    args.push_back(r.preset);
+  }
+  for (const auto& o : r.options) {
+    args.push_back("--opcion");
+    args.push_back(o);
+  }
   const std::string us = UsDir();
   if (!us.empty()) {
     args.push_back("--us");
     args.push_back(us);
   }
   RunAsync(ImporterScript(), args);
+}
+
+void ModPipeline::CreateTeam(const std::vector<int>& members, const std::string& name) {
+  std::vector<std::string> args = {"equipo", "--mods", ModsOutDir().string(), "--miembros"};
+  for (int m : members) args.push_back(std::to_string(m));
+  if (!name.empty()) {
+    args.push_back("--nombre");
+    args.push_back(name);
+  }
+  const std::string us = UsDir();
+  if (!us.empty()) {
+    args.push_back("--us");
+    args.push_back(us);
+  }
+  RunAsync(RosterScript(), args);
 }
 
 bool ModPipeline::RosterToolAvailable() {
@@ -701,7 +743,8 @@ bool ModPipeline::HasCharacterSources() {
   std::error_code ec;
   const auto dir = ModsOutDir();
   if (!std::filesystem::is_directory(dir, ec)) return false;
-  for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+  for (auto [it_1, iec_1] = std::pair{std::filesystem::directory_iterator(dir, ec), std::error_code{}}; !iec_1 && it_1 != std::filesystem::directory_iterator(); it_1.increment(iec_1)) {
+    const auto& e = *it_1;
     if (e.is_directory(ec) && std::filesystem::exists(e.path() / "personaje.toml", ec) &&
         !std::filesystem::exists(e.path() / ".disabled", ec)) {
       return true;

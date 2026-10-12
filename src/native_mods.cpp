@@ -87,7 +87,8 @@ bool ApplySave100(std::string& message) {
   std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm);
   const auto dest = BackupRoot() / stamp;
   bool any = false;
-  for (const auto& e : std::filesystem::directory_iterator(root, ec)) {
+  for (auto [it_1, iec_1] = std::pair{std::filesystem::directory_iterator(root, ec), std::error_code{}}; !iec_1 && it_1 != std::filesystem::directory_iterator(); it_1.increment(iec_1)) {
+    const auto& e = *it_1;
     const auto name = e.path().filename().string();
     if (!e.is_directory() || name.size() != 16) continue;
     std::filesystem::create_directories(dest, ec);
@@ -100,10 +101,10 @@ bool ApplySave100(std::string& message) {
   }
   // 2. Install into each existing profile (or the default one).
   std::vector<std::filesystem::path> profiles;
-  for (const auto& e : std::filesystem::directory_iterator(root, ec))
+  for (auto [it_2, iec_2] = std::pair{std::filesystem::directory_iterator(root, ec), std::error_code{}}; !iec_2 && it_2 != std::filesystem::directory_iterator(); it_2.increment(iec_2)) { const auto& e = *it_2;
     if (e.is_directory() && e.path().filename().string().size() == 16 &&
         std::filesystem::is_directory(e.path() / kTitle))
-      profiles.push_back(e.path());
+      profiles.push_back(e.path()); }
   if (profiles.empty()) profiles.push_back(root / kProfile);
   for (const auto& p : profiles) {
     if (!CopyAtomic(TemplateDir() / "data.bin", p / kTitle / "00000001" / "DBZ3" / "data.bin", ec) ||
@@ -123,14 +124,15 @@ bool ApplySave100(std::string& message) {
 bool RestoreLastSaveBackup(std::string& message) {
   std::error_code ec;
   std::filesystem::path last;
-  for (const auto& e : std::filesystem::directory_iterator(BackupRoot(), ec))
-    if (e.is_directory() && (last.empty() || e.path().filename() > last.filename())) last = e.path();
+  for (auto [it_3, iec_3] = std::pair{std::filesystem::directory_iterator(BackupRoot(), ec), std::error_code{}}; !iec_3 && it_3 != std::filesystem::directory_iterator(); it_3.increment(iec_3)) { const auto& e = *it_3;
+    if (e.is_directory() && (last.empty() || e.path().filename() > last.filename())) last = e.path(); }
   if (last.empty()) {
     message = i18n::T("No hay ninguna copia de partida que restaurar.", "There is no save backup to restore.");
     return false;
   }
   const auto root = settings::UserDataRoot();
-  for (const auto& e : std::filesystem::directory_iterator(last, ec)) {
+  for (auto [it_4, iec_4] = std::pair{std::filesystem::directory_iterator(last, ec), std::error_code{}}; !iec_4 && it_4 != std::filesystem::directory_iterator(); it_4.increment(iec_4)) {
+    const auto& e = *it_4;
     std::filesystem::copy(e.path(), root / e.path().filename(),
                           std::filesystem::copy_options::recursive |
                               std::filesystem::copy_options::overwrite_existing, ec);

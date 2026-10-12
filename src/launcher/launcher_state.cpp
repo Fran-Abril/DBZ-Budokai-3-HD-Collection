@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1383,10 +1384,28 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
                                     "Game data missing: see the notice above."));
   }
   if (launching_) {
-    ImGui::GetWindowDrawList()->AddText(ImVec2(play_min.x, play_min.y - ImGui::GetTextLineHeight() - 4.0f),
-                                        ImGui::GetColorU32(kGold),
-                                        i18n::T("Preparando los personajes nuevos, un momento...",
-                                                "Preparing the new characters, one moment..."));
+    // Barra de carga sobre JUGAR: roster_build dice que personaje esta montando
+    // ("@progreso k/n nombre"); hasta la primera linea, la barra va y viene.
+    std::string what;
+    const float frac = mod_pipeline_.Progress(&what);
+    std::string text = i18n::T("Preparando los personajes nuevos, un momento...",
+                               "Preparing the new characters, one moment...");
+    if (frac >= 0.0f && !what.empty()) text += "  (" + what + ")";
+    const float line_h = ImGui::GetTextLineHeight();
+    const ImVec2 bar_min(play_min.x, play_min.y - 10.0f);
+    const ImVec2 bar_max(play_min.x + 320.0f, play_min.y - 4.0f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddText(ImVec2(play_min.x, bar_min.y - line_h - 4.0f), ImGui::GetColorU32(kGold), text.c_str());
+    dl->AddRectFilled(bar_min, bar_max, IM_COL32(255, 255, 255, 40), 3.0f);
+    if (frac >= 0.0f) {
+      dl->AddRectFilled(bar_min, ImVec2(bar_min.x + 320.0f * std::max(frac, 0.03f), bar_max.y),
+                        ImGui::GetColorU32(kGold), 3.0f);
+    } else {
+      const float t = float(std::fmod(ImGui::GetTime() * 0.6, 1.0));
+      const float x0 = bar_min.x + 320.0f * std::max(0.0f, t - 0.25f);
+      const float x1 = bar_min.x + 320.0f * std::min(1.0f, t + 0.05f);
+      dl->AddRectFilled(ImVec2(x0, bar_min.y), ImVec2(x1, bar_max.y), ImGui::GetColorU32(kGold), 3.0f);
+    }
   }
   bool launch_now = false;
   // Enter juega, salvo mientras se escribe en un campo de texto (buscador, nombre...).
@@ -3277,6 +3296,7 @@ void LiveBanner(const char* name) {
 }  // namespace
 
 void SetPreviewDrawer(rex::ui::ImmediateDrawer* drawer) { g_preview_drawer = drawer; }
+rex::ui::ImmediateDrawer* PreviewDrawer() { return g_preview_drawer; }
 
 
 namespace {
@@ -3289,6 +3309,9 @@ rex::input::InputSystem* LauncherInput() {
 }  // namespace
 
 void SetUiDefer(std::function<void(std::function<void()>)> defer) { g_ui_defer = std::move(defer); }
+void DeferUi(std::function<void()> fn) {
+  if (g_ui_defer) g_ui_defer(std::move(fn));
+}
 
 LauncherDialog::~LauncherDialog() { SetInGame(false); }
 
@@ -3953,7 +3976,11 @@ void LauncherDialog::ParseImporterOutput() {
   const int what = imp_pending_;
   imp_pending_ = 0;
   if (what == 1) imp_sources_.clear();
-  if (what == 2) imp_entries_.clear();
+  if (what == 2) {
+    imp_entries_.clear();
+    imp_presets_.clear();
+    imp_preset_ = 0;
+  }
   std::istringstream in(out);
   std::string line;
   std::string last;
@@ -3972,6 +3999,8 @@ void LauncherDialog::ParseImporterOutput() {
       e.port = cols[6] == "1";
       e.suggested = cols[7];
       imp_entries_.push_back(e);
+    } else if (what == 2 && cols.size() >= 3 && cols[0] == "preset") {
+      imp_presets_.emplace_back(cols[1], cols[2]);
     } else if (!line.empty()) {
       last = line;
     }
@@ -4191,6 +4220,36 @@ void LauncherDialog::DrawImporter() {
         ImGui::EndCombo();
       }
     }
+    // Preset de presets_importar.toml: respeta el juego de origen o solo el modelo; las
+    // opciones sueltas se cambian aqui y despues en su personaje.toml.
+    // La lista sale del propio presets_importar.toml (importar.py lista): un preset nuevo aparece solo.
+    ui::RowLabel(i18n::T("Preset", "Preset"),
+                 i18n::T("Original: golpes, tecnicas, formas y voces del juego de origen. Solo modelos: el "
+                         "cuerpo nuevo con todo lo demas del donante.",
+                         "Original: moves, skills, forms and voices from the source game. Models only: the "
+                         "new body with everything else from the donor."));
+    {
+      auto label = [](const std::string& n) -> std::string {
+        if (n == "original") return i18n::T("Original (respeta el juego de origen)", "Original (faithful to the source)");
+        if (n == "solo_modelos") return i18n::T("Solo modelos (golpes del donante)", "Models only (donor moves)");
+        return n;
+      };
+      imp_preset_ = std::clamp(imp_preset_, 0, std::max(0, int(imp_presets_.size()) - 1));
+      const std::string cur = imp_presets_.empty() ? label("original") : label(imp_presets_[size_t(imp_preset_)].first);
+      if (ImGui::BeginCombo("##imp_preset", cur.c_str())) {
+        for (int i = 0; i < int(imp_presets_.size()); ++i) {
+          if (ImGui::Selectable(label(imp_presets_[size_t(i)].first).c_str(), imp_preset_ == i)) imp_preset_ = i;
+          if (ImGui::IsItemHovered() && !imp_presets_[size_t(i)].second.empty()) {
+            ImGui::SetTooltip("%s", imp_presets_[size_t(i)].second.c_str());
+          }
+        }
+        ImGui::EndCombo();
+      }
+      ImGui::Checkbox(i18n::T("Fisica del pelo y la ropa del donante", "Donor hair and cloth physics"),
+                      &imp_physics_);
+      ImGui::Checkbox(i18n::T("Pies al suelo (ajustar la cadera)", "Feet on the ground (adjust hips)"),
+                      &imp_ground_);
+    }
     ImGui::Dummy(ImVec2(0, 4));
     const bool busy = mod_pipeline_.IsRunning();
     ImGui::BeginDisabled(busy || imp_name_[0] == '\0');
@@ -4212,6 +4271,9 @@ void LauncherDialog::DrawImporter() {
       r.mod = unique;
       r.name = imp_name_;
       r.donor = imp_donor_idx_ >= 0 ? kDonors[imp_donor_idx_].id : -1;
+      if (!imp_presets_.empty()) r.preset = imp_presets_[size_t(imp_preset_)].first;   // vacio: el primero
+      if (imp_physics_) r.options.push_back("fisica=donante");
+      if (!imp_ground_) r.options.push_back("altura=false");
       imp_pending_ = 3;
       imp_message_.clear();
       mod_pipeline_.ImportCharacter(r);
@@ -4335,7 +4397,8 @@ void LauncherDialog::DrawNewCharactersTab() {
     char_sources_.clear();
     std::error_code ec;
     const auto dir = ModPipeline::ModsDir();
-    for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+    for (auto [it_1, iec_1] = std::pair{std::filesystem::directory_iterator(dir, ec), std::error_code{}}; !iec_1 && it_1 != std::filesystem::directory_iterator(); it_1.increment(iec_1)) {
+    const auto& e = *it_1;
       const auto toml = e.path() / "personaje.toml";
       if (!e.is_directory(ec) || !std::filesystem::exists(toml, ec)) continue;
       const std::string text = ReadSmallFile(toml);
@@ -4765,8 +4828,8 @@ void LauncherDialog::DrawTexturesTab() {
     // check and here (or be unreadable); a thrown filesystem_error out of
     // OnDraw would take the launcher down.
     std::error_code dir_ec;
-    for (const auto& e :
-         std::filesystem::directory_iterator(active_tex_dir, dir_ec)) {
+    for (auto [it_2, iec_2] = std::pair{std::filesystem::directory_iterator(active_tex_dir, dir_ec), std::error_code{}}; !iec_2 && it_2 != std::filesystem::directory_iterator(); it_2.increment(iec_2)) {
+    const auto& e = *it_2;
       if (dir_ec) break;
       std::error_code fec;
       if (e.is_regular_file(fec) && !fec &&

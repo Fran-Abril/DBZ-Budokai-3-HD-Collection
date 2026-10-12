@@ -1,0 +1,332 @@
+# La historia de Freezer en Dragon Universe. El juego ya traia su casilla (22) con la
+# introduccion de Namek ("El malvado Freezer...") y 14 combates de Freezer sin usar
+# (data_cmn 654-667: Vegeta, Piccolo, Goku, Krilin, Gohan, Trunks), pero se quedo fuera de la
+# rueda y sin escenas. Este mod la completa: la casilla en la rueda, el paso de la introduccion
+# a la historia, dos sagas (Namek y la Tierra) con 12 combates y sus dialogos, y un final propio.
+# Montar: python campana.py montar campanas/historia_freezer.toml
+[campana]
+nombre = "Historia de Freezer (Dragon Universe)"
+mod = "historia_freezer"
+descripcion = "Recupera la historia de Freezer que se quedo fuera del juego: elige a Freezer en Dragon Universe."
+
+[rueda]
+personajes = [27]
+
+# La introduccion de Namek de Freezer (codigo 102, entrada 22) no preparaba el mapa: se rehace con
+# la de Goku en Namek (entrada 0: posicion de salida, Bolas de Dragon y objetos del mapa, con la
+# nave de Freezer visible) y la marca del primer combate (como la introduccion de Goku).
+[[escena]]
+contenedor = 1725
+entrada = 22
+cabecera = [9, 3, 4, 2, 0, 0, 2779]
+cambiar = [
+  [10, 0, 4520], [10, 1, 66197], [10, 2, 66197], [13, 0, 135269],
+  [11, 0, 1414], [12, 0, 1415], [11, 1, 1414], [12, 1, 1415],
+  [14, 1, 132303], [14, 2, 132304], [14, 3, 132305],
+  [22, 0, 0],
+  [44, 0, 4918, -4416, 600], [54, 0, 0],   # salida apartada de la marca (como las del juego)
+  [24, 6, "2100.0", 2688, 9, -6214, 15, 5477, 1000], [35, 0, "2100.0", 479],
+  [24, 7, "2100.1", 2688, 9, -3010, 15, -4781, 1000], [35, 1, "2100.1", 492],
+  [24, 8, "2100.2", 2688, 9, -537, 15, 2474, 1000], [35, 2, "2100.2", 479],
+  [24, 9, "2100.8", 2688, 9, 6907, 15, 3096, 1000], [35, 3, "2100.8", 479],
+  [24, 10, "2100.3", 176, 9, 4799, 15, -6998, 1000],
+  [24, 11, "2100.4", 176, 9, -5788, 25, -2764, 1000],
+  [24, 12, "2100.6", 2688, 9, 4577, 15, -2237, 1000],
+  [29, 0, "SAITYOU", 1], [29, 0, "SAITYOUHAKAI", 0], [29, 0, "VEGE", 0], [29, 0, "VEGEHAKAI", 1],
+  [29, 0, "NAIL", 1], [29, 0, "NAILHAKAI", 0], [29, 0, "COOL", 0], [29, 0, "COOLHAKAI", 0],
+  [29, 0, "COOLNASI", 1], [29, 0, "FSS", 1], [29, 0, "FSSGIN", 1], [29, 0, "FSSGINHAKAI", 0],
+  [29, 0, "GSS", 1], [29, 0, "BRUMA", 1], [29, 0, "BRUMAHAKAI", 0],
+  [24, 0, "5522.0", 1, 2, 4918, 67, -4916, 1000],
+  [20, 0, "5122.0"]]   # como el juego (102.0 -> 5100.0): a la llegada al mapa (escena 0 del mapa de la saga); sin ella Freezer salia a ras del agua
+
+# Imagen del anime en la introduccion (entrada libre de data_cmn; la escena de arriba la usa).
+[[imagen]]
+entrada = 4520
+archivo = "imagenes/dragon-ball-reveals-original-90s-freiza-artwork-from-rare-dbz-release-3-1.avif"
+
+# Como las historias del juego: cada combate con su dialogo antes y despues; el panel solo al
+# abrir y cerrar cada saga.
+[historia]
+codigo = 5122
+contenedor = 1820
+eventos_mapa = { codigos = [2100], retrato = 1463, desde = 4600 }   # "I found something!" con la cara de Freezer
+traje_mapa = 2                 # en el mapa de Namek Freezer va en su nave (traje 3 del juego: modelo 193)
+altura_mapa = 600            # altura a la que vuelas por el mapa al volver de un combate
+idioma = "en"                # de momento, todos los idiomas con el texto en ingles
+textos_desde = 3600          # entradas nuevas de data_usi (y de cada idioma), lejos de las del mod de personajes
+fondo = 1411                 # el panel verde de la introduccion de Freezer
+final = { contenedor = 1728, codigo = 1, entrada = 39, fondo = "villano" }   # entrada de final libre; fondo "villano" (Broly) o "heroe"
+combates = { codigo = 5522, contenedor = 2132, plantilla = 709 }   # plantilla: Goku en Namek (escenario de Namek)
+# dialogo en el escenario al empezar cada combate (rival a la izquierda, Freezer a la derecha)
+dialogos = { codigo = 5922, contenedor = 1659, textos_desde = 3620 }   # sus combates (bloque de combates de Freezer, de relleno)
+
+# El panel traia una etiqueta de pruebas en japones arriba ("23 Saga de Freezer..."): fuera.
+# Retratos de Freezer 2.a y 3.a forma (1464, 1465): el juego los tiene sin terminar (una textura de
+# las dos) y cuelgan el dialogo; se reparan con su propia imagen.
+[[retrato]]
+entrada = 1464
+reparar = true
+[[retrato]]
+entrada = 1465
+reparar = true
+# Mecha Freezer: la 1486 del juego es Metal Cooler; este es un retrato aportado (campanas/retratos/CREDITOS.txt)
+[[retrato]]
+entrada = 4501
+png = "retratos/mecha_freezer.png"
+escala = 0.85                     # mas pequeno y mas abajo (salia alto y grande)
+desplazamiento = [0, 40]
+
+[[panel_limpio]]
+cmn = 1411
+filas = 17
+
+[[capitulo]]
+llegada_es = ["Las Bolas de Dragón de Namek serán mías."]   # frase al llegar al mapa de la saga
+llegada_en = ["The Dragon Balls of Namek will be mine."]
+combate = 654
+rival = 7
+traje_rival = 3                   # Vegeta con la armadura de Namek
+premio = 96
+retratos = [1436, 1463]
+marca = [1, 2, 4918, 67, -4916, 1000]   # donde Goku pelea con Vegeta (zona 2)
+dialogo_es = ["Freezer... has venido en persona. No te daré las Bolas.",
+              "Vegeta, mi pequeño mono rebelde. Las has escondido, ¿verdad?",
+              "Pediré la vida eterna y acabaré contigo.",
+              "Qué ingenuo. Te recordaré a golpes quién manda aquí."]
+dialogo_en = ["Frieza... you came in person. You won't get the Dragon Balls.",
+              "Vegeta, my little rebel monkey. You hid them, didn't you?",
+              "I'll wish for eternal life and finish you.",
+              "How naive. Let me beat into you who is in charge."]
+victoria_es = ["Maldito... seas...", "Ahora dime dónde están las Bolas de Dragón."]
+victoria_en = ["Curse... you...", "Now tell me where the Dragon Balls are."]
+
+[[capitulo]]
+combate = 655
+rival = 11
+premio = 97
+forma_jugador = 1
+retratos = [1449, 1464]
+marca = [1, 2, 5010, 20, -5399, 1000]
+dialogo_es = ["Freezer. Soy Piccolo, y Nail me ha dado su poder.",
+              "¿Un namekiano fusionado? Qué curioso.",
+              "Esta vez no te será tan fácil.",
+              "Entonces te mostraré mi segunda forma."]
+dialogo_en = ["Frieza. I am Piccolo, and Nail has given me his power.",
+              "A fused Namekian? How curious.",
+              "This time it won't be so easy for you.",
+              "Then I'll show you my second form."]
+victoria_es = ["Imposible... esta fuerza...", "Y aún me quedan más transformaciones."]
+victoria_en = ["Impossible... this power...", "And I still have more transformations."]
+
+[[capitulo]]
+combate = 656
+rival = 11
+premio = 98
+forma_jugador = 2
+retratos = [1449, 1465]
+marca = [1, 2, 5517, 39, -5053, 1000]
+dialogo_es = ["¿Otra transformación? No me asustas.",
+              "Esta forma te enseñará lo que es el verdadero terror."]
+dialogo_en = ["Another transformation? You don't scare me.",
+              "This form will teach you what true terror is."]
+victoria_es = ["No puedo... moverme...", "Arrodíllate ante el emperador del universo."]
+victoria_en = ["I can't... move...", "Kneel before the emperor of the universe."]
+
+[[capitulo]]
+combate = 657
+rival = 7
+traje_rival = 3                   # Vegeta con la armadura de Namek
+forma_jugador = 3
+retratos = [1436, 1466]
+marca = [1, 3, 6400, 40, 3800, 1000]
+dialogo_es = ["He vuelto de las puertas de la muerte. ¡Soy el Super Saiyan!",
+              "¿Tú, la leyenda? Mira bien mi forma final.",
+              "Tu poder... no me impresiona.",
+              "Ya veremos cuánto te dura esa sonrisa."]
+dialogo_en = ["I came back from death's door. I am the Super Saiyan!",
+              "You, the legend? Take a good look at my final form.",
+              "Your power... doesn't impress me.",
+              "We'll see how long that smile lasts."]
+victoria_es = ["Ka... Kakarot... véngame...", "El orgullo saiyan no vale nada ante mí."]
+victoria_en = ["Ka... Kakarot... avenge me...", "Saiyan pride is worthless before me."]
+
+[[capitulo]]
+combate = 658
+rival = 0
+premio = 100
+forma_jugador = 3
+retratos = [1416, 1466]
+marca = [1, 2, 4918, 67, -4916, 1000]
+dialogo_es = ["Freezer, has hecho sufrir a demasiada gente.",
+              "Otro saiyan... ¿Eres al que esperaba Vegeta?",
+              "Soy Goku, criado en la Tierra. Y voy a detenerte.",
+              "Un simple saiyan no puede asustarme."]
+dialogo_en = ["Frieza, you've made too many people suffer.",
+              "Another Saiyan... Are you the one Vegeta was waiting for?",
+              "I'm Goku, raised on Earth. And I'm going to stop you.",
+              "A mere Saiyan can't frighten me."]
+victoria_es = ["Todavía... no he terminado...", "Te queda poco, mono."]
+victoria_en = ["I'm... not finished yet...", "You don't have much left, monkey."]
+
+[[capitulo]]
+combate = 659
+rival = 10
+traje_rival = 2                   # Krilin con la armadura de Namek
+forma_jugador = 3
+retratos = [1447, 1466]
+marca = [1, 2, -4160, 130, -3202, 1000]
+dialogo_es = ["¡Aguanta, Goku! ¡Yo lo entretengo!",
+              "¿Un terrícola? Qué molestia.",
+              "¡Toma esto! ¡Disco destructor!",
+              "Desaparece de mi vista, insecto."]
+dialogo_en = ["Hang on, Goku! I'll hold him off!",
+              "An Earthling? How annoying.",
+              "Take this! Destructo Disc!",
+              "Get out of my sight, insect."]
+victoria_es = ["Goku... perdóname...", "Un insecto menos."]
+victoria_en = ["Goku... forgive me...", "One less insect."]
+
+[[capitulo]]
+combate = 660
+rival = 0
+premio = 101
+forma_jugador = 3
+retratos = [1416, 1466]
+marca = [1, 1, -2800, 11, 2650, 1000]
+dialogo_es = ["Se acabó, Freezer. La Genkidama te ha alcanzado.",
+              "¿Crees que una bola de luz basta para acabar conmigo?",
+              "¡¿Cómo has podido sobrevivir?!",
+              "Salir de ese lago me ha puesto de muy mal humor."]
+dialogo_en = ["It's over, Frieza. The Spirit Bomb hit you.",
+              "You think a ball of light is enough to finish me?",
+              "How could you survive that?!",
+              "Crawling out of that lake has put me in a terrible mood."]
+victoria_es = ["No... me quedan fuerzas...", "Nadie puede vencer a Freezer."]
+victoria_en = ["I have... no strength left...", "No one can defeat Frieza."]
+
+[[capitulo]]
+combate = 661
+rival = 2
+traje_rival = 1                   # Gohan con la armadura de Namek
+forma_jugador = 3
+retratos = [1425, 1466]
+marca = [1, 2, 5462, 54, -5448, 1000]
+dialogo_es = ["¡No te perdonaré lo que le has hecho a mi padre!",
+              "El hijo del saiyan... Tiene un poder oculto.",
+              "¡Te haré pagar por todo!",
+              "Un niño con rabia sigue siendo un niño."]
+dialogo_en = ["I'll never forgive what you did to my dad!",
+              "The Saiyan's son... He has a hidden power.",
+              "I'll make you pay for everything!",
+              "An angry child is still a child."]
+victoria_es = ["Papá...", "Tu padre no podrá salvarte."]
+victoria_en = ["Dad...", "Your father can't save you."]
+
+[[capitulo]]
+combate = 662
+rival = 10
+traje_rival = 2                   # Krilin con la armadura de Namek
+forma_jugador = 3
+retratos = [1447, 1466]
+marca = [1, 2, 5010, 20, -5399, 1000]
+dialogo_es = ["¡Goku, ayúdame!",
+              "Mira bien, saiyan. Esto es lo que les pasa a tus amigos."]
+dialogo_en = ["Goku, help me!",
+              "Watch closely, Saiyan. This is what happens to your friends."]
+victoria_es = ["¡Gokuuu!", "Ahora, saiyan, ¡enfádate de una vez!"]
+victoria_en = ["Gokuuu!", "Now, Saiyan, get angry already!"]
+
+[[capitulo]]
+combate = 663
+rival = 0
+premio = 102
+forma_jugador = 4                 # Freezer al 100%
+forma_rival = 2                   # Super Saiyan
+plantilla = 715                   # Namek a punto de explotar (escenario 14, el de Goku SSJ contra Freezer)
+retratos = [1417, 1466]
+marca = [1, 1, -2800, 11, 2650, 1000]
+dialogo_es = ["He nacido de la ira y la calma. ¡Soy Super Saiyan!",
+              "¡¿El Super Saiyan de la leyenda?! ¡Imposible!",
+              "Namek va a estallar, Freezer. Acabemos con esto.",
+              "¡No existe nadie más fuerte que yo!"]
+dialogo_en = ["I was born of rage and calm. I am a Super Saiyan!",
+              "The legendary Super Saiyan?! Impossible!",
+              "Namek is about to explode, Frieza. Let's end this.",
+              "There is no one stronger than me!"]
+victoria_es = ["Esto... no puede acabar así...", "¡Yo soy el más fuerte del universo!"]
+victoria_en = ["This... can't end like this...", "I am the strongest in the universe!"]
+
+# Saga nueva: al ganar el combate anterior, el cierre de Namek, "guardar?" y la Tierra.
+[[capitulo]]
+saga = true
+llegada_es = ["Ese mono de Goku pagará por lo de Namek."]
+llegada_en = ["That Saiyan monkey Goku will pay for Namek."]
+planeta = 0                       # 0 la Tierra, 1 Namek
+salida = [5700, 100, 1700]        # la de la saga de los androides de Goku
+objetos_mapa_de = "104.0"         # objetos del mapa de la Tierra de esa saga (sin ellos R1 cerraba el juego)
+combate = 664
+forma_jugador = 5                 # Mecha Freezer (forma 5 de Freezer)
+modelo_mapa = 5                   # en el mapa de la Tierra vuelas como Mecha Freezer
+traje_mapa = 0                    # (sin la nave)
+animacion_mapa = 0                # vuela de pie con el vuelo del mapa de la casilla de Goku (el de Freezer es sentado)
+rival = 8
+premio = 405
+forma_rival = 1                   # Super Saiyan
+retratos = [1443, 4501]
+marca = [1, 25, 3213, 48, -6083, 1500]   # la de Trunks en el juego (104.0, zona 25)
+plantilla = 717                   # un combate de Goku en la Tierra (saga de los androides)
+fondo_dialogo = 1549              # fondo de la charla de despues (la Tierra)
+cierre_imagen = "imagenes/frieza-dbz-feature-image.avif"   # Freezer en su forma final (el cierre habla de el y del Rey Cold)
+cierre_es = ["Namek estalla en mil pedazos.",
+             "Freezer escapa en el último segundo, destrozado.",
+             "Su padre, el Rey Cold, lo reconstruirá con piezas mecánicas."]
+cierre_en = ["Namek explodes into a thousand pieces.",
+             "Frieza escapes at the last second, torn apart.",
+             "His father, King Cold, will rebuild him with machine parts."]
+imagen = "imagenes/FriezaKingColdNV.webp"
+es = ["Mecha Freezer y el Rey Cold aterrizan en la Tierra.",
+      "Quieren vengarse de Goku destruyendo su planeta.",
+      "Pero un joven de pelo lila les está esperando..."]
+en = ["Mecha Frieza and King Cold land on Earth.",
+      "They want revenge on Goku by destroying his planet.",
+      "But a young man with lilac hair is waiting for them..."]
+dialogo_es = ["Te estaba esperando, Freezer.",
+              "¿Quién eres? ¿Otro mono saiyan?",
+              "Alguien que ha venido a acabar contigo.",
+              "¿Un niño con una espada? Qué gracioso."]
+dialogo_en = ["I've been waiting for you, Frieza.",
+              "Who are you? Another Saiyan monkey?",
+              "Someone who came to finish you.",
+              "A boy with a sword? How amusing."]
+victoria_es = ["Mi espada... no ha bastado...", "Ni el futuro puede detenerme."]
+victoria_en = ["My sword... wasn't enough...", "Not even the future can stop me."]
+
+[[capitulo]]
+combate = 666
+forma_jugador = 5                 # Mecha Freezer (forma 5 de Freezer)
+modelo_mapa = 5                   # en el mapa de la Tierra vuelas como Mecha Freezer
+traje_mapa = 0                    # (sin la nave)
+animacion_mapa = 0                # vuela de pie con el vuelo del mapa de la casilla de Goku (el de Freezer es sentado)
+rival = 0
+premio = 432
+forma_rival = 2                   # Super Saiyan
+retratos = [1417, 4501]
+marca = [1, 4, 1821, 20, 2954, 1500]   # zona 4 del mapa de la Tierra (104.0)
+plantilla = 717
+fondo_dialogo = 1549
+dialogo_es = ["Freezer... ¿todavía sigues vivo?",
+              "Gracias a ti tengo este cuerpo de máquina, Goku.",
+              "Esta vez no tendré piedad.",
+              "Esta vez, mono, no saldrás vivo."]
+dialogo_en = ["Frieza... you're still alive?",
+              "Thanks to you I have this machine body, Goku.",
+              "This time I won't show mercy.",
+              "This time, monkey, you won't make it out alive."]
+victoria_es = ["Freezer... eres un monstruo...", "Por fin. El último saiyan ha caído."]
+victoria_en = ["Frieza... you're a monster...", "At last. The last Saiyan has fallen."]
+
+[[capitulo]]
+es = ["El Super Saiyan ha caído. La Tierra y el universo son de Freezer.",
+      "Las Bolas de Dragón le darán por fin la vida eterna."]
+en = ["The Super Saiyan has fallen. Earth and the universe belong to Frieza.",
+      "The Dragon Balls will finally grant him eternal life."]

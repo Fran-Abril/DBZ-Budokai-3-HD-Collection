@@ -110,7 +110,7 @@ def find_game(game, root=None):
     import glob  # noqa: PLC0415
     import re  # noqa: PLC0415
     root = root or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ps2_games")
-    for p in sorted(glob.glob(os.path.join(root, "*.iso"))):
+    for p in sorted(p for p in glob.glob(os.path.join(root, "*")) if p.lower().endswith(".iso")):   # .ISO (Linux)
         low = os.path.basename(p).lower()
         if re.search(GAME_RE[game], low) and not (GAME_SKIP.get(game) and GAME_SKIP[game] in low):
             return p

@@ -136,6 +136,50 @@ def w(ccm, o, i):
     return struct.unpack(">H", ccm[o + 2 * i:o + 2 * i + 2])[0]
 
 
+FORM_MASK, FORM_ID = 0x1000, 0x0010     # w5: solo en las formas de la mascara w10 / en la forma w10
+
+
+def ccm_merge_forms(ccms):
+    """#CCM de un equipo (Tag Team): los golpes del miembro k solo en la forma k (su forma
+    normal); las suyas de otras formas quedan inalcanzables. Sin transformar (P+K+G): el relevo
+    es SELECT (src/tagteam.cpp), que no choca con ningun golpe.
+    Cabecera: +4 bloques, +0x1E inicios, inicios en +0x50; bloque 0x40 B + hijos (u32)."""
+    out_blocks, starters = [], []
+    for k, ccm in enumerate(ccms):
+        reach = ccm_blocks(ccm)
+        size = {o: 0x40 + 4 * w(ccm, o, 7) for o, _ in reach}
+        for o, st in reach:
+            b = bytearray(ccm[o:o + size[o]])
+            c1 = w(b, 0, COND)
+            if c1 & 0x0004:                       # transformar: fuera (el relevo es SELECT, runtime)
+                b[0:0x40] = bytes(0x40)           # inalcanzable (sin botones ni ramas)
+            elif c1 & FORM_ID:                    # golpe de una forma concreta: solo si es la normal
+                setw(b, 0, 10, k if w(b, 0, 10) == 0 else 7)
+            else:
+                mask = (w(b, 0, 10) & 1) if c1 & FORM_MASK else 1
+                setw(b, 0, COND, c1 | FORM_MASK)
+                setw(b, 0, 10, mask << k)
+            out_blocks.append((k, o, b))
+            if st:
+                starters.append((k, o))
+    hdr = bytearray(ccms[0][:0x50])
+    at = 0x50 + 4 * len(starters)
+    where = {}
+    for k, o, b in out_blocks:
+        where[(k, o)] = at
+        at += len(b)
+    body = bytearray()
+    for k, o, b in out_blocks:
+        for j in range(w(b, 0, 7)):              # hijos: offsets del #CCM nuevo
+            old = struct.unpack_from(">I", b, 0x40 + 4 * j)[0]
+            struct.pack_into(">I", b, 0x40 + 4 * j, where.get((k, old), 0))
+        body += b
+    struct.pack_into(">I", hdr, 4, len(out_blocks))
+    struct.pack_into(">H", hdr, 0x1E, len(starters))
+    table = b"".join(struct.pack(">I", where[s]) for s in starters)
+    return bytes(hdr + table + body)
+
+
 def setw(ccm, o, i, v):
     struct.pack_into(">H", ccm, o + 2 * i, v & 0xFFFF)
 
@@ -174,60 +218,254 @@ UNUSED_CAP = 595         # registro vacio del catalogo: nadie la lleva -> el gol
 KI = {}                  # capsula -> barras de ki (del BCM de IW), para el texto de la ficha
 
 
-def adapt_iw_bcm(ccm, special_ids, ultimate_ids):
-    """BCM de Infinite World -> mecanica de Budokai 3 (in place). special_ids: IDs de capsula
-    B3 para la 1a, 2a... capsula especial del BCM; ultimate_ids: para los definitivos.
-    Devuelve lineas de informe."""
-    rep = []
+# Infinite World (moveset original): las tecnicas NO llevan capsula en w8 (0) sino el ID de
+# habilidad de IW en w11 (3 niveles seguidos por tecnica; los ports de la comunidad ponen
+# capsulas de B3 en w8). Condicion 0x8000 = tecnica, +0x0008 = definitiva, 0x1000 = solo en
+# las formas de la mascara w10 (bit 0 = forma 1: el Kamehameha de Goku GT en normal/SSJ/SSJ3
+# y otra entrada con el x10 en SSJ4), 0x0010 = exige el ID de forma w10 (como B3). w4 = ranura
+# (1 = >E, 2 = <E; +0x10 = tras combo), w9 = ki x1000. Las cadenas (Super Dragon Fist) llevan
+# la capsula de B3 del golpe en sus hijos.
+IW_FORM_MASK = 0x1000
+HYPER_CODES = (0x258, 0x358)    # modo hiper de B3 (suelo, aire): los de todos los nativos
+FREE_CODES = 0x5C0              # golpes de IW que usaban esos codigos: se mueven aqui
+
+
+def iw_key(blk, o=0):
+    """Clave de la tecnica de IW de una entrada: su ID de habilidad (los ports de la comunidad
+    lo conservan) o, si no lo tiene, la capsula."""
+    return w(blk, o, 11) or w(blk, o, 8)
+
+
+def iw_skills(ccm):
+    """Tecnicas y definitivas de un BCM de IW, en orden de ID: [{clave, tipo, formas (mascara,
+    0 = todas), ki, variantes}] (las variantes por forma son la misma tecnica)."""
+    out = {}
+    for o, st in ccm_blocks(ccm):
+        c1 = w(ccm, o, COND)
+        if not (st and c1 & 0x8000) or w(ccm, o, TYPE) & 0x10:
+            continue
+        key = iw_key(ccm, o)
+        if not key:
+            continue
+        s = out.setdefault(key, {"clave": key, "tipo": "definitiva" if c1 & 0x0008 else "especial",
+                                 "formas": 0, "todas": False, "ki": 0, "variantes": set()})
+        m = w(ccm, o, 10) if c1 & IW_FORM_MASK else 0
+        s["todas"] |= not m
+        s["formas"] |= m
+        s["variantes"].add(m)
+        s["ki"] = max(s["ki"], (w(ccm, o, 9) + 500) // 1000)
+    for s in out.values():
+        s["formas"] = 0 if s.pop("todas") else s["formas"]
+        s["variantes"] = len(s["variantes"])
+    return sorted(out.values(), key=lambda s: (s["tipo"] != "especial", s["clave"]))
+
+
+def _lowbit(m):
+    return (m & -m).bit_length() if m else 99
+
+
+def adapt_iw_bcm(ccm, skill_caps, nforms=1):
+    """BCM de Infinite World -> mecanica de Budokai 3. skill_caps = {clave IW: capsula B3}.
+    -> (#CCM nuevo, injertos por forma {forma 0..: {codigo: codigo de la variante}}, informe).
+      - variantes por forma (0x1000): una sola entrada (la de la forma 1) y, en las formas de
+        las otras, su animacion en el mismo codigo (como los movesets por forma de B3)
+      - aura burst -> modo hiper (P+K+G+E / LT), transformarse (arriba+E) -> P+K+G
+      - tecnicas: una entrada por capsula en >E (en orden) y en <E (al reves): con dos
+        equipadas, cada direccion da una; las de 'tras combo' las pone add_combo_specials
+      - definitivas: P+K+G+E en modo hiper, cada una con su capsula"""
     KI.clear()
-    blocks = ccm_blocks(ccm)
-    iw_specials = []
-    for o, _ in blocks:
-        c1, cap = w(ccm, o, COND), w(ccm, o, 8)
-        if c1 & 0x8000 and cap and not c1 & 0x0008 and cap not in iw_specials:
-            iw_specials.append(cap)
-    for o, st in blocks:
-        c1, cap = w(ccm, o, COND), w(ccm, o, 8)
-        # aura burst de IW (boton B) -> activar el modo hiper de B3 (LT / L2)
-        if st and c1 & 0x4000 and w(ccm, o, 1) == 0x20:
-            setw(ccm, o, 0, 0)
-            setw(ccm, o, 1, 0x0F)
-            setw(ccm, o, COND, 0x0400)
-            setw(ccm, o, 6, 0x0001)
+    st, bl = ccm_parse(ccm)
+    nodes = {o: [bytearray(b), list(k)] for o, (b, k) in bl.items()}
+    rep, grafts = [], {}
+
+    def wn(k, i):
+        return w(nodes[k][0], 0, i)
+
+    def collapse(keys):
+        groups = {}
+        for k in keys:
+            c1 = wn(k, COND)
+            if c1 & IW_FORM_MASK:
+                g = (wn(k, 0), wn(k, 1), wn(k, TYPE), c1, iw_key(nodes[k][0]), wn(k, 6))
+                groups.setdefault(g, []).append(k)
+        drop = set()
+        for ks in groups.values():
+            ms = [wn(k, 10) or 0xFF for k in ks]
+            canon = next((k for k, m in zip(ks, ms) if m & 1), min(zip(ks, ms), key=lambda x: _lowbit(x[1]))[0])
+            cm = ms[ks.index(canon)]
+            for k, m in zip(ks, ms):
+                if k == canon:
+                    continue
+                pairs = [(canon, k)]
+                while pairs:        # el golpe y su cadena (hijos en el mismo orden)
+                    a, b = pairs.pop()
+                    for i in (12, 13, 14, 15):
+                        dc, sc = wn(a, i), wn(b, i)
+                        for f in range(nforms):
+                            if dc and sc and dc != sc and m >> f & 1 and not cm >> f & 1:
+                                prev = grafts.setdefault(f, {}).setdefault(dc, sc)
+                                if prev != sc:
+                                    rep.append("aviso: forma %d, codigo %#x con dos variantes" % (f + 1, dc))
+                    ka, kb = nodes[a][1], nodes[b][1]
+                    if len(ka) == len(kb):
+                        pairs += [(x, y) for x, y in zip(ka, kb) if x in nodes and y in nodes]
+                drop.add(k)
+            setw(nodes[canon][0], 0, COND, wn(canon, COND) & ~IW_FORM_MASK)
+            setw(nodes[canon][0], 0, 10, 0)
+        return [k for k in keys if k not in drop]
+
+    order, todo = [], list(st)
+    done = set()
+    while todo:                         # recorre todo el arbol una vez
+        k = todo.pop()
+        if k in done or k not in nodes:
+            continue
+        done.add(k)
+        nodes[k][1] = collapse(nodes[k][1])
+        todo += nodes[k][1]
+    st = collapse([o for o in st if o in nodes])
+    nvar = sum(len(v) for v in grafts.values())
+    if nvar:
+        rep.append("variantes por forma: %d codigos en %s" % (
+            nvar, ", ".join("forma %d" % (f + 1) for f in sorted(grafts))))
+    # requisito de ID de forma (0x0010 + w10): estados de IW que el port no tiene (Buu con
+    # alguien absorbido, fusiones, Majin): si el golpe tiene version sin requisito con los
+    # mismos botones, esa (la que IW usa fuera de ese estado); si no, vale siempre
+    def needs_id(k):
+        return wn(k, COND) & 0x0010 and wn(k, 10)
+
+    def drop_state_variants(keys):
+        plain = {(wn(k, 0), wn(k, 1), wn(k, TYPE), wn(k, 6)) for k in keys if not needs_id(k)}
+        out = [k for k in keys if not (needs_id(k) and (wn(k, 0), wn(k, 1), wn(k, TYPE), wn(k, 6)) in plain)]
+        return out, len(keys) - len(out)
+    ndrop = 0
+    for k in list(nodes):
+        nodes[k][1], n = drop_state_variants(nodes[k][1])
+        ndrop += n
+    st, n = drop_state_variants(st)
+    ndrop += n
+    nid = 0
+    for k in nodes:
+        if needs_id(k):
+            setw(nodes[k][0], 0, 10, 0)
+            nid += 1
+    if ndrop:
+        rep.append("%d golpes de estados de IW (absorcion, fusion...) con version normal: la normal" % ndrop)
+    if nid:
+        rep.append("%d golpes de estados de IW sin version normal: valen en todas las formas" % nid)
+
+    def convert_chain(k, cid, seen):
+        if k in seen or k not in nodes:
+            return
+        seen.add(k)
+        b = nodes[k][0]
+        setw(b, 0, COND, w(b, 0, COND) & ~(0x8000 | IW_FORM_MASK | 0x0001))
+        setw(b, 0, TYPE, 0)
+        setw(b, 0, 8, cid)
+        setw(b, 0, 9, 0)
+        setw(b, 0, 11, 0)
+        for ch in nodes[k][1]:
+            convert_chain(ch, cid, seen)
+
+    # golpes de IW en los codigos del modo hiper (Gohan nino, Buu...): a codigos libres; el
+    # injerto copia su animacion alli en todas las formas (grafts[-1] = {nuevo: viejo})
+    moved = {}
+    for k in nodes:
+        if w(nodes[k][0], 0, COND) & 0x4000 and w(nodes[k][0], 0, 1) == 0x20:
+            continue
+        for i in (12, 13, 14, 15):
+            c = wn(k, i)
+            if c in HYPER_CODES:
+                moved.setdefault(c, FREE_CODES + len(moved))
+                setw(nodes[k][0], 0, i, moved[c])
+    if moved:
+        grafts[-1] = {v: c for c, v in moved.items()}
+        rep.append("golpes en los codigos del modo hiper movidos: %s" % ", ".join(
+            "%#x->%#x" % x for x in sorted(moved.items())))
+    out, specials, first_sp = [], {}, None
+    for k in st:
+        b = nodes[k][0]
+        c1 = w(b, 0, COND)
+        if c1 & 0x4000 and w(b, 0, 1) == 0x20:          # aura burst -> modo hiper
+            setw(b, 0, 0, 0)
+            setw(b, 0, 1, 0x0F)
+            setw(b, 0, COND, 0x0400)
+            setw(b, 0, 6, 0x0001)
+            setw(b, 0, 9, 0)
+            # en los codigos del modo hiper de B3 (0x258/0x358, como los nativos); la animacion
+            # que pone su bloque (injertado del donante) sera la del aura burst (grafts[-2])
+            grafts[-2] = {HYPER_CODES[0]: w(b, 0, 12), HYPER_CODES[1]: w(b, 0, 13)}
+            for i, v in zip((12, 13, 14, 15), HYPER_CODES + (HYPER_CODES[1], 0)):
+                setw(b, 0, i, v)
             rep.append("modo hiper: entrada de 'aura burst' de IW convertida (LT/L2)")
-            continue
-        # definitivo (^E en IW, sin capsula) -> P+K+G+E en modo hiper con su capsula
-        if c1 & 0x0008 and c1 & 0x8000:
-            k = len([1 for r in rep if r.startswith("definitivo")])
-            cid = ultimate_ids[min(k, len(ultimate_ids) - 1)] if ultimate_ids else 0
-            setw(ccm, o, 0, 0)
-            setw(ccm, o, 1, 0x0F)
-            setw(ccm, o, COND, 0x000A)
-            setw(ccm, o, TYPE, 0)
-            setw(ccm, o, 6, 0x8001)
-            setw(ccm, o, 8, cid)
-            KI[cid] = max(KI.get(cid, 0), (w(ccm, o, 9) + 500) // 1000)
-            setw(ccm, o, 9, 0)
-            setw(ccm, o, 11, 0)
-            rep.append("definitivo -> capsula %d" % cid)
-            continue
-        # especiales: en IW la direccion elige la ranura (1 = >E, 2 = <E) y cada capsula
-        # tiene entradas para las dos; en B3 cada capsula tiene su direccion fija.
-        if c1 & 0x8000 and cap in iw_specials:
-            k = iw_specials.index(cap)
-            slot = w(ccm, o, TYPE) & 0x0F
-            cid = special_ids[k] if k < len(special_ids) else 0
-            setw(ccm, o, COND, (c1 & ~0x8001) | 0x0002)
-            setw(ccm, o, TYPE, 0)
-            setw(ccm, o, 11, 0)
-            setw(ccm, o, 8, cid if (slot == k + 1 or slot == 0) and cid else UNUSED_CAP)
+        elif c1 & 0x0004 and w(b, 0, 1) == 8 and w(b, 0, 0) & 0x30:   # arriba+E -> P+K+G
+            setw(b, 0, 0, 0)
+            setw(b, 0, 1, 0x07)
+            setw(b, 0, TYPE, 0)
+            setw(b, 0, 9, 0)
+            rep.append("transformarse: arriba+E de IW -> P+K+G (sus animaciones %#x/%#x)" % (
+                w(b, 0, 12), w(b, 0, 13)))
+        elif c1 & 0x8000 and c1 & 0x0008:                # definitiva
+            key = iw_key(b)
+            cid = skill_caps.get(key, 0)
+            for i, v in ((0, 0), (1, 0x0F), (COND, 0x000A), (TYPE, 0), (6, 0x8001), (8, cid),
+                         (9, 0), (10, 0), (11, 0)):
+                setw(b, 0, i, v)
             if cid:
-                KI[cid] = max(KI.get(cid, 0), (w(ccm, o, 9) + 500) // 1000)
-    for k, cap in enumerate(iw_specials):
-        rep.append("especial %d (IW %#x) -> capsula %s" % (k + 1, cap, special_ids[k] if k < len(special_ids) else "-"))
-    if hyper_first(ccm):
+                KI[cid] = max(KI.get(cid, 0), 4)
+            rep.append("definitiva (IW %d) -> capsula %s" % (key, cid or "ninguna: no saldra"))
+        elif c1 & 0x8000:                                 # tecnica
+            if first_sp is None:
+                first_sp = len(out)
+            key = iw_key(b)
+            if w(b, 0, TYPE) & 0x10 or key in specials:   # tras combo / la de la otra ranura
+                continue
+            specials[key] = k
+            continue
+        out.append(k)
+    sp_order = [key for key in skill_caps if key in specials] + [key for key in specials if key not in skill_caps]
+    new = []
+    for d, keys in ((1, sp_order), (2, sp_order[::-1])):
+        for key in keys:
+            k = specials[key]
+            cid = skill_caps.get(key, 0) or UNUSED_CAP
+            b = bytearray(nodes[k][0])
+            ki = (w(b, 0, 9) + 500) // 1000
+            setw(b, 0, 0, d)
+            setw(b, 0, COND, (w(b, 0, COND) & ~(0x8000 | IW_FORM_MASK | 0x0001)) | 0x0002)
+            for i, v in ((TYPE, 0), (6, 0x0001), (8, cid), (9, 0), (10, 0), (11, 0)):
+                setw(b, 0, i, v)
+            kids = nodes[k][1]
+            seen = set()
+            for ch in kids:
+                convert_chain(ch, cid, seen)
+            nk = ("iw", d, key)
+            nodes[nk] = [b, list(kids)]
+            new.append(nk)
+            if cid != UNUSED_CAP:
+                KI[cid] = max(KI.get(cid, 0), ki)
+    for key in sp_order:
+        rep.append("tecnica (IW %d) -> capsula %s" % (key, skill_caps.get(key) or "ninguna: no saldra"))
+    if first_sp is None:
+        first_sp = len(out)
+    out[first_sp:first_sp] = new
+    built = bytearray(ccm_build(ccm, out, nodes))
+    if hyper_first(built):
         rep.append("modo hiper: su entrada pasa delante de los definitivos (mismos botones)")
-    return rep
+    return bytes(built), grafts, rep
+
+
+def hyper_tail_from(ccm, donor_ccm):
+    """Copia en la entrada de modo hiper la 2a mitad (palabras 16-31) de la del donante: la
+    de IW (aura burst) traia w21 = 0x1e en vez de 0xff y el juego oscurecia el escenario sin
+    entrar en modo hiper (Goku GT, 2026-10-10). -> si cambio algo."""
+    def hyp(c):
+        return next((o for o, st in ccm_blocks(c) if st and w(c, o, COND) & 0x0400), None)
+    o, d = hyp(ccm), hyp(donor_ccm)
+    if o is None or d is None:
+        return False
+    ccm[o + 32:o + 64] = donor_ccm[d + 32:d + 64]
+    return True
 
 
 def hyper_first(ccm):
@@ -763,6 +1001,141 @@ def csk_graft(dst, dst_code, src, src_code):
     return bytes(out)
 
 
+def csk_block_at(csk, code):
+    """Offset del bloque de ataque `code` de un #CSK (None si no tiene)."""
+    n, lst = struct.unpack(">II", csk[0x10:0x18])
+    if code >= n:
+        return None
+    return struct.unpack_from(">I", csk, lst + 4 * code)[0] or None
+
+
+def csk_set_anim(csk, code, src_csk, src_code):
+    """El bloque `code` reproduce la animacion del bloque src_code (cabecera: u16 animacion,
+    u16 banco). El modo hiper injertado del donante pedia la animacion 9 de Goku: en el
+    moveset de IW es otra y el personaje se quedaba quieto con la pantalla oscura."""
+    o, so = csk_block_at(csk, code), csk_block_at(src_csk, src_code)
+    if o is None or so is None:
+        return False
+    csk[o:o + 4] = src_csk[so:so + 4]
+    return True
+
+
+def csk_ap_lines(csk, code):
+    """[(tipo AP, offset de la linea)] del bloque `code` (cada linea: u16 fotograma + datos)."""
+    o = csk_block_at(csk, code)
+    if o is None:
+        return []
+    nap, apo = struct.unpack_from(">II", csk, o + 0x28)
+    out = []
+    for a in range(nap):
+        t, nl, do = struct.unpack_from(">HHI", csk, apo + 8 * a)
+        out += [(t, do + 16 * i) for i in range(nl)]
+    return out
+
+
+# AP tipo 7 clase 4: efecto del banco que se carga por personaje (Cell/Cooler/Freeza 352-356,
+# Bardock/Tenshinhan 139-149...). Uno que el donante no carga deja un puntero nulo y el juego
+# se cierra al usar el golpe (Final Flash de Vegeta GT pedia 352 con el banco de Vegeta).
+AP7_FX_BANK = 4
+
+
+def csk_fx_values(csk):
+    """Valores de clase 4 (AP tipo 7) que usa un #CSK."""
+    out = set()
+    n, lst = struct.unpack(">II", csk[0x10:0x18])
+    for code in range(n):
+        for t, lo in csk_ap_lines(csk, code) if struct.unpack_from(">I", csk, lst + 4 * code)[0] else ():
+            if t == 7 and struct.unpack_from(">I", csk, lo + 4)[0] == AP7_FX_BANK:
+                out.add(struct.unpack_from(">I", csk, lo + 8)[0])
+    return out
+
+
+def csk_drop_fx(csk, allowed):
+    """Desactiva (fotograma 0xFFFF: nunca llega) los efectos de clase 4 fuera de `allowed`.
+    -> {valor: veces}."""
+    out = {}
+    n, lst = struct.unpack(">II", csk[0x10:0x18])
+    for code in range(n):
+        if not struct.unpack_from(">I", csk, lst + 4 * code)[0]:
+            continue
+        for t, lo in csk_ap_lines(csk, code):
+            if t == 7 and struct.unpack_from(">I", csk, lo + 4)[0] == AP7_FX_BANK:
+                v = struct.unpack_from(">I", csk, lo + 8)[0]
+                if v not in allowed and struct.unpack_from(">H", csk, lo)[0] != 0xFFFF:
+                    struct.pack_into(">H", csk, lo, 0xFFFF)
+                    out[v] = out.get(v, 0) + 1
+    return out
+
+
+def csk_remap_fx(csk, mapping):
+    """Cambia valores de clase 4 (AP tipo 7) segun `mapping` {viejo: nuevo}. -> veces."""
+    n_ = 0
+    n, lst = struct.unpack(">II", csk[0x10:0x18])
+    for code in range(n):
+        if not struct.unpack_from(">I", csk, lst + 4 * code)[0]:
+            continue
+        for t, lo in csk_ap_lines(csk, code):
+            if t == 7 and struct.unpack_from(">I", csk, lo + 4)[0] == AP7_FX_BANK:
+                v = struct.unpack_from(">I", csk, lo + 8)[0]
+                if v in mapping:
+                    struct.pack_into(">I", csk, lo + 8, mapping[v])
+                    n_ += 1
+    return n_
+
+
+# Rayos/bolas del BSP (#CST, 0xF0 por entrada, codigo u16 en +0x12): los codigos >= 300 van a
+# un banco por grupo de personajes (350/351 Goku/Vegeta/Buu, 352-356 Freeza/Cell/Cooler) que
+# solo se carga si el donante es del grupo; los < 300 se buscan en el propio BSP.
+FX_GROUP_BANK = 300
+
+
+def _bsp_cst(bsp):
+    n, t = struct.unpack_from(">II", bsp, 0x10)
+    o0 = struct.unpack_from(">I", bsp, t)[0]
+    n1, t1 = struct.unpack_from(">II", bsp, o0 + 0x10)
+    cst = o0 + struct.unpack_from(">I", bsp, o0 + t1)[0]
+    cnt, s0 = struct.unpack_from(">II", bsp, cst + 8)
+    return [cst + s0 + k * 0xF0 + 0x12 for k in range(cnt)]
+
+
+def bsp_fx_codes(bsp):
+    """Codigos de efecto de un BSP: rayos/bolas (#CST) y efectos (#CSE)."""
+    n, t = struct.unpack_from(">II", bsp, 0x10)
+    o1 = struct.unpack_from(">I", bsp, t + 16)[0]
+    n1, t1 = struct.unpack_from(">II", bsp, o1 + 0x10)
+    cse = o1 + struct.unpack_from(">I", bsp, o1 + t1)[0]
+    cnt, s1 = struct.unpack_from(">II", bsp, cse + 8)
+    return ({struct.unpack_from(">H", bsp, a)[0] for a in _bsp_cst(bsp)},
+            {struct.unpack_from(">H", bsp, cse + s1 + k * 0xD0 + 0x6A)[0] for k in range(cnt)})
+
+
+def bsp_rename_cst(bsp, mapping):
+    """Copia del BSP con los codigos de #CST cambiados segun `mapping` {viejo: nuevo}."""
+    out = bytearray(bsp)
+    for a in _bsp_cst(bsp):
+        v = struct.unpack_from(">H", out, a)[0]
+        if v in mapping:
+            struct.pack_into(">H", out, a, mapping[v])
+    return bytes(out)
+
+
+def csk_last_frame(csk, code):
+    """Ultimo fotograma con evento del bloque `code` (su duracion aproximada; 0 si no tiene)."""
+    return max((struct.unpack_from(">H", csk, lo)[0] for _, lo in csk_ap_lines(csk, code)), default=0)
+
+
+def csk_fit_frames(csk, code, length):
+    """Comprime los fotogramas de los eventos del bloque `code` para que el ultimo caiga en
+    `length` (si ya caben, no toca nada). -> si cambio algo."""
+    last = csk_last_frame(csk, code)
+    if not length or last <= length:
+        return False
+    for _, lo in csk_ap_lines(csk, code):
+        f = struct.unpack_from(">H", csk, lo)[0]
+        struct.pack_into(">H", csk, lo, f * length // last)
+    return True
+
+
 def hyper_codes(ccm):
     """Codigos de ataque (suelo, aire) de la entrada de modo hiper de un #CCM B3."""
     for o, st in ccm_blocks(ccm):
@@ -959,6 +1332,16 @@ def _selftest():
         t, nl, do = struct.unpack(">HHI", out[apo:apo + 8])
         assert (nap, t) == (2, 1) and csk_hr_block(out, struct.unpack(">I", out[do + 4:do + 8])[0]) == b"\x07" * 128
     assert csk_hr_block(out, 0) == b"\x01" * 128
+    # eventos del bloque hiper comprimidos a la duracion de la animacion propia (IW: 60 de 120)
+    ev = lambda f: struct.pack(">H", f) + bytes(14)
+    hb = bytearray(csk(0x300, {0x258: [(5, [ev(0), ev(120)]), (7, [ev(88), ev(100)])]}, [bytes(128)]))
+    assert csk_last_frame(hb, 0x258) == 120 and csk_fit_frames(hb, 0x258, 60)
+    assert [struct.unpack_from(">H", hb, lo)[0] for _, lo in csk_ap_lines(hb, 0x258)] == [0, 60, 44, 50]
+    assert not csk_fit_frames(hb, 0x258, 60)
+    fx = lambda f, v: struct.pack(">HHII", f, 2, AP7_FX_BANK, v) + bytes(4)
+    fb = bytearray(csk(0x300, {0x24A: [(7, [fx(3, 0x12C), fx(9, 0x160)])]}, [bytes(128)]))
+    assert csk_fx_values(fb) == {0x12C, 0x160} and csk_drop_fx(fb, {0x12C}) == {0x160: 1}
+    assert csk_fx_values(fb) == {0x12C, 0x160} and csk_drop_fx(fb, {0x12C}) == {}
     # ficha: P P E (combo) y ->E directo de la capsula 26, igual que las filas nativas
     p1, p2 = blk(0, 1, 0, 0, 0, 0, 1, 1), blk(0, 1, 0, 0, 0, 0, 1, 1)
     e1, fe = blk(0, 8, 0, 0, 0, 2, 1, 0, 26), blk(1, 8, 0, 0, 0, 2, 1, 0, 26)
@@ -977,6 +1360,39 @@ def _selftest():
     holes = hyper_check(hc, [anm(csk(0x400, {0x259: [(7, [bytes(16)])]}, [bytes(128)]))])
     assert len(holes) == 3 and "0x359 del modo hiper" in holes[0] and "definitivo" in holes[1], holes
     assert hyper_check(ccm_build(head, ["h"], {"h": [hyper, []]}), [anm(full)]) == ["sin definitiva en su BCM"]
+    # IW original (Goku GT): habilidad en w11, variante del SSJ4 por mascara, cadena con la
+    # capsula de B3 en los hijos, entradas de las dos ranuras y de 'tras combo'
+    aura = blk(0, 0x20, 0, 0, 0, 0x4000, 1, 0, 0, 0, 0, 0, 0x20, 0x120)
+    up = blk(0x20, 8, 0, 0, 0, 0x0004, 1, 0, 0, 0, 0, 0, 0x2E0, 0x3E0)
+    k1 = blk(1, 8, 0, 0, 1, 0x9001, 1, 0, 0, 1000, 7, 524, 0x24A, 0x34A)      # formas 1-3
+    k4 = blk(1, 8, 0, 0, 1, 0x9001, 1, 0, 0, 1000, 8, 524, 0x24D, 0x34D)      # SSJ4
+    k2 = blk(2, 8, 0, 0, 2, 0x9001, 1, 0, 0, 1000, 7, 524, 0x24A, 0x34A)
+    kc = blk(1, 8, 0, 0x7530, 0x11, 0x9001, 0x2000, 0, 0, 1000, 7, 524, 0x24A, 0x34A)
+    df = blk(2, 8, 0, 0, 2, 0x9001, 1, 1, 0, 2000, 0xE, 530, 0x26D, 0x36D)
+    dfk = blk(0, 8, 0x44, 0x4A, 2, 0x8800, 0, 0, 7, 0, 0, 530, 0x26E, 0x36E)
+    iu = blk(0x10, 8, 0, 0, 0, 0x8009, 1, 0, 0, 5000, 0, 917, 0x259, 0x359)
+    iw = ccm_build(head, list("auxyzcdi"), {"a": [aura, []], "u": [up, []], "x": [k1, []], "y": [k4, []],
+                                            "z": [k2, []], "c": [kc, []], "d": [df, ["e"]], "e": [dfk, []],
+                                            "i": [iu, []]})
+    sk = iw_skills(iw)
+    assert [(s["clave"], s["tipo"], s["formas"], s["ki"], s["variantes"]) for s in sk] == [
+        (524, "especial", 0xF, 1, 2), (530, "especial", 0xE, 2, 1), (917, "definitiva", 0, 5, 1)], sk
+    new, grafts, rep = adapt_iw_bcm(iw, {524: 600, 530: 601, 917: 602}, 4)
+    assert grafts == {3: {0x24A: 0x24D, 0x34A: 0x34D}, -2: {0x258: 0x20, 0x358: 0x120}}, grafts
+    st, bl = ccm_parse(new)
+    rows = [tuple(w(bl[o][0], 0, i) for i in (0, 1, COND, 8)) for o in st]
+    assert rows == [(0, 0xF, 0x400, 0), (0, 7, 0x0004, 0), (1, 8, 2, 600), (1, 8, 2, 601), (2, 8, 2, 601),
+                    (2, 8, 2, 600), (0, 0xF, 0x000A, 602)], rows
+    kid = bl[st[3]][1][0]
+    assert w(bl[kid][0], 0, 8) == 601 and w(bl[kid][0], 0, COND) == 0x0800
+    assert all(not w(bl[o][0], 0, i) for o in st for i in (9, 10, 11))
+    # golpe de un estado de IW (exige el ID de forma 78) con version normal: queda la normal
+    pn = blk(0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0x200, 0x300)
+    pb = blk(0, 1, 0, 0, 0, 0x0010, 1, 0, 0, 0, 78, 0, 0x2A0, 0x3A0)
+    solo = blk(0, 2, 0, 0, 0, 0x0010, 1, 0, 0, 0, 78, 0, 0x2A1, 0x3A1)
+    new, _, rep = adapt_iw_bcm(ccm_build(head, ["b", "n", "s"], {"b": [pb, []], "n": [pn, []], "s": [solo, []]}), {})
+    st, bl = ccm_parse(new)
+    assert [w(bl[o][0], 0, 12) for o in st] == [0x200, 0x2A1] and not w(bl[st[1]][0], 0, 10), rep
     print("capsulas.py: autocomprobacion OK")
 
 

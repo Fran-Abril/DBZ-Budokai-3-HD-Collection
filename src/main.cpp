@@ -54,6 +54,8 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #include "ingame/quick_settings.h"
 #include "launcher/i18n.h"
 #include "ingame/menu.h"
+#include "ingame/online_panel.h"
+#include "ingame/tagteam_panel.h"
 #include <rex/audio/sdl/sdl_audio_system.h>
 #include <rex/input/input_system.h>
 #include <rex/kernel/init.h>
@@ -73,10 +75,16 @@ REXCVAR_DECLARE(bool, dbz3_skip_launcher);
 // while the window is in the background) and with the audio driver through the
 // `dbz3_window_focused` cvar (which silences the mix while unfocused).
 std::atomic<bool> g_window_focused{true};
+namespace dbz3 {
+// Pantalla "juego en segundo plano" activa: las pantallas propias (TAG TEAM, ONLINE) no se dibujan
+// encima de ella.
+bool GameDimmed() { return dbz3::settings::DimUnfocused() && !g_window_focused.load(); }
+}  // namespace dbz3
 
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <utility>
 #include <thread>
 #include <exception>
 #include <cstdio>
@@ -415,6 +423,9 @@ public:
             }
             if (imgui_drawer_) {
                 rt->set_imgui_drawer(imgui_drawer_);
+                // panel ONLINE del Duelo: siempre creado, solo se dibuja al pedirlo (SELECT)
+                online_panel_ = std::make_unique<dbz3::ingame::OnlinePanel>(imgui_drawer_);
+                tagteam_panel_ = std::make_unique<dbz3::ingame::TagTeamPanel>(imgui_drawer_);
             } else {
             }
         } else {
@@ -551,7 +562,8 @@ public:
             const auto shareable = paths.cache_root / "shaders" / "shareable";
             if (std::filesystem::is_directory(shipped, ec)) {
                 std::filesystem::create_directories(shareable, ec);
-                for (const auto& f : std::filesystem::directory_iterator(shipped, ec)) {
+                for (auto [it_1, iec_1] = std::pair{std::filesystem::directory_iterator(shipped, ec), std::error_code{}}; !iec_1 && it_1 != std::filesystem::directory_iterator(); it_1.increment(iec_1)) {
+    const auto& f = *it_1;
                     const auto dst = shareable / f.path().filename();
                     if (f.is_regular_file(ec) && !std::filesystem::exists(dst, ec) &&
                         std::filesystem::copy_file(f.path(), dst, ec)) {
@@ -802,6 +814,8 @@ private:
     std::unique_ptr<DebugOverlayDialog> debug_overlay_;
     dbz3::launcher::LauncherDialog* launcher_dialog_ = nullptr;
     std::unique_ptr<dbz3::ingame::InGameMenu> ingame_menu_;
+    std::unique_ptr<dbz3::ingame::OnlinePanel> online_panel_;
+    std::unique_ptr<dbz3::ingame::TagTeamPanel> tagteam_panel_;
     std::atomic<bool> launched_{false};
     std::atomic<bool> shutting_down_{false};
     std::thread transition_thread_;

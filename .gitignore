@@ -108,3 +108,6 @@ Thumbs.db
 # Archivo local de artefactos de releases antiguas (zips viejos + release-stage
 # movidos aqui para despejar la raiz). Se conserva en disco, nunca se versiona.
 _archive/
+
+# arte oficial de las historias (no se publica)
+mod center hd/campanas/imagenes/

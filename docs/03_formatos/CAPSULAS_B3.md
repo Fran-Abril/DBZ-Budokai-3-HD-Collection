@@ -133,6 +133,30 @@ cápsula (0x8009). `capsulas.adapt_iw_bcm()`:
    → P+K+G+E en modo hiper (0x000A) con su cápsula. El coste de ki de IW se conserva para el
    texto de la ficha.
 
+**Moveset ORIGINAL de IW (2026-10-10, pasarela completa).** El BCM original no lleva la
+cápsula en w8 (0) sino el **ID de habilidad de IW en w11** (3 niveles seguidos por técnica:
+Goku GT 524 Kamehameha, 527 Ki Blast Cannon, 530 Super Dragon Fist, 914/917 definitivas); los
+ports de la comunidad conservan w11 y ponen una cápsula de B3 en w8. Otras claves de IW:
+condición **0x1000** = solo en las formas de la máscara **w10** (bit 0 = forma 1; Goku GT
+lleva el Kamehameha en normal/SSJ/SSJ3 y otra entrada con el x10 en SSJ4), **0x0010** = exige
+el ID de forma w10 (como B3), w4 = ranura (1 = →E, 2 = ←E; +0x10 = tras combo, w6 0x2000),
+w9 = ki ×1000, transformarse = arriba+E (w0 0x20, condición 0x0004, códigos 0x2E0/0x3E0 como
+B3). `adapt_iw_bcm(ccm, {clave: cápsula}, formas)` ahora:
+- **una cápsula por técnica** (clave = w11, o w8 si no hay): entradas en →E en orden y en ←E
+  al revés (con dos equipadas, cada dirección da una; con tres, la del medio solo si falta
+  otra); las de «tras combo» se quitan (las pone `add_combo_specials` como en B3); en las
+  cadenas (Super Dragon Fist) los hijos llevan la misma cápsula;
+- **variantes por forma** (0x1000): queda la entrada de la forma 1 y, en el moveset de las
+  formas de las otras, su animación en el mismo código (`roster_build.form_variants`:
+  `csk_graft` en una copia del anm de esa forma) — el mecanismo de B3; la máscara de la
+  técnica va a la cápsula (`formas`, +14 del registro), como el Kamehameha x10 nativo;
+- definitivas: cada una con su cápsula; arriba+E → P+K+G (su propia animación de IW);
+- el estado 0x0100 de IW (golpes tras el «aura burst») no existe en B3: esas entradas no salen.
+`iw_skills(ccm)` las lista (clave, tipo, máscara, ki, variantes) y
+`roster_build.iw_skill_names` pone los nombres de la hoja de IW (Skill List + Null Capsules):
+sus IDs no son los del juego, pero por personaje y tipo van a distancia fija (511, 514, 520...):
+se elige la que más técnicas hace coincidir; las fusiones no cuentan.
+
 ## Declararlo en un mod (`personaje.toml`)
 
 ```toml
@@ -173,3 +197,9 @@ un port), y una transformación sustituye a la cápsula de esa forma. También d
 - Efectos de cápsulas que no son ataques (objetos verdes/amarillos) para personajes nuevos.
 - Nombres de B1/B2: no hay lista en los recursos; el importador pone «Special 1…» si no se
   le da una con `--lista`.
+
+### Modo hiper de los ports de IW: duracion (2026-10-10)
+El bloque hiper de B3 (codigo 0x258/0x358, injertado del donante) termina de entrar en modo hiper
+con eventos AP tipo 7 en los fotogramas 88 y 100 (de 120). Si reproduce el aura burst de IW
+(60 fotogramas) esos eventos no llegan: aura y pantalla oscura, sin ki rojo ni tinte.
+`capsulas.csk_fit_frames` comprime los fotogramas del bloque a la duracion de la animacion propia.
