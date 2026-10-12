@@ -32,6 +32,8 @@ class TagTeamPanel : public rex::ui::ImGuiDialog {
 
 void TagTeamOpen();
 bool TagTeamWanted();
+// Fundido a negro de la pasarela TAG TEAM <-> rueda (el piloto recorre los menus por debajo).
+bool TagTeamGate();
 // Modo Tag Team activo (de la pantalla TAG TEAM al menu principal).
 bool TagTeamMode();
 // Mando `user` (0/1) en la rueda con el modo Tag Team: Y quita el ultimo miembro.

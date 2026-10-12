@@ -10,7 +10,7 @@
 namespace dbz3::ingame::pilot {
 
 struct Step {
-  enum Kind { kPress, kWaitScreen, kPressToLeave, kPressUntilBrowse } kind;
+  enum Kind { kPress, kWaitScreen, kPressToLeave, kPressUntilBrowse, kPoke } kind;
   uint16_t buttons = 0;   // kPress / kPressToLeave: botones (XInput)
   int value = 0;          // kWaitScreen: pantalla esperada; kPressToLeave: pantalla de la que salir
   int user = 0;           // mando que pulsa (0 = jugador 1, 1 = jugador 2)
@@ -23,6 +23,8 @@ Step PressToLeave(uint16_t buttons, int screen);
 // Pulsa hasta que el jugador `player` de la rueda vuelve a estar eligiendo (tras confirmar, el
 // juego abre su menu de capsulas con una animacion que se come las pulsaciones).
 Step PressUntilBrowse(uint16_t buttons, int player, int user);
+// Escribe un byte del guest (p. ej. la fila del cursor de un menu) y sigue.
+Step Poke(uint32_t addr, uint8_t value);
 
 void Run(std::vector<Step> steps);
 void Cancel();

@@ -186,8 +186,10 @@ std::atomic<int> g_main_row{0};             // fila del menu principal (seguida 
 // no llega (EU) se usa la cuenta de arriba.
 std::atomic<int> g_real_main_row{-1};
 std::atomic<int64_t> g_real_main_at{0};
+std::atomic<uint32_t> g_main_obj{0};        // objeto del menu principal (+150 = fila)
 
 int GameScreen() { return g_screen.load(); }
+uint32_t MainMenuObj() { return NowMs() - g_real_main_at.load() < 500 ? g_main_obj.load() : 0; }
 bool MenuRowsTracked() {
   const int sc = g_screen.load();
   return sc == kMainMenuScreen || (sc == kDuelMenuScreen && !dbz3_select_live() && !dbz3_select_to_stage());
@@ -418,7 +420,7 @@ void OnlinePanel::OnDraw(ImGuiIO& io) {
       EntryBadge(io, T::T("SALIR DEL ONLINE", "LEAVE ONLINE"));
       if (Pad() & 0x4000) g_close_req = true;
     }
-    if (!g_battle.load() && !TagTeamWanted() && s.link() == Link::kIdle) {
+    if (!g_battle.load() && !TagTeamWanted() && !TagTeamGate() && s.link() == Link::kIdle) {
       if (screen == kMainMenuScreen && REXCVAR_GET(dbz3_tag_team_enabled)) {
         TagTeamRow(io, g_tag_focus.load());   // US y EU: los menus son iguales
       }
@@ -645,12 +647,14 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
 
 }  // namespace dbz3::ingame
 
-REX_HOOK_RAW(sub_8218C5D8) {
+// EU: sub_8218C5A0 (mismo cuerpo, mismos campos +48/+150)
+DBZ3_HOOK(sub_8218C5D8, dbz3eu_sub_8218C5A0) {
   const uint32_t obj = REX_LOAD_U32(ctx.r3.u32 + 48);
-  if (obj && !dbz3::g_guest_eu) {
+  if (obj) {
     const int row = REX_LOAD_U8(obj + 150);
     if (dbz3::ingame::g_real_main_row.exchange(row) < 0) REXLOG_INFO("dbz3 menu: fila real del menu principal {}", row);
+    dbz3::ingame::g_main_obj = obj;
     dbz3::ingame::g_real_main_at = dbz3::ingame::NowMs();
   }
-  __imp__sub_8218C5D8(ctx, base);
+  orig(ctx, base);
 }

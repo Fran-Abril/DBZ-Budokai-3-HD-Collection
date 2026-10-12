@@ -19,6 +19,7 @@
 #include <vector>
 
 #include <rex/input/input_system.h>
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
 
@@ -34,6 +35,7 @@
 
 
 bool dbz3_select_live();   // select_ext.cpp
+bool dbz3_select_to_stage();
 int dbz3_select_preview_max_form(int side);   // roster_ext.cpp
 int64_t dbz3_select_browse_ms(int k);
 int64_t dbz3_select_now_ms();
@@ -42,6 +44,8 @@ int dbz3_select_capsule_option(int k);
 namespace dbz3 {
 bool GameDimmed();
 }
+
+REXCVAR_DEFINE_BOOL(dbz3_form_select_enabled, true, "DBZ3/Mods", "LT/RT starting-form selector at character select (beta)");
 
 namespace dbz3::ingame {
 namespace {
@@ -141,12 +145,22 @@ rex::input::InputSystem* Input() {
 bool PilotReady() { return true; }   // el piloto espera por el byte de pantalla (US y EU, GuestAddr)
 
 // Del menu principal a la fila `row` del Duelo y a su seleccion de personajes. Las filas se
-// cuentan (online_panel.cpp sigue el cursor del menu principal; el de Duelo nace en la fila 0
-// y salta 1P VS 2P si no hay mando 2).
+// cuentan (online_panel.cpp sigue el cursor del menu principal; el de Duelo nace en la fila 0 y
+// 1P VS 2P y COM VS 2P cuentan aunque salgan en gris sin mando 2).
 void PilotToDuel(int row) {
   using namespace dbz3::ingame::pilot;
   std::vector<Step> steps;
-  for (int n = (kDuelRow - MainMenuRow() + 7) % 7; n > 0; --n) steps.push_back(Press(kDown));
+  // sin dar la vuelta: el menu tiene menos filas en una partida sin todo desbloqueado (7 era la de
+  // la partida al 100%; un jugador acababa en el Torneo o la Tienda, 2026-10-12). Duelo es la fila 1:
+  // desde la fila real del cursor se sube (o se baja una desde la primera)
+  // con el objeto del menu a mano (US y EU) el cursor se pone en Duelo sin recorrer filas
+  if (const uint32_t obj = MainMenuObj()) {
+    steps.push_back(Poke(obj + 150, kDuelRow));
+  } else {
+    const int from = MainMenuRow();
+    for (int n = from - kDuelRow; n > 0; --n) steps.push_back(Press(kUp));
+    for (int n = kDuelRow - from; n > 0; --n) steps.push_back(Press(kDown));
+  }
   steps.push_back(Press(kA));
   steps.push_back(WaitScreen(kDuelScreen));
   for (int n = row; n > 0; --n) steps.push_back(Press(kDown));   // 1P VS 2P gris tambien cuenta
@@ -164,7 +178,23 @@ int SideOf(int user) {
 
 int PilotUser(int side) { return g_mode.load() == 1 ? side : 0; }
 
+// Pasarela (2026-10-12, "directo y nativo"): mientras el piloto recorre los menus del juego la
+// pantalla queda en negro, como los fundidos del juego. TAG TEAM -> negro -> rueda; y al salir de
+// la rueda (Y sin miembros) -> negro -> TAG TEAM. El menu principal y el de Duelo no se ven.
+enum class Gate { kNone, kToWheel, kToPanel };
+std::atomic<Gate> g_gate{Gate::kNone};
+double g_gate_at = 0, g_gate_out = 0;   // hilo de dibujo
+double g_live_at = -10, g_duel_at = 0;  // ultima rueda viva; desde cuando se ve el Duelo en Tag Team
+
+void StartGate(Gate g) {
+  g_gate_at = Now();
+  g_gate_out = 0;
+  g_gate = g;
+}
+
 }  // namespace
+
+bool TagTeamGate() { return g_gate.load() != Gate::kNone; }
 
 std::atomic<double> g_opened_at{0};
 // el A que abre la pantalla (desde el menu principal) seguia pulsado y elegia 1P VS COM solo
@@ -284,6 +314,9 @@ uint16_t TeamPickFilter(uint16_t real, int user) {
 
 bool Online() { return dbz3::net::Session::Get().link() != dbz3::net::Link::kIdle; }
 
+// Interruptor del launcher. Online se ignora: los dos PCs tienen que contar igual el mando.
+bool FormSelectOn() { return REXCVAR_GET(dbz3_form_select_enabled) || Online(); }
+
 // Lado que maneja este mando en la rueda. Online: el suyo siempre (los dos PCs leen el mismo mando
 // en el mismo tick: misma cuenta sin depender del reloj). Local: el que esta eligiendo (los dos a la
 // vez = 1P VS 2P: el suyo).
@@ -300,7 +333,7 @@ void FormPickPad(int user, uint8_t lt, uint8_t rt) {
   auto& prev = g_trig_prev[size_t(user)];
   const bool l = lt > 64, r = rt > 64, lp = l && !prev[0], rp = r && !prev[1];
   prev = {l, r};
-  if (!dbz3_select_live() || dbz3::ingame::pilot::Busy()) return;
+  if (!dbz3_select_live() || dbz3::ingame::pilot::Busy() || !FormSelectOn()) return;
   if (g_form_used.exchange(false)) {   // primera rueda tras un combate: todos en forma normal
     g_start_form[0] = 0;
     g_start_form[1] = 0;
@@ -315,7 +348,7 @@ void FormPickPad(int user, uint8_t lt, uint8_t rt) {
 }
 
 int ChosenForm(int side) {
-  if (side < 0 || side > 1) return 0;
+  if (side < 0 || side > 1 || !FormSelectOn()) return 0;
   if (const char* env = std::getenv("DBZ3_START_FORM")) {
     const char* comma = std::strchr(env, ',');
     return std::atoi(side == 0 || !comma ? env : comma + 1);
@@ -331,6 +364,7 @@ int StartForm(int side) {
     const char* comma = std::strchr(env, ',');
     return std::atoi(side == 0 || !comma ? env : comma + 1);
   }
+  if (!FormSelectOn()) return 0;
   g_form_used = true;   // se gasta en este combate (y en sus revanchas); la rueda siguiente empieza de 0
   return g_start_form[size_t(side)].load();
 }
@@ -423,7 +457,8 @@ void TagTeamPanel::DrawMenu(ImGuiIO& io, uint16_t pressed) {
     dbz3::tag::SetComSide(1, row_ != 1);
     g_team_mode = true;
     g_after_battle = false;
-    if (PilotReady()) PilotToDuel(row_ == 0 ? 0 : row_ == 1 ? 1 : 2);
+    StartGate(Gate::kToWheel);
+    if (PilotReady()) PilotToDuel(row_ == 0 ? 0 : row_ == 1 ? 1 : 3);   // Duelo: 1P VS COM, 1P VS 2P, COM VS 2P, COM VS COM
   }
 
   // Como el Duelo: fondo del juego, cinta con el titulo, marco con las filas del juego y los
@@ -579,7 +614,7 @@ void TagTeamPanel::OnDraw(ImGuiIO& io) {
     }
     if (!battle && dbz3_select_live()) DrawPicking(io);
   }
-  if (!battle && dbz3_select_live() && !dbz3::ingame::pilot::Busy()) DrawFormPick(io, g_team_mode.load());
+  if (!battle && dbz3_select_live() && !dbz3::ingame::pilot::Busy() && FormSelectOn()) DrawFormPick(io, g_team_mode.load());
   if (GameScreen() == kMainScreen && !Online()) {   // fuera de los combates (historias incluidas); online lo hace FormPickPad
     g_start_form[0] = 0;
     g_start_form[1] = 0;
@@ -593,6 +628,37 @@ void TagTeamPanel::OnDraw(ImGuiIO& io) {
   if (show && !shown_) wait_release_ = true;
   shown_ = show;
   if (show) DrawMenu(io, Pad());
+
+  // de la rueda al menu de Duelo en modo Tag Team (Y sin miembros): de vuelta a TAG TEAM por debajo
+  const double now = Now();
+  if (dbz3_select_live()) g_live_at = now;
+  const bool duel_menu = g_team_mode.load() && !battle && GameScreen() == kDuelScreen && !dbz3_select_live() &&
+                         !dbz3_select_to_stage() && !dbz3::ingame::pilot::Busy() && g_gate.load() == Gate::kNone;
+  if (!duel_menu) {
+    g_duel_at = 0;
+  } else if (g_duel_at == 0) {
+    g_duel_at = now;
+  } else if (now - g_live_at < 4.0 && now - g_duel_at > 0.3) {
+    StartGate(Gate::kToPanel);
+    using namespace dbz3::ingame::pilot;
+    Run({PressToLeave(kY, kDuelScreen), WaitScreen(kMainScreen)});
+  }
+  const Gate gate = g_gate.load();
+  if (gate == Gate::kNone) return;
+  const double age = now - g_gate_at;
+  if (!dbz3::ingame::pilot::Busy() && g_gate_out == 0) {
+    if (gate == Gate::kToWheel ? dbz3_select_live() : GameScreen() == kMainScreen) {
+      if (gate == Gate::kToPanel) TagTeamOpen();
+      g_gate_out = now;
+    } else if (age > 1.0) {   // el piloto no llego (o el jugador pulso atras): se ve donde este
+      g_gate_out = now;
+    }
+  }
+  float alpha = std::clamp(float(age / 0.25), 0.0f, 1.0f);
+  if (g_gate_out > 0) alpha = std::min(alpha, 1.0f - std::clamp(float((now - g_gate_out) / 0.4), 0.0f, 1.0f));
+  if (gate == Gate::kToWheel && age < 0.25) DrawMenu(io, 0);   // la pantalla TAG TEAM funde a negro
+  ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, int(alpha * 255)));
+  if (g_gate_out > 0 && now - g_gate_out >= 0.4) g_gate = Gate::kNone;
 }
 
 }  // namespace dbz3::ingame

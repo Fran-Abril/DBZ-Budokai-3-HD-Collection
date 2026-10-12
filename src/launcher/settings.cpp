@@ -812,9 +812,8 @@ std::filesystem::path FindIsoInDir(const std::filesystem::path& dir) {
   return {};
 }
 
-// .iso/.xiso en cualquier mayuscula ("Juego.Iso"), o una imagen de disco de 360 con otra extension
-// o sin ella (Windows oculta las extensiones: un jugador la renombro): se mira la marca del disco
-// en los mismos sitios que el lector (disc_image_device.cpp).
+// Imagen de disco de Xbox 360 con cualquier extension (o sin ella: Windows oculta las extensiones):
+// se mira la marca del disco en los mismos sitios que el lector (disc_image_device.cpp).
 bool IsValidIso(const std::filesystem::path& iso) {
   std::error_code ec;
   if (!std::filesystem::is_regular_file(iso, ec)) {
@@ -822,7 +821,8 @@ bool IsValidIso(const std::filesystem::path& iso) {
   }
   std::string ext = iso.extension().string();
   std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-  if (ext == ".iso" || ext == ".xiso") return true;
+  // tambien un .iso: uno de PS2 o a medio descargar no se da por bueno (el juego callaba el fallo)
+  (void)ext;
   if (std::filesystem::file_size(iso, ec) < (256u << 20) || ec) return false;
   std::ifstream f(iso, std::ios::binary);
   for (const uint64_t off : {0x00000000ull, 0x0000FB20ull, 0x00020600ull, 0x02080000ull, 0x0FD90000ull}) {

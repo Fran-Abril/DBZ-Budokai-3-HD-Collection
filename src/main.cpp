@@ -48,6 +48,10 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #endif
 #include "region.h"
 #include "launcher/settings.h"
+#if REX_PLATFORM_WIN32
+#include <commdlg.h>
+#pragma comment(lib, "comdlg32.lib")
+#endif
 #include "launcher/launcher_state.h"
 #include "launcher/ui_kit.h"
 #include "launcher/update_check.h"
@@ -221,8 +225,41 @@ public:
               "Carpeta buscada:\n" +
               game_root.string();
 #if REX_PLATFORM_WIN32
-          MessageBoxA(nullptr, msg.c_str(), "DBZ Budokai 3 - Datos del juego",
-                      MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
+          // el launcher aun no existe aqui: se ofrece elegir la imagen de disco ya (un jugador se quedo
+          // sin forma de llegar al boton del launcher, 2026-10-12) y se reinicia con ella
+          const std::string ask = msg + "\n\nQuieres elegir ahora la imagen de disco del juego (.iso)?";
+          if (MessageBoxA(nullptr, ask.c_str(), "DBZ Budokai 3 - Datos del juego",
+                          MB_YESNO | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST) == IDYES) {
+            wchar_t file[MAX_PATH] = {};
+            OPENFILENAMEW ofn = {};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.lpstrFilter = L"Imagen de disco (*.iso)\0*.iso;*.xiso\0Todos los archivos\0*.*\0";
+            ofn.lpstrFile = file;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+            if (GetOpenFileNameW(&ofn)) {
+              if (dbz3::settings::IsValidIso(std::filesystem::path(file))) {
+                char utf8[MAX_PATH * 4] = {};
+                WideCharToMultiByte(CP_UTF8, 0, file, -1, utf8, sizeof(utf8), nullptr, nullptr);
+                dbz3::settings::SetIsoPath(utf8);
+                dbz3::settings::SaveUserSettings();
+                wchar_t self[MAX_PATH] = {};
+                GetModuleFileNameW(nullptr, self, MAX_PATH);
+                STARTUPINFOW si = {};
+                si.cb = sizeof(si);
+                PROCESS_INFORMATION pi = {};
+                if (CreateProcessW(self, nullptr, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+                  CloseHandle(pi.hThread);
+                  CloseHandle(pi.hProcess);
+                }
+                rex::FlushLogging();
+                std::_Exit(0);
+              }
+              MessageBoxA(nullptr, "Ese archivo no es una imagen de disco de Xbox 360 (tiene que ser el disco de\n"
+                          "Budokai 3 o de la HD Collection, completo).", "DBZ Budokai 3 - Datos del juego",
+                          MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+            }
+          }
 #else
           std::fprintf(stderr, "%s\n", msg.c_str());
 #endif

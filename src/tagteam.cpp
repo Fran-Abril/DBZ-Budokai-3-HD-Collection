@@ -48,6 +48,7 @@ DBZ3_EXTERN_EU(dbz3eu_sub_82109738);
 DBZ3_EXTERN_EU(dbz3eu_sub_82113918);
 DBZ3_EXTERN_EU(dbz3eu_sub_82113970);
 DBZ3_EXTERN_EU(dbz3eu_sub_82112360);
+DBZ3_EXTERN_EU(dbz3eu_sub_82115430);
 
 namespace dbz3::tag {
 namespace {
@@ -56,6 +57,8 @@ constexpr uint32_t kHp = 6080, kHpMax = 6084, kId = 7420, kRec372 = 7416, kSel =
 constexpr uint32_t kNearDeath = 8203, kBody = 1616, kForm = 2980, kNextForm = 2984, kModel0 = 7608, kAnm0 = 7672;
 constexpr uint32_t kCamRoot = 7896, kCam = 7916, kLangFlag = 7920, kLang = 7924;
 constexpr uint32_t kLoad = 7;            // hueco de forma donde se carga el que entra
+// hueco donde se carga la forma con la que salio el que entra (vuelve transformado, como en Tenkaichi 3)
+constexpr uint32_t kSpare = 6;
 constexpr uint32_t kChar96 = 0x8234ABB8, kChar372 = 0x82329CF0;
 // Efectos de las tecnicas por jugador (estudio 18, solo US): fichero por ID en kTechFid; bloque
 // del jugador k en *kTechBlock + 1152k, ranura A en +80 (+100 = procesada).
@@ -114,6 +117,9 @@ struct Team {
   // forma dejaba la camara lejos y el luchador sin dibujar (jugador, 2026-10-12): el relevo espera
   uint32_t last_form = 0xFFFFFFFF;
   uint32_t form_at = 0;            // tick del ultimo cambio de forma (o mientras actual != destino)
+  std::array<uint8_t, 5> form{};   // forma con la que salio cada miembro (vuelve con ella)
+  uint32_t spare = 0;              // forma del que entra pedida en el hueco kSpare (0 = ninguna)
+  uint32_t restore = 0, restore_at = 0;   // forma a la que vuelve el que entro, y desde que tick
 };
 
 std::mutex g_mu;
@@ -396,12 +402,33 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   if (!t.rec) t.rec = dbz3::roster::GuestAlloc(372);
   if (!t.rec) return;
   t.hp[size_t(t.active)] = t.down[size_t(t.active)] ? 0.0f : LoadF(base, x + kHp);
+  // (si aun no se habia transformado de vuelta, sale con la forma que tenia pendiente)
+  t.form[size_t(t.active)] = t.down[size_t(t.active)] ? 0
+                             : uint8_t(std::min<uint32_t>(t.restore ? t.restore : REX_LOAD_U32(x + kForm), 7));
+  t.restore = 0;
+  if (t.spare) {   // la forma pedida en un intento anterior (carga que no llego) se suelta
+    TAG_CALL(sub_82100D60, dbz3eu_sub_82100E60, x, kSpare);
+    TAG_CALL(sub_82100DE8, dbz3eu_sub_82100EE8, x, kSpare);
+    t.spare = 0;
+  }
   TAG_CALL(sub_82100D60, dbz3eu_sub_82100E60, x, kLoad);       // hueco libre
   TAG_CALL(sub_82100DE8, dbz3eu_sub_82100EE8, x, kLoad);
   const uint32_t src = kChar372 + 372 * id;
   std::memcpy(base + t.rec, base + src, 372);
   std::memcpy(base + t.rec + 4 * kLoad, base + src, 4);                       // su moveset
   std::memcpy(base + t.rec + 212 + 20 * kLoad, base + src + 212, 20);         // su modelo
+  // vuelve con la forma con la que salio: su modelo y animaciones de esa forma f en el hueco kSpare
+  // (sub_82109148 pide sel+22 y luego sel+20; hueco libre: el que esta en pantalla no lo usa). En
+  // FinishSwap pasan al hueco f y se transforma con la rutina del juego (sub_82115330), como con P+K+G
+  const uint32_t f = t.form[size_t(k)];
+  const bool spare_free = !REX_LOAD_U32(x + kModel0 + 4 * kSpare) && !REX_LOAD_U32(x + kAnm0 + 28 * kSpare) &&
+                          !REX_LOAD_U32(x + kAnm0 + 28 * kSpare + 20) && !REX_LOAD_U32(x + kAnm0 + 28 * kSpare + 24);
+  t.spare = (f > 0 && f <= kSpare && spare_free) ? f : 0;
+  if (t.spare) {
+    std::memcpy(base + t.rec + 4 * kSpare, base + src + 4 * f, 4);
+    std::memcpy(base + t.rec + 212 + 20 * kSpare, base + src + 212 + 20 * f, 20);
+    REX_STORE_U8(x + 7436 + kSpare, REX_LOAD_U8(x + 7436));
+  }
   const uint32_t keep[] = {REX_LOAD_U32(x + kRec372), REX_LOAD_U32(x + kId), REX_LOAD_U32(x + kCam),
                            REX_LOAD_U32(x + kLang), REX_LOAD_U32(x + 7928)};
   const uint16_t sel20 = REX_LOAD_U16(sel + 20), sel22 = REX_LOAD_U16(sel + 22);
@@ -411,7 +438,7 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   REX_STORE_U32(x + kCam, 0);
   REX_STORE_U32(x + kLang, 0);
   REX_STORE_U16(sel + 20, uint16_t(kLoad));
-  REX_STORE_U16(sel + 22, uint16_t(kLoad));
+  REX_STORE_U16(sel + 22, uint16_t(t.spare ? kSpare : kLoad));
   TAG_CALL(sub_82109148, dbz3eu_sub_82109248, x, sel);         // pide sus ficheros
   t.new_cam = REX_LOAD_U32(x + kCam);
   t.new_lang = REX_LOAD_U32(x + kLang);
@@ -462,7 +489,8 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   } else {
     t.slide = 0;
   }
-  REXLOG_INFO("dbz3 tag: luchador {:08X} relevo {} -> {} (id {}, camara {:08X})", x, t.active, k, id, t.new_cam);
+  REXLOG_INFO("dbz3 tag: luchador {:08X} relevo {} -> {} (id {}, camara {:08X}, sale en forma {}, entra en forma {})", x,
+              t.active, k, id, t.new_cam, t.form[size_t(t.active)], t.spare);
 }
 
 // Ficheros del que entra cargados: en este tick sale el de pantalla (sub_821092C8 libera su
@@ -478,6 +506,15 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   std::memcpy(anm, base + x + kAnm0 + 28 * kLoad, 28);
   REX_STORE_U32(x + kModel0 + 4 * kLoad, 0);
   std::memset(base + x + kAnm0 + 28 * kLoad, 0, 28);
+  // su forma de vuelta (hueco kSpare) tambien se aparta de la limpieza del que sale
+  const uint32_t spare = t.spare, smodel = REX_LOAD_U32(x + kModel0 + 4 * kSpare);
+  uint8_t sanm[28];
+  std::memcpy(sanm, base + x + kAnm0 + 28 * kSpare, 28);
+  if (spare) {
+    REX_STORE_U32(x + kModel0 + 4 * kSpare, 0);
+    std::memset(base + x + kAnm0 + 28 * kSpare, 0, 28);
+  }
+  t.spare = 0;
   TAG_CALL(sub_821092C8, dbz3eu_sub_821093C8, x, 0);           // fuera el que sale
   REX_STORE_U32(x + kModel0, model);
   std::memcpy(base + x + kAnm0, anm, 28);
@@ -515,6 +552,12 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   g_in_swap = false;
   TAG_CALL(sub_8210E690, dbz3eu_sub_8210E790, x, 0);
   TAG_CALL(sub_82115270, dbz3eu_sub_82115370, x, 0);           // el cuerpo pasa al modelo nuevo
+  // su forma de vuelta al hueco de esa forma, ya pasado el reinicio (con el modelo puesto antes, el
+  // hueco salia vacio al aterrizar, 2026-10-12)
+  if (spare) {
+    REX_STORE_U32(x + kModel0 + 4 * spare, smodel);
+    std::memcpy(base + x + kAnm0 + 28 * spare, sanm, 28);
+  }
   std::memcpy(base + x + 64, pos, sizeof(pos));
   REX_STORE_U8(x + 8185, side_flag);
   REXLOG_INFO("dbz3 tag: posicion del relevo {:.2f} {:.2f} {:.2f} {:.2f}", LoadF(base, x + 64), LoadF(base, x + 68),
@@ -578,7 +621,9 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   REX_STORE_U16(x + 3244, 0);
   REX_STORE_U16(x + 3246, 0);
   REX_STORE_U16(x + 3252, 0);
-  if (ko) TAG_CALL(sub_820FB5D0, dbz3eu_sub_820FB6D0, x + kBody, 0);   // destello (forma 0)
+  if (ko && !spare) TAG_CALL(sub_820FB5D0, dbz3eu_sub_820FB6D0, x + kBody, 0);   // destello (forma 0)
+  t.restore = spare;                    // se transforma al aterrizar (Tick)
+  t.restore_at = g_frame.load() + SlideTicks(2) + 6;
   t.active = k;
   t.phase = Phase::kIdle;
   t.retries = 0;
@@ -599,10 +644,13 @@ bool Loaded(uint8_t* base, uint32_t x, const Team& t) {
   auto part = [&](uint32_t so) { return !so || !REX_LOAD_U32(so + 16) || loaded(REX_LOAD_U32(so + 16)); };
   const bool face = (!t.new_face || loaded(t.new_face)) && (!t.new_aura || loaded(t.new_aura)) &&
                     (!t.new_portrait || (part(REX_LOAD_U32(t.new_portrait + 12)) && part(REX_LOAD_U32(t.new_portrait + 8))));
+  // la forma con la que vuelve (hueco kSpare), si se pidio
+  const uint32_t smodel = REX_LOAD_U32(x + kModel0 + 4 * kSpare), sanm = REX_LOAD_U32(x + kAnm0 + 28 * kSpare + 20);
+  const bool spare = !t.spare || (smodel && !REX_LOAD_U32(smodel + 36) && (!sanm || ready(sanm)));
   return ready(t.new_cam) && (!t.new_lang || ready(t.new_lang)) && (!t.new_tech || ready(t.new_tech)) && face &&
          model &&
          !REX_LOAD_U32(model + 36) &&
-         (!anm || ready(anm));
+         (!anm || ready(anm)) && spare;
 }
 
 }  // namespace
@@ -717,6 +765,21 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       if (REX_LOAD_U16(x + 3244) == 25) t.seen25 = true;               // ha empezado la caida
       if (LoadF(base, x + kHp) < 1.0f) StoreF(base, x + kHp, 1.0f);    // caido: vida 1, no termina el combate
     }
+    // vuelve con su forma: ya aterrizado, libre y con su estado de combate rehecho (X+6048; justo tras
+    // el reinicio es nulo y las rutinas de accion cerraban el juego), la transformacion del juego (lo que
+    // hace P+K+G tras cargar el modelo: destino X+2984, sub_82115330), con el modelo en su hueco
+    if (t.restore && t.phase == Phase::kIdle && now >= t.restore_at && !t.slide && Free(base, x) &&
+        REX_LOAD_U32(x + 6048)) {
+      if (REX_LOAD_U32(x + kModel0 + 4 * t.restore) && REX_LOAD_U32(x + kForm) == 0) {
+        REX_STORE_U32(x + kNextForm, t.restore);
+        TAG_CALL(sub_82115330, dbz3eu_sub_82115430, x, 0);
+        REXLOG_INFO("dbz3 tag: luchador {:08X} vuelve en la forma {}", x, t.restore);
+      } else {
+        REXLOG_WARN("dbz3 tag: luchador {:08X} no vuelve en la forma {} (modelo {:08X}, forma {})", x, t.restore,
+                    REX_LOAD_U32(x + kModel0 + 4 * t.restore), REX_LOAD_U32(x + kForm));
+      }
+      t.restore = 0;
+    }
     // PRUEBA (DBZ3_TAG_AUTOSWAP=N): cada N ticks cada lado pide un relevo como un SELECT (combates COM
     // contra COM largos con muchos relevos, rayos y choques de poderes, sin nadie al mando)
     static const uint32_t autoswap = std::getenv("DBZ3_TAG_AUTOSWAP") ? uint32_t(std::atoi(std::getenv("DBZ3_TAG_AUTOSWAP"))) : 0;
@@ -816,6 +879,11 @@ void Tick(PPCContext& ctx, uint8_t* base) {
             float cur[3];
             for (uint32_t i = 0; i < 3; ++i) cur[i] = LoadF(base, x + 64 + 4 * i);
             StartSlide(t, 2, cur, home);
+          }
+          if (t.spare) {
+            TAG_CALL(sub_82100D60, dbz3eu_sub_82100E60, x, kSpare);
+            TAG_CALL(sub_82100DE8, dbz3eu_sub_82100EE8, x, kSpare);
+            t.spare = 0;
           }
           t.target = -1;
           t.retries = 0;

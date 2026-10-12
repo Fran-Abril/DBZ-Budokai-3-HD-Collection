@@ -38,6 +38,7 @@
 #include <vector>
 
 REXCVAR_DECLARE(bool, dbz3_tag_team_enabled);
+REXCVAR_DECLARE(bool, dbz3_form_select_enabled);
 REXCVAR_DECLARE(bool, dbz3_online_enabled);
 
 namespace dbz3::launcher {
@@ -2185,6 +2186,13 @@ void LauncherDialog::DrawNativeModsTab() {
       dbz3::settings::SaveUserSettings();
     }
     ImGui::TextDisabled("%s", i18n::T("Entrada ONLINE (beta) en el menu de Duelo.", "ONLINE (beta) entry in the Duel menu."));
+    bool forms = REXCVAR_GET(dbz3_form_select_enabled);
+    if (ImGui::Checkbox(i18n::T("Selector de transformacion (beta)", "Transformation selector (beta)"), &forms)) {
+      rex::cvar::SetFlagByName("dbz3_form_select_enabled", forms ? "true" : "false");
+      dbz3::settings::SaveUserSettings();
+    }
+    ImGui::TextDisabled("%s", i18n::T("LT/RT en la seleccion de personaje: empiezas transformado (con su capsula). Online siempre activo.",
+                                      "LT/RT at character select: start transformed (needs its capsule). Always on online."));
   }
   ImGui::Separator();
 
@@ -4327,6 +4335,10 @@ void LauncherDialog::DrawImporter() {
           }
         }
         ImGui::EndCombo();
+      }
+      // lo que conserva de verdad cada fuente (B2 y SDBH: golpes propios, voz del donante)
+      if (!imp_presets_.empty() && !imp_presets_[size_t(imp_preset_)].second.empty()) {
+        ImGui::TextDisabled("%s", imp_presets_[size_t(imp_preset_)].second.c_str());
       }
       ImGui::Checkbox(i18n::T("Fisica del pelo y la ropa del donante", "Donor hair and cloth physics"),
                       &imp_physics_);

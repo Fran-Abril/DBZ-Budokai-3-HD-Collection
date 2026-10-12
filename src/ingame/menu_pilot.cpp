@@ -48,6 +48,8 @@ Step PressUntilBrowse(uint16_t buttons, int player, int user) {
   return Step{Step::kPressUntilBrowse, buttons, player, user};
 }
 
+Step Poke(uint32_t addr, uint8_t value) { return Step{Step::kPoke, value, int(addr)}; }
+
 void Run(std::vector<Step> steps) {
   std::lock_guard<std::mutex> lock(g_mu);
   g_steps = std::move(steps);
@@ -94,6 +96,10 @@ void Tick(uint8_t* base) {
         g_out = (g_phase % (kHold + kGap)) < kHold ? s.buttons : 0;
         if (g_phase > kTimeout) Stop("la pantalla no cambio");
       }
+      break;
+    case Step::kPoke:
+      base[uint32_t(s.value)] = uint8_t(s.buttons);
+      Next();
       break;
     case Step::kPressUntilBrowse:
       if (dbz3_select_browse_ms(s.value) > g_step_ms) {

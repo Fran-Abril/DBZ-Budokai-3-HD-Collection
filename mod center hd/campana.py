@@ -296,15 +296,31 @@ def story(cfg, us, mod, work):
     n = 0
 
     def text(bank, c, key, style):
+        """`paginas` (p. ej. dialogo_paginas = ["1252.1", 0, "1252.2"]): paginas del juego ("banco.pagina"
+        de data_usi, cada idioma con la suya: texto y traduccion originales) mezcladas con frases propias
+        (numero = frase de dialogo_<idioma>). Sin `paginas`, todas las frases propias."""
         nonlocal n
+        pages = c.get(key + "paginas")
         for lang, afss in LANG_AFS.items():
             # `idioma` en [historia]: ese idioma en todos (p. ej. "en" mientras falten traducciones)
             lines = c.get(key + h.get("idioma", lang)) or c.get(key + "en")
             for afs in afss:
-                if os.path.exists(afs_path(us, afs)):
-                    rb.write_entry(mod, afs, bank, text_bank(lines, style), work)
-                    n += 1
-        return len(c.get(key + "en") or c.get(key + "es"))
+                if not os.path.exists(afs_path(us, afs)):
+                    continue
+                if pages:
+                    imgs = {}
+                    for k, p in enumerate(pages):
+                        if isinstance(p, str):
+                            nb, pg = (int(v) for v in p.split("."))
+                            imgs[k] = capsulas.azt_read(read_entry(us, afs, nb, work), pg)
+                        else:
+                            imgs[k] = render(lines[int(p)], style)
+                    data = capsulas.build_bank(0, imgs, flag28=0x40, tall=True)
+                else:
+                    data = text_bank(lines, style)
+                rb.write_entry(mod, afs, bank, data, work)
+                n += 1
+        return len(pages) if pages else len(c.get(key + "en") or c.get(key + "es"))
 
     music = int(h.get("musica_narracion", 135269))   # 2.4197, la de las introducciones del juego
     pics = [int(h.get("imagenes_desde", 4510))]   # entradas libres de data_cmn para las imagenes propias
@@ -350,7 +366,12 @@ def story(cfg, us, mod, work):
         return ([4 + 2 * nl, 5, nl + 1, 5],
                 [(10, 0, int(a)), (10, 1, int(b)), (10, 2, 0x1026E), (10, 3, 0x10000 | bank), (10, 4, 0x10000 | bank),
                  (13, 0, 0xFFFFFFFF)] + [ev for i in range(4) for ev in ((11, i, 1556), (12, i, 1557))] +
-                [(11, 4, 0x1026D), (12, 4, 0x1026E)])
+                [(11, 4, 0x1026D), (12, 4, 0x1026E)] + voices(c, key))
+
+    def voices(c, key):
+        """`voz` por pagina (dialogo_voz, victoria_voz), como las del juego (5800.0: 14, pagina 1.., 2.N);
+        0 o -1 = pagina sin voz."""
+        return [(14, k + 1, voice(v)) for k, v in enumerate(c.get(key + "voz", [])) if str(v).strip() not in ("", "-1", "0")]
 
     # saga y posicion de cada combate
     s, k, place = saga0, {}, []
@@ -492,7 +513,8 @@ def story(cfg, us, mod, work):
                (10, 3, 0x10000 | bank), (10, 4, 0x10000 | bank),
                # musica de la charla tras ganar (`musica_dialogo`, por capitulo o en [historia]; 2.4205 como el juego)
                (13, 0, int(c.get("musica_dialogo", h.get("musica_dialogo", 0x2106D))))] +
-              [e for k in range(4) for e in ((11, k, 1556), (12, k, 1557))] + [(11, 4, 0x10755), (12, 4, 0x10756)])
+              [e for k in range(4) for e in ((11, k, 1556), (12, k, 1557))] + [(11, 4, 0x10755), (12, 4, 0x10756)] +
+              voices(c, "victoria_"))
         if c.get("premio"):                      # capsula de premio al ganar (op 19, como 2138.x)
             ev.append((19, 0, int(c["premio"])))
         fights[s].append(([4 + 2 * nl, 5, nl + 1, 5, 0, 0, s_after + 1], ev + tail))
