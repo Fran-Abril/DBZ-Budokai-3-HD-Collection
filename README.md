@@ -19,14 +19,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/novapowers0/DBZ-Budokai-3-HD-Collection/releases/tag/v1.4.4.1">
+  <a href="https://github.com/novapowers0/DBZ-Budokai-3-HD-Collection/releases/latest">
     <img src="docs/trailer_preview.gif" alt="Tráiler de la 1.4.4 EX: ver en la página de la release" width="640">
   </a>
 </p>
 
 <p align="center">
   <b>Tráiler de la 1.4.4 EX (ver en la release):</b>
-  <a href="https://github.com/novapowers0/DBZ-Budokai-3-HD-Collection/releases/tag/v1.4.4.1">español / English</a>
+  <a href="https://github.com/novapowers0/DBZ-Budokai-3-HD-Collection/releases/latest">español / English</a>
 </p>
 
 <p align="center">
