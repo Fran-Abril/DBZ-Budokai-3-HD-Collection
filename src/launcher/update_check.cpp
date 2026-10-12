@@ -109,11 +109,13 @@ bool VersionNewer(const std::string& a, const std::string& b) {
   return IsRepack(va) && !IsRepack(vb);
 }
 
+}  // namespace
+
 #if REX_PLATFORM_WIN32
 
 // HTTPS GET with short timeouts, so a stalled network can never keep a thread
 // (or the launcher) waiting. Returns the body, or an empty string on any error.
-std::string HttpGet(const wchar_t* host, const wchar_t* path) {
+std::string HttpGet(const wchar_t* host, const wchar_t* path, const wchar_t* headers) {
   std::string body;
   HINTERNET session = WinHttpOpen(L"dbz3-update-check/1.0",
                                   WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
@@ -128,8 +130,8 @@ std::string HttpGet(const wchar_t* host, const wchar_t* path) {
     HINTERNET request = WinHttpOpenRequest(connect, L"GET", path, nullptr, WINHTTP_NO_REFERER,
                                            WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     if (request) {
-      if (WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA,
-                             0, 0, 0) &&
+      if (WinHttpSendRequest(request, headers ? headers : WINHTTP_NO_ADDITIONAL_HEADERS,
+                             headers ? DWORD(-1) : 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
           WinHttpReceiveResponse(request, nullptr)) {
         DWORD status = 0;
         DWORD status_len = sizeof(status);
@@ -162,11 +164,9 @@ std::string HttpGet(const wchar_t* host, const wchar_t* path) {
 
 #else
 
-std::string HttpGet(const wchar_t*, const wchar_t*) { return {}; }
+std::string HttpGet(const wchar_t*, const wchar_t*, const wchar_t*) { return {}; }
 
 #endif  // REX_PLATFORM_WIN32
-
-}  // namespace
 
 std::string CurrentVersion() {
   static const std::string kVersion = []() -> std::string {

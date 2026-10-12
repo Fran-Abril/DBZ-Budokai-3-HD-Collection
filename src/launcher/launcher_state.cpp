@@ -14,6 +14,7 @@
 #include "i18n.h"
 #include "ui_kit.h"
 #include "update_check.h"
+#include "novas_mods.h"
 #include "../region.h"
 
 #if REX_PLATFORM_WIN32
@@ -35,6 +36,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+REXCVAR_DECLARE(bool, dbz3_tag_team_enabled);
+REXCVAR_DECLARE(bool, dbz3_online_enabled);
 
 namespace dbz3::launcher {
 
@@ -1128,6 +1132,10 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
   const bool tabs_open = ImGui::BeginTabBar("##launcher_tabs");
   ImGui::PopStyleVar(2);
   if (tabs_open) {
+    if (begin_tab(tab_label(ICON_DOWNLOAD, "Nova's Mods", "tab_novas"))) {
+      DrawNovasModsTab();
+      ImGui::EndTabItem();
+    }
     if (begin_tab(tab_label(ICON_VIDEO, i18n::T("Video", "Video"), "tab_video"))) {
       DrawVideoTab();
       ImGui::EndTabItem();
@@ -2164,6 +2172,22 @@ void LauncherDialog::DrawNativeModsTab() {
       "These mods change game progress or behavior. They do not replace models, textures, or AFS files."));
   ImGui::Spacing();
 
+  // Tag Team y Online (beta): vienen de serie, pero quien no los quiera los quita (sin su fila en los menus)
+  {
+    bool tag = REXCVAR_GET(dbz3_tag_team_enabled), online = REXCVAR_GET(dbz3_online_enabled);
+    if (ImGui::Checkbox(i18n::T("Tag Team (beta): equipos de hasta 5 con relevos", "Tag Team (beta): teams of up to 5 with swaps"), &tag)) {
+      rex::cvar::SetFlagByName("dbz3_tag_team_enabled", tag ? "true" : "false");
+      dbz3::settings::SaveUserSettings();
+    }
+    ImGui::TextDisabled("%s", i18n::T("Entrada TAG TEAM bajo el menu principal.", "TAG TEAM entry under the main menu."));
+    if (ImGui::Checkbox(i18n::T("Online (beta): combates por internet o en red local", "Online (beta): internet or local network fights"), &online)) {
+      rex::cvar::SetFlagByName("dbz3_online_enabled", online ? "true" : "false");
+      dbz3::settings::SaveUserSettings();
+    }
+    ImGui::TextDisabled("%s", i18n::T("Entrada ONLINE en el menu de Duelo.", "ONLINE entry in the Duel menu."));
+  }
+  ImGui::Separator();
+
   const auto saves = dbz3::FindNativeSaveFiles();
   if (saves.empty()) {
     ImGui::TextColored(kDragonOrangeDim, "%s", i18n::T(
@@ -2296,6 +2320,65 @@ void LauncherDialog::DrawNativeModsTab() {
     ImGui::TextColored(kOk, "%s",
                        native_mods_status_.c_str());
   }
+  ImGui::EndChild();
+}
+
+void LauncherDialog::DrawNovasModsTab() {
+  ImGui::BeginChild("##novas_mods", ImVec2(0, -kFooterHeight), ImGuiChildFlags_AlwaysUseWindowPadding);
+  StartNovaCatalog();
+  ui::SectionTitle("Nova's Mods");
+  ImGui::TextWrapped("%s", i18n::T(
+      "Mods del proyecto listos para jugar: un clic los descarga e instala, y desde aqui se actualizan. "
+      "Despues se activan y desactivan en la pestana Mods como cualquier otro.",
+      "Project mods, ready to play: one click downloads and installs them, and they update from here. "
+      "Then you turn them on and off in the Mods tab like any other mod."));
+  ImGui::Spacing();
+  const std::string status = NovaStatus();
+  if (status != nova_last_status_) {   // instalado: la pestana Mods vuelve a leer la carpeta
+    nova_last_status_ = status;
+    mods_loaded_ = false;
+  }
+  switch (GetNovaState()) {
+    case NovaState::kNoKey:
+      ImGui::TextColored(kDragonOrangeDim, "%s", i18n::T("Llega en la proxima actualizacion del launcher.",
+                                                         "Coming in the next launcher update."));
+      break;
+    case NovaState::kLoading:
+      ImGui::TextDisabled("%s", i18n::T("Cargando la lista...", "Loading the list..."));
+      break;
+    case NovaState::kFailed:
+      ImGui::TextColored(kDragonOrangeDim, "%s", i18n::T("No se pudo cargar la lista. Comprueba tu conexion.",
+                                                         "The list could not be loaded. Check your connection."));
+      ImGui::SameLine();
+      if (ImGui::Button(i18n::T("Reintentar", "Retry"))) RefreshNovaCatalog();
+      break;
+    case NovaState::kReady:
+      for (const NovaMod& m : NovaCatalog()) {
+        ImGui::PushID(m.id.c_str());
+        ImGui::TextColored(kGold, "%s", m.name.c_str());
+        ImGui::SameLine();
+        const char* kind = m.tipo == "personaje" ? i18n::T("Personaje", "Character")
+                           : m.tipo == "campana" ? i18n::T("Historia", "Story") : "Mod";
+        ImGui::TextDisabled("[%s]  v%s  %.1f MB", kind, m.version.c_str(), double(m.size) / (1024.0 * 1024.0));
+        ImGui::TextWrapped("%s", m.description.c_str());
+        const std::string have = NovaInstalledVersion(m.id);
+        if (NovaBusy(m.id)) {
+          ImGui::BeginDisabled();
+          ImGui::Button(i18n::T("Descargando...", "Downloading..."));
+          ImGui::EndDisabled();
+        } else if (have.empty()) {
+          if (ImGui::Button((std::string(ICON_DOWNLOAD " ") + i18n::T("Instalar", "Install")).c_str())) InstallNovaMod(m);
+        } else if (have != m.version) {
+          if (ImGui::Button((std::string(ICON_UPDATE " ") + i18n::T("Actualizar", "Update")).c_str())) InstallNovaMod(m);
+        } else {
+          ImGui::TextColored(kOk, "%s %s", ICON_OK, i18n::T("Instalado", "Installed"));
+        }
+        ImGui::Separator();
+        ImGui::PopID();
+      }
+      break;
+  }
+  if (!status.empty()) ImGui::TextColored(kOk, "%s", status.c_str());
   ImGui::EndChild();
 }
 

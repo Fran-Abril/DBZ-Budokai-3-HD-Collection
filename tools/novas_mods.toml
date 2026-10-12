@@ -1,0 +1,81 @@
+# Nova's Mods: lo que publica tools/novas_mods.py en el repo privado (y descarga el launcher).
+# Subir "version" vuelve a ofrecer "Actualizar" a quien lo tenga instalado.
+# Textos: nombre_<idioma> / descripcion_<idioma> (es, en, it, de, fr; si falta uno, el ingles).
+
+[[mod]]
+id = "historia_freezer"
+version = "1.0"
+tipo = "campana"
+nombre_es = "Historia de Freezer"
+nombre_en = "Frieza's Story"
+nombre_it = "La storia di Freezer"
+nombre_de = "Freezers Geschichte"
+nombre_fr = "L'histoire de Freezer"
+descripcion_es = "La historia recortada de Freezer en Dragon Universe: viaja por el mapa en su nave, de Namek a la Tierra, con sus combates, dialogos y Mecha Freezer."
+descripcion_en = "Frieza's cut Dragon Universe story: travel the map in his pod, from Namek to Earth, with its own battles, dialogue and Mecha Frieza."
+descripcion_it = "La storia tagliata di Freezer in Dragon Universe: viaggia sulla mappa con la sua navicella, da Namek alla Terra, con battaglie, dialoghi e Mecha Freezer."
+descripcion_de = "Freezers gestrichene Dragon-Universe-Geschichte: reise in seiner Kapsel von Namek zur Erde, mit eigenen Kampfen, Dialogen und Mecha-Freezer."
+descripcion_fr = "L'histoire coupee de Freezer dans Dragon Universe : parcours la carte dans sa capsule, de Namek a la Terre, avec ses combats, dialogues et Mecha Freezer."
+
+[[mod]]
+id = "cut_janemba"
+version = "1.1"
+tipo = "personaje"
+nombre_es = "Janemba"
+nombre_en = "Janemba"
+descripcion_es = "Janemba de Infinite World en su propia plaza: modelo, golpes, tecnicas y modo hiper."
+descripcion_en = "Janemba from Infinite World in his own slot: model, moves, techniques and hyper mode."
+
+[[mod]]
+id = "cut_zarbon"
+version = "1.0"
+tipo = "personaje"
+nombre_es = "Zarbon"
+nombre_en = "Zarbon"
+descripcion_es = "Zarbon con su forma monstruo y los golpes de Budokai 1. Modelos de @ArielPVB."
+descripcion_en = "Zarbon with his monster form and Budokai 1 moves. Models by @ArielPVB."
+
+[[mod]]
+id = "cut_dodoria"
+version = "1.0"
+tipo = "personaje"
+nombre_es = "Dodoria"
+nombre_en = "Dodoria"
+descripcion_es = "Dodoria con los golpes de Budokai 1. Modelo de @ArielPVB."
+descripcion_en = "Dodoria with Budokai 1 moves. Model by @ArielPVB."
+
+[[mod]]
+id = "cut_android19"
+version = "1.0"
+tipo = "personaje"
+nombre_es = "Androide 19"
+nombre_en = "Android 19"
+descripcion_es = "Androide 19 con los golpes de Budokai 1. Modelo de @ArielPVB."
+descripcion_en = "Android 19 with Budokai 1 moves. Model by @ArielPVB."
+
+[[mod]]
+id = "cut_guldo"
+version = "1.0"
+tipo = "personaje"
+nombre_es = "Guldo"
+nombre_en = "Guldo"
+descripcion_es = "Guldo de las Fuerzas Especiales Ginyu. Modelo de @ArielPVB."
+descripcion_en = "Guldo of the Ginyu Force. Model by @ArielPVB."
+
+[[mod]]
+id = "cut_jeice"
+version = "1.0"
+tipo = "personaje"
+nombre_es = "Jeice"
+nombre_en = "Jeice"
+descripcion_es = "Jeice de las Fuerzas Especiales Ginyu. Modelo de @ArielPVB."
+descripcion_en = "Jeice of the Ginyu Force. Model by @ArielPVB."
+
+[[mod]]
+id = "cut_burter"
+version = "1.0"
+tipo = "personaje"
+nombre_es = "Burter"
+nombre_en = "Burter"
+descripcion_es = "Burter de las Fuerzas Especiales Ginyu. Modelo de @ArielPVB."
+descripcion_en = "Burter of the Ginyu Force. Model by @ArielPVB."

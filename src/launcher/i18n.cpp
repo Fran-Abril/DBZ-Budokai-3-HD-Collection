@@ -735,6 +735,10 @@ const Entry* FindEntry(const char* es) {
 
 }  // namespace
 
+const char* LangCode() {
+  return g_ui_lang == 5 ? "es" : g_ui_lang == 6 ? "it" : g_ui_lang == 3 ? "de" : g_ui_lang == 4 ? "fr" : "en";
+}
+
 void SetLanguage(int32_t xbox_language_id) {
   g_ui_lang = xbox_language_id;
 }

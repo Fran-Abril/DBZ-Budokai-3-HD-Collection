@@ -45,6 +45,10 @@ UpdateState GetUpdateState();
 std::string LatestVersion();
 std::string LatestReleaseUrl();
 
+// HTTPS GET (short timeouts, background threads only). `headers` = extra request
+// headers, each ending in CRLF. Returns the body of a 200 response, or "".
+std::string HttpGet(const wchar_t* host, const wchar_t* path, const wchar_t* headers = nullptr);
+
 // Opens a URL in the user's default browser (no-op off Windows).
 void OpenUrl(const std::string& url);
 

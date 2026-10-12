@@ -26,6 +26,7 @@ set(DBZ3_SOURCES
     src/launcher/mod_pipeline.cpp
     src/launcher/i18n.cpp
     src/launcher/update_check.cpp
+    src/launcher/novas_mods.cpp
     src/ingame/menu.cpp
     src/ingame/quick_settings.cpp
     src/ingame/game_style.cpp

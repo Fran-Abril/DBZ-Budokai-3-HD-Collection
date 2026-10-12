@@ -31,6 +31,9 @@
 
 // La ultima IP a la que se unio el jugador: la pantalla ONLINE la trae escrita la proxima vez.
 REXCVAR_DEFINE_STRING(dbz3_net_last_ip, "", "DBZ3/Online", "Last host IP joined from the ONLINE screen");
+// Mods nativos del launcher: se pueden quitar (sin la fila del menu ni su pantalla)
+REXCVAR_DEFINE_BOOL(dbz3_tag_team_enabled, true, "DBZ3/Mods", "TAG TEAM entry in the main menu");
+REXCVAR_DEFINE_BOOL(dbz3_online_enabled, true, "DBZ3/Mods", "ONLINE entry in the Duel menu");
 
 namespace dbz3 {
 bool GameDimmed();
@@ -239,7 +242,7 @@ uint16_t DuelMenuFilter(uint8_t* base, uint16_t real) {
   // menu principal (7 filas, recuerda la ultima): se sigue igual para el piloto de TAG TEAM
   // con la ultima fila (Dragon Arena), abajo pasa a TAG TEAM (el juego no lo ve); arriba vuelve,
   // abajo da la vuelta a la primera fila y A abre la pantalla TAG TEAM
-  if (screen == kMainMenuScreen && !TagTeamWanted()) {
+  if (screen == kMainMenuScreen && !TagTeamWanted() && REXCVAR_GET(dbz3_tag_team_enabled)) {
     g_main_row = MainMenuRow();   // la fila real, si el menu la ha dado
     if (!g_tag_focus.load()) {
       if ((pressed & kDown) && g_main_row.load() == 6) {
@@ -269,7 +272,7 @@ uint16_t DuelMenuFilter(uint8_t* base, uint16_t real) {
     return out();
   }
   if (screen != kMainMenuScreen) g_tag_focus = false;
-  const bool active = screen == kDuelMenuScreen && !g_wanted.load() &&
+  const bool active = screen == kDuelMenuScreen && !g_wanted.load() && REXCVAR_GET(dbz3_online_enabled) &&
                       Session::Get().link() == Link::kIdle;
   if (!active) {
     g_online_focus = false;
@@ -325,7 +328,7 @@ void OnlineTick(uint8_t* base, uint16_t p1_buttons) {
   g_screen = screen;
   g_battle = battle;
   if ((p1_buttons & kX) && !(g_prev_select & kX) && !battle && s.link() != Link::kPlaying) {
-    if (screen == kMainMenuScreen) {
+    if (screen == kMainMenuScreen && REXCVAR_GET(dbz3_tag_team_enabled)) {
       TagTeamOpen();
     }
   }
@@ -416,10 +419,10 @@ void OnlinePanel::OnDraw(ImGuiIO& io) {
       if (Pad() & 0x4000) g_close_req = true;
     }
     if (!g_battle.load() && !TagTeamWanted() && s.link() == Link::kIdle) {
-      if (screen == kMainMenuScreen) {
+      if (screen == kMainMenuScreen && REXCVAR_GET(dbz3_tag_team_enabled)) {
         TagTeamRow(io, g_tag_focus.load());   // US y EU: los menus son iguales
       }
-      if (screen == kDuelMenuScreen && !dbz3_select_live() && !dbz3_select_to_stage()) {
+      if (screen == kDuelMenuScreen && REXCVAR_GET(dbz3_online_enabled) && !dbz3_select_live() && !dbz3_select_to_stage()) {
         OnlineRow(io, g_online_focus.load());
       }
     }

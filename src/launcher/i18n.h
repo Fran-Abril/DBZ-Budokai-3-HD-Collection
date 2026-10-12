@@ -22,4 +22,7 @@ void SetLanguage(int32_t xbox_language_id);
 // checks them against the format specifiers without -Wformat-security noise.
 [[gnu::format_arg(1)]] const char* T(const char* es, const char* en);
 
+// UI language as "es", "it", "de", "fr" or "en" (for data that carries its own texts).
+const char* LangCode();
+
 }  // namespace dbz3::i18n
