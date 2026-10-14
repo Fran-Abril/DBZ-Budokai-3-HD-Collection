@@ -6,6 +6,14 @@ are summarized at the end; the full history (in Spanish) is in
 
 Downloads: [latest release](../../releases/latest).
 
+## v1.4.5 (2026-10-14)
+- HD texture packs (Burst Limit style): images decoded on background threads with alpha-weighted mips already laid out for the GPU; the HD texture is created only once its image is ready (the original is shown meanwhile), single-block upload (row-by-row copies to the upload heap ran at 15 MB/s), pooled upload buffers, 64 MB of new HD textures per frame, texture cache limits from VRAM, RAM budget from free memory (no more paging freezes), learned preload of the textures used in previous sessions, cached pack index (startup 21-63 s -> under 1 s). Worst hitch with a 2.8 GB pack at 3x: 1.1 s -> 0.11 s, including toggling the pack live.
+- Fixed: 1.4.4.5 loaded no texture pack (long-path prefix); x8+ packs; zip installs of big packs; first-run freeze while indexing.
+- Nova's Mods: big mods downloaded in parts, author credit with links, search by author, never offers a downgrade. SSGPrinceVegeta's HD texture pack available.
+- Launcher: transactional zip installs (the previous mod goes to mods_respaldo/), nested mods and multi-mod zips placed automatically, UTF-8 paths (accented/Cyrillic/Japanese names), crash-aware session memory that offers to disable the newest mods, mod conflict line, extra costumes no longer take a slot, clearer roster-build states with "play with the previous characters", search boxes, full IT/DE/FR text.
+- Input: XInput falls back to SDL when no Xbox controller is connected.
+- Modding Kit: `importar.py rehacer` rebuilds a port from its stored recipe; backups before rewriting a character; BOM-tolerant TOML; clearer warnings.
+
 ## v1.4.3.1 "1.4.3 EX" (2026-10-10)
 - Performance: the host frame cap no longer sleeps the GPU thread at 60 (fixed "stuck at 30 FPS" on 60 Hz screens), evenly spaced guest vblanks, launcher capped at 60, process priority above normal, shipped shader/pipeline cache, AFS mod lookups cached and readahead with mods, Vulkan FIFO relaxed.
 - Compatibility: high-performance GPU on hybrid laptops (D3D12 and Vulkan, Optimus/PowerXpress exports in the exe), AMD RDNA "device lost" fix (MaxAs clamp, from Xenia Canary), Intel Arc on the RTV path, automatic Vulkan fallback when Direct3D 12 is unavailable, better auto preset (AMD APUs, 4 GB cards), FidelityFX DLL delay-loaded, bilingual GPU error messages.

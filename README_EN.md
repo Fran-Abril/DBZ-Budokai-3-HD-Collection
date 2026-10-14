@@ -28,7 +28,7 @@ emulator. Native Linux builds use Vulkan and SDL3.
 | Platform | Windows / Linux |
 | Engine | Xbox 360 (ReXGlue SDK) |
 | Genre | 3D fighting |
-| Version | v1.4.4.2 (1.4.4 EX+) |
+| Version | v1.4.5 |
 
 Copyright (c) 2026 **NovaPowers**. Released under the MIT License (see `LICENSE`).
 
@@ -37,6 +37,14 @@ Copyright (c) 2026 **NovaPowers**. Released under the MIT License (see `LICENSE`
 [Mods and new characters](#mods-and-new-characters)
 
 ---
+
+## What's new in 1.4.5
+
+- **HD texture packs without stutter:** HD textures are prepared in the background and swapped in gradually; the game no longer freezes when a menu or a fight loads, and turning the pack on or off (F1) is instant. It adapts to your PC's free RAM and remembers the textures you use so they are ready next time.
+- **[SSGPrinceVegeta](https://x.com/SSGPrinceVegeta)'s HD pack on Nova's Mods:** one click in the launcher downloads and installs it (2.9 GB). Fixed: 1.4.4.5 loaded no texture pack at all.
+- **The launcher looks after your mods:** installing a zip can no longer break the mod you had; mods inside an extra folder and zips with several mods are placed automatically; names with accents, Cyrillic or Japanese work; after a crash it offers to turn off the newest mods; it warns when two mods change the same thing.
+- **Search boxes** in profiles, Nova's Mods (also by author) and new characters; launcher fully translated to Italian, German and French.
+- **Controllers:** with no Xbox controller connected the game switches to SDL on its own (DualSense, Switch...).
 
 ## What's new in 1.4.3 EX
 

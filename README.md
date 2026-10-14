@@ -27,7 +27,7 @@ nativo en Windows y Linux (Vulkan).
 | Plataforma | Windows / Linux |
 | Motor | Xbox 360 (ReXGlue SDK) |
 | Género | Lucha 3D |
-| Versión | v1.4.4.2 (1.4.4 EX+) |
+| Versión | v1.4.5 |
 
 Copyright (c) 2026 **NovaPowers**. Licencia MIT (ver `LICENSE`).
 
@@ -36,6 +36,14 @@ Copyright (c) 2026 **NovaPowers**. Licencia MIT (ver `LICENSE`).
 [Mods y personajes nuevos](#mods-y-personajes-nuevos)
 
 ---
+
+## Novedades de la 1.4.5
+
+- **Pack de texturas HD sin tirones:** las texturas HD se preparan en segundo plano y entran poco a poco; el juego ya no se para al llegar a un menú o a un combate, y encender o apagar el pack (F1) es inmediato. Se ajusta a la RAM libre de tu PC y recuerda las texturas que usas para tenerlas listas la próxima vez.
+- **Pack HD de [SSGPrinceVegeta](https://x.com/SSGPrinceVegeta) en Nova's Mods:** un clic en el launcher y se descarga e instala (2,9 GB). Arreglado: la 1.4.4.5 no cargaba ningún pack de texturas.
+- **El launcher cuida tus mods:** instalar un zip ya no rompe el mod que tenías; mods en una carpeta de más y zips con varios mods se colocan solos; nombres con tildes, ruso o japonés; si la partida se cierra de golpe, ofrece desactivar los mods nuevos; avisa cuando dos mods cambian lo mismo.
+- **Buscadores** en perfiles, Nova's Mods (también por autor) y personajes nuevos; launcher completo en italiano, alemán y francés.
+- **Mandos:** sin mando de Xbox conectado, el juego usa SDL solo (DualSense, Switch...).
 
 ## Novedades de la 1.4.3 EX
 

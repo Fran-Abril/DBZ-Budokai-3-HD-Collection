@@ -63,7 +63,27 @@ El paquete **NO incluye los archivos del juego** (copyright). Aporta los de tu
 > Para extraer los archivos de tu **ISO legal** usa `extract-xiso` (FATX de Xbox
 > 360). Tamaños y SHA-256 de cada archivo en `baserom.md`.
 
-## Novedades de esta release — v1.4.3 (2026-10-09)
+## Novedades de esta release — v1.4.5 (2026-10-14)
+
+- **Pack de texturas HD sin tirones**: las texturas HD se preparan en segundo plano (como
+  Burst Limit) y entran poco a poco; el juego ya no se para al llegar a un menú o a un combate,
+  y encender o apagar el pack (F1) es inmediato. La memoria se ajusta a la RAM libre de tu PC
+  y el juego recuerda las texturas que usas para tenerlas listas la próxima vez.
+- **Pack HD de SSGPrinceVegeta en Nova's Mods**: se descarga e instala con un clic desde el
+  launcher (2,9 GB). Arreglado: la 1.4.4.5 no cargaba ningún pack de texturas.
+- **Launcher que cuida tus mods**: instalar un zip ya no puede romper el mod que tenías; los mods
+  metidos en una carpeta de más y los zips con varios mods (como el pack de personajes) se
+  colocan solos; nombres con tildes, ruso o japonés; si la partida se cierra de golpe, ofrece
+  desactivar los mods nuevos; avisa cuando dos mods cambian lo mismo.
+- **Buscadores** en perfiles, Nova's Mods (también por autor) y personajes nuevos.
+- **Mandos**: si no hay mando de Xbox conectado, el juego usa SDL solo (DualSense, Switch...).
+- **Traducciones**: launcher completo en italiano, alemán y francés.
+- **Kit de modding**: rehacer un port con su receta, copia de seguridad antes de cambiar un
+  personaje y avisos más claros.
+- DLL del runtime: `rexruntime.dll` 11.145.216 B y `rexgpu-xenos.dll` 6.537.216 B,
+  sello 1.4.5: no las mezcles con las de versiones anteriores.
+
+## Release anterior — v1.4.3 (2026-10-09)
 
 - **Definitivas**: Zarbon, Dodoria y Androide 19 (pack de personajes 1.4.3) tienen su
   definitiva de Budokai 1 adaptada a Budokai 3 (P+K+G+E en modo hiper); Androide 19 usa
@@ -128,6 +148,8 @@ rendimiento»**.
 
 | Versión | Fecha | Resumen |
 |---|---|---|
+| v1.4.5 | 2026-10-14 | Pack HD sin tirones (carga en segundo plano, precarga aprendida) y en Nova's Mods, launcher que coloca y protege los mods, buscadores, traducciones IT/DE/FR | 1.4.3 |
+| v1.4.4 | 2026-10-12 | Tag Team y Online (beta) nativos, Nova's Mods, historia de Freezer, selector de transformación (beta), Budokai 2 en el importador | 1.4.3 |
 | v1.4.3 | 2026-10-09 | Definitivas de Budokai 1 adaptadas (Zarbon, Dodoria, Androide 19), Infinite World con movesets propios y modo hiper, copias USA/EUR de los juegos de origen, launcher y Kit más fáciles | 1.4.3 |
 | v1.4.1 | 2026-10-05 | Rendimiento (temporización precisa, sin modo ahorro de Windows, DRED solo tras un fallo), registro de esperas y tirones, aviso EU de personajes nuevos, Kit con Diagnóstico | 1.4.1 |
 | v1.4.0 | 2026-10-04 | Menú rápido en partida (F1 / Back+Start), «Más FPS con FSR», panel de FPS F3, vídeo en vivo, launcher rediseñado con mando y arranque <1 s, personajes nuevos e importador |
