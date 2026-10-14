@@ -62,6 +62,7 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #include "ingame/menu.h"
 #include "ingame/online_panel.h"
 #include "ingame/tagteam_panel.h"
+#include "net/room.h"
 #include <rex/audio/sdl/sdl_audio_system.h>
 #include <rex/input/input_system.h>
 #include <rex/kernel/init.h>
@@ -853,6 +854,7 @@ protected:
         shutting_down_.store(true, std::memory_order_release);
         // salida normal del jugador (OnShutdown no llega: _Exit): sus mods pasan a "ultima partida buena"
         try { dbz3::SessionEnd(true); } catch (...) {}
+        dbz3::net::UpnpCloseMapped();   // _Exit no pasa por atexit: el puerto del router se cierra aqui
         rex::FlushLogging();
         std::_Exit(0);
     }

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -68,6 +69,7 @@ std::string UpnpOpen(uint16_t port, const std::string& local_ip) {
     BSTR desc = SysAllocString(L"DBZ3 HD online");
     IStaticPortMapping* m = nullptr;
     if (SUCCEEDED(maps->Add(port, udp, port, client, VARIANT_TRUE, desc, &m)) && m) {
+      UpnpCloseAtExit(port);   // abierto: se cierra al salir aunque luego falle leer la IP publica
       BSTR e = nullptr;
       if (SUCCEEDED(m->get_ExternalIPAddress(&e)) && e) {
         for (const wchar_t* p = e; *p; ++p) ext += char(*p);
@@ -105,13 +107,20 @@ std::string UpnpOpen(uint16_t, const std::string&) { return {}; }
 void UpnpClose(uint16_t) {}
 #endif
 
+namespace {
+std::atomic<uint16_t> g_mapped{0};
+}
+
+void UpnpCloseMapped() {
+  // en un hilo propio: el de la ventana ya tiene COM en modo STA y CoInitializeEx(MTA) fallaba sin
+  // cerrar nada (el puerto se quedaba abierto en el router, 2026-10-14)
+  if (const uint16_t p = g_mapped.exchange(0)) std::thread(UpnpClose, p).join();
+}
+
 void UpnpCloseAtExit(uint16_t port) {
-  static std::atomic<uint16_t> mapped{0};
-  mapped = port;
+  g_mapped = port;
   static const bool registered = [] {
-    std::atexit([] {
-      if (const uint16_t p = mapped.load()) UpnpClose(p);
-    });
+    std::atexit(UpnpCloseMapped);
     return true;
   }();
   (void)registered;

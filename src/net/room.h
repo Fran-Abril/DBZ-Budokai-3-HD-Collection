@@ -20,6 +20,9 @@ std::string UpnpOpen(uint16_t port, const std::string& local_ip);
 void UpnpClose(uint16_t port);
 // Al cerrar el juego (aunque sea sin pasar por Close) se quita el puerto del router.
 void UpnpCloseAtExit(uint16_t port);
+// Quita ya el puerto abierto (si hay). La salida del juego es std::_Exit, que no pasa por atexit:
+// la llama main.cpp antes (sin esto el puerto se quedaba abierto en el router, 2026-10-14).
+void UpnpCloseMapped();
 
 // STUN (RFC 5389): peticion de 20 bytes y lectura de la respuesta (XOR-MAPPED-ADDRESS).
 std::vector<uint8_t> StunRequest();

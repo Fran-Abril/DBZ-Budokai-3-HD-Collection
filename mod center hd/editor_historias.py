@@ -290,9 +290,11 @@ HIST_GROUPS = [
         (("historia", "altura_mapa"), "int", ("Altura de vuelo en el mapa", "Flight height on the map"),
          ("Altura a la que vuelas por el mapa al volver de un combate. Vacío = 400.",
           "Height you fly at on the map after a fight. Empty = 400."), None),
-        (("historia", "textos_desde"), "int", ("Textos desde *", "Texts from *"),
-         ("Primera entrada de texto nueva de data_usi. Debe quedar lejos de las entradas de otros mods (Freezer = 3600).",
-          "First new text entry in data_usi. Must be far from other mods' entries (Freezer = 3600)."), None),
+        (("historia", "textos_desde"), "int", ("Textos desde", "Texts from"),
+         ("Vacío = automático: la campaña recibe su propio bloque de textos sin pisar el juego ni otros mods. "
+          "A mano, la primera entrada de texto (Freezer = 3600).",
+          "Empty = automatic: the campaign gets its own text block without overwriting the game or other mods. "
+          "By hand, the first text entry (Freezer = 3600)."), None),
         (("historia", "fondo"), "int", ("Fondo de los textos de saga", "Saga text background"),
          ("Panel de fondo de la introducción de cada saga (1411 = el panel verde de Freezer). Vacío = 1411.",
           "Background panel of each saga intro (1411 = Freezer's green panel). Empty = 1411."), None),
@@ -326,8 +328,9 @@ HIST_GROUPS = [
           "Code of the talks on the stage, before each fight. Freezer = 5922."), None),
         (("historia", "dialogos", "contenedor"), "int", ("Charlas: contenedor", "Talks: container"),
          ("#LST de las charlas. Freezer = 1659.", "#LST of the talks. Freezer = 1659."), None),
-        (("historia", "dialogos", "textos_desde"), "int", ("Charlas: textos desde *", "Talks: texts from *"),
-         ("Primera entrada de texto de las charlas. Freezer = 3620.", "First text entry of the talks. Freezer = 3620."), None),
+        (("historia", "dialogos", "textos_desde"), "int", ("Charlas: textos desde", "Talks: texts from"),
+         ("Vacío = automático (junto con «Textos desde»). Freezer = 3620.",
+          "Empty = automatic (together with 'Texts from'). Freezer = 3620."), None),
     ]),
     (("Guiones (solo si sabes lo que haces)", "Scripts (only if you know what you are doing)"), [
         (("historia", "guion_narracion"), "int", ("Guion de narración", "Narration script"),

@@ -27,7 +27,7 @@ $errors = @()
 # 1.4.4.5 + Fase 0 SDK (B29/MODS-ROOT/MAPPINGS/VFS) + packs xN, 2026-10-13.
 # amd_fidelityfx_dx12.dll no cambia desde 2026-08-28.
 # v1.4.5 = 11145216 / 6537216. v1.4.5.1 = indice de packs que se rehace al cambiar la lista.
-$canonVersion = "1.4.5.1"
+$canonVersion = "1.4.5.2"
 $canonSizes = @{
     "rexruntime.dll"          = 11145216
     "rexgpu-xenos.dll"        = 6540288

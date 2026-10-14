@@ -53,12 +53,12 @@ eventos_mapa = { codigos = [2100], retrato = 1463, desde = 4600 }   # "I found s
 traje_mapa = 2                 # en el mapa de Namek Freezer va en su nave (traje 3 del juego: modelo 193)
 altura_mapa = 600            # altura a la que vuelas por el mapa al volver de un combate
 idioma = "en"                # de momento, todos los idiomas con el texto en ingles
-textos_desde = 3600          # entradas nuevas de data_usi (y de cada idioma), lejos de las del mod de personajes
+# textos: campana.py reserva solo su bloque de entradas (sin `textos_desde`), sin pisar otros mods
 fondo = 1411                 # el panel verde de la introduccion de Freezer
 final = { contenedor = 1728, codigo = 1, entrada = 39, fondo = "villano" }   # entrada de final libre; fondo "villano" (Broly) o "heroe"
 combates = { codigo = 5522, contenedor = 2132, plantilla = 709 }   # plantilla: Goku en Namek (escenario de Namek)
 # dialogo en el escenario al empezar cada combate (rival a la izquierda, Freezer a la derecha)
-dialogos = { codigo = 5922, contenedor = 1659, textos_desde = 3620 }   # sus combates (bloque de combates de Freezer, de relleno)
+dialogos = { codigo = 5922, contenedor = 1659 }   # sus combates (bloque de combates de Freezer, de relleno)
 
 # El panel traia una etiqueta de pruebas en japones arriba ("23 Saga de Freezer..."): fuera.
 # Retratos de Freezer 2.a y 3.a forma (1464, 1465): el juego los tiene sin terminar (una textura de
@@ -102,6 +102,8 @@ dialogo_en = ["Frieza... you came in person. You won't get the Dragon Balls.",
               "How naive. Let me beat into you who is in charge."]
 victoria_es = ["Maldito... seas...", "Ahora dime dónde están las Bolas de Dragón."]
 victoria_en = ["Curse... you...", "Now tell me where the Dragon Balls are."]
+mapa_es = ["Vegeta no hablará. Buscaré las Bolas yo mismo."]   # tu frase al volver al mapa
+mapa_en = ["Vegeta won't talk. I'll find the Dragon Balls myself."]
 
 [[capitulo]]
 combate = 655
@@ -126,6 +128,8 @@ dialogo_en = ["Frieza. I am Piccolo, and Nail has given me his power.",
               "Then I'll show you my second form."]
 victoria_es = ["Imposible... esta fuerza...", "Y aún me quedan más transformaciones."]
 victoria_en = ["Impossible... this power...", "And I still have more transformations."]
+mapa_es = ["Ese namekiano sigue en pie. Lo remataré."]   # tu frase al volver al mapa
+mapa_en = ["That Namekian is still standing. I'll finish him."]
 
 [[capitulo]]
 combate = 656
@@ -145,6 +149,8 @@ dialogo_en = ["Another transformation? You don't scare me.",
               "This form will teach you what true terror is."]
 victoria_es = ["No puedo... moverme...", "Arrodíllate ante el emperador del universo."]
 victoria_en = ["I can't... move...", "Kneel before the emperor of the universe."]
+mapa_es = ["Ahora, a por ese mono traidor de Vegeta."]   # tu frase al volver al mapa
+mapa_en = ["Now for that traitor monkey, Vegeta."]
 
 [[capitulo]]
 combate = 657
@@ -167,6 +173,8 @@ dialogo_en = ["I came back from death's door. I am the Super Saiyan!",
               "We'll see how long that smile lasts."]
 victoria_es = ["Ka... Kakarot... véngame...", "El orgullo saiyan no vale nada ante mí."]
 victoria_en = ["Ka... Kakarot... avenge me...", "Saiyan pride is worthless before me."]
+mapa_es = ["Así que el saiyan que esperaba Vegeta ya está aquí..."]   # tu frase al volver al mapa
+mapa_en = ["So the Saiyan Vegeta was waiting for is here..."]
 
 [[capitulo]]
 combate = 658
@@ -190,6 +198,8 @@ dialogo_en = ["Frieza, you've made too many people suffer.",
               "A mere Saiyan can't frighten me."]
 victoria_es = ["Todavía... no he terminado...", "Te queda poco, mono."]
 victoria_en = ["I'm... not finished yet...", "You don't have much left, monkey."]
+mapa_es = ["Sus amigos no dejan de estorbar."]   # tu frase al volver al mapa
+mapa_en = ["His friends keep getting in my way."]
 
 [[capitulo]]
 combate = 659
@@ -210,6 +220,8 @@ dialogo_en = ["Hang on, Goku! I'll hold him off!",
               "Get out of my sight, insect."]
 victoria_es = ["Goku... perdóname...", "Un insecto menos."]
 victoria_en = ["Goku... forgive me...", "One less insect."]
+mapa_es = ["¿Qué es esa luz en el cielo...?"]   # tu frase al volver al mapa
+mapa_en = ["What is that light in the sky...?"]
 
 [[capitulo]]
 combate = 660
@@ -231,6 +243,8 @@ dialogo_en = ["It's over, Frieza. The Spirit Bomb hit you.",
               "Crawling out of that lake has put me in a terrible mood."]
 victoria_es = ["No... me quedan fuerzas...", "Nadie puede vencer a Freezer."]
 victoria_en = ["I have... no strength left...", "No one can defeat Frieza."]
+mapa_es = ["El hijo de ese saiyan también tiene que desaparecer."]   # tu frase al volver al mapa
+mapa_en = ["That Saiyan's son must disappear too."]
 
 [[capitulo]]
 combate = 661
@@ -252,6 +266,8 @@ dialogo_en = ["I'll never forgive what you did to my dad!",
               "An angry child is still a child."]
 victoria_es = ["Papá...", "Tu padre no podrá salvarte."]
 victoria_en = ["Dad...", "Your father can't save you."]
+mapa_es = ["Les enseñaré lo que pasa por desafiarme."]   # tu frase al volver al mapa
+mapa_en = ["I'll show them what happens to those who defy me."]
 
 [[capitulo]]
 combate = 662
@@ -271,6 +287,8 @@ dialogo_en = ["Goku, help me!",
               "Watch closely, Saiyan. This is what happens to your friends."]
 victoria_es = ["¡Gokuuu!", "Ahora, saiyan, ¡enfádate de una vez!"]
 victoria_en = ["Gokuuu!", "Now, Saiyan, get angry already!"]
+mapa_es = ["¿Qué es este poder? ¿Qué le pasa a ese saiyan?"]   # tu frase al volver al mapa
+mapa_en = ["What is this power? What is happening to that Saiyan?"]
 
 [[capitulo]]
 combate = 663
@@ -341,6 +359,8 @@ dialogo_en = ["I've been waiting for you, Frieza.",
               "A boy with a sword? How amusing."]
 victoria_es = ["Mi espada... no ha bastado...", "Ni el futuro puede detenerme."]
 victoria_en = ["My sword... wasn't enough...", "Not even the future can stop me."]
+mapa_es = ["Solo falta Goku. Lo esperaré aquí."]   # tu frase al volver al mapa
+mapa_en = ["Only Goku remains. I'll wait for him here."]
 
 [[capitulo]]
 combate = 666

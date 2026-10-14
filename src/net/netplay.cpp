@@ -70,6 +70,10 @@ enum Msg : uint8_t {
 };
 constexpr uint32_t kChunk = 1024;
 constexpr uint64_t kLostMs = 10000;
+// MODLIST: first u16, total u16, n u8 y n entradas "carpeta|hash" de 256 bytes (con 128 un nombre largo se
+// cortaba y salia como "version distinta"). 5 por paquete: 6+8+5+5*256 = 1299 B cabe en un paquete de
+// Ethernet (1472 B de UDP) sin fragmentar; con 7 (1811 B) un router que tire fragmentos dejaba la lista colgada
+constexpr size_t kModsPerPacket = 5, kModEntry = 256, kMaxMods = 512;
 std::vector<uint8_t> StartPacket(uint32_t seed, const std::vector<uint8_t>& snap);
 
 uint64_t NowMs() {
@@ -162,6 +166,8 @@ std::vector<std::string> ModFingerprints() {
           settings::IsTexturePackFileName(rex::path_to_utf8(it->path().stem())))
         continue;
       const std::string rel = rex::path_to_utf8(fs::relative(it->path(), m, ec));
+      // nombre/version/autor del mod: el launcher deja editarlo y el juego no lo lee
+      if (rel == "manifest.txt") continue;
       // Include previews: conservative false rejection is preferable to false equality.
       files.emplace_back(rel, it->path());
     }
@@ -237,8 +243,16 @@ bool Session::ValidPacket(const std::vector<uint8_t>& pkt) const {
   }
   if (!peer_nonce_ || r.u32() != peer_nonce_ || r.u32() != local_nonce_) return false;
   switch (type) {
-    // F4 uses memory UI only. No save transfer or unbounded diagnostic lists.
-    case kModReq: case kModList: case kSaveReq: case kSaveData: return false;
+    // F4 uses memory UI only. No save transfer. Mod lists: bounded, only before playing.
+    case kSaveReq: case kSaveData: return false;
+    case kModReq:
+      return (state == Link::kWaiting || state == Link::kConnected) && r.ok && r.o == pkt.size();
+    case kModList: {
+      if (state != Link::kWaiting && state != Link::kConnected) return false;
+      const size_t first = r.u16(), total = r.u16(), n = r.u8();
+      return r.ok && total <= kMaxMods && n <= kModsPerPacket && first + n <= total &&
+             r.o + n * kModEntry == pkt.size();
+    }
     case kTeam: {
       if (state != Link::kConnected && state != Link::kStarting) return false;
       const auto n = r.u8();
@@ -343,6 +357,18 @@ bool Session::Recv(std::vector<uint8_t>& pkt) {
                                reinterpret_cast<sockaddr*>(&from), &len));
   if (n < 0) return false;                       // nada pendiente
   pkt.clear();
+  if (role_ == Role::kHost && IsStun(buf, n)) {   // respuesta STUN: nuestra IP publica y puerto
+    uint32_t ip = 0;
+    uint16_t port = 0;
+    std::lock_guard<std::mutex> lock(mu_);
+    if (stun_ready_ && std::memcmp(stun_addr_, &from, sizeof(stun_addr_)) == 0 &&
+        StunMapped(buf, n, &ip, &port) && pub_how_ != "router") {
+      pub_ip_ = ip;
+      pub_port_ = port;
+      pub_how_ = "stun";
+    }
+    return true;
+  }
   if (n < 6 || std::memcmp(buf, kMagic, 4) != 0) return true;
   if (buf[5] != kProto) {
     if (have_peer_ && role_ == Role::kGuest &&
@@ -428,7 +454,46 @@ bool Session::Host(uint16_t port, uint8_t delay, std::string* error) {
   last_recv_ms_ = NowMs();
   static const bool room_ok = RoomSelfTest();   // codigo de sala: ida y vuelta
   if (!room_ok) REXLOG_ERROR("dbz3 online: el codigo de sala no pasa su prueba");
-  // F4 isolated direct-IP/LAN mode: no detached UPnP job.
+  // Internet: el router abre el puerto (UPnP) y, si no puede, un servidor STUN dice la IP publica
+  // (Poll). En un hilo: tarda segundos y no debe parar el juego. Solo da el codigo de sala; la
+  // admision (identidad, nonces, mods) no cambia. Lo de una sesion ya cerrada se descarta (generation_).
+  std::string local = LocalAddresses();
+  local = local.substr(0, local.find(' '));
+  const uint64_t gen = generation_;
+  std::thread([this, port, local, gen] {
+    sockaddr_in stun{};
+    addrinfo hints{}, *res = nullptr;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    const bool resolved = getaddrinfo("stun.l.google.com", "19302", &hints, &res) == 0 && res;
+    if (resolved) {
+      std::memcpy(&stun, res->ai_addr, sizeof(stun));
+      freeaddrinfo(res);
+    }
+    {
+      std::lock_guard<std::recursive_mutex> io(io_mu_);
+      std::lock_guard<std::mutex> lock(mu_);
+      if (gen != generation_) return;
+      if (resolved) {
+        std::memcpy(stun_addr_, &stun, sizeof(stun));
+        stun_ready_ = true;
+      }
+    }
+    const std::string ext = UpnpOpen(port, local);
+    uint32_t ip = 0;
+    if (ext.empty() || inet_pton(AF_INET, ext.c_str(), &ip) != 1) return;
+    UpnpCloseAtExit(port);
+    std::lock_guard<std::recursive_mutex> io(io_mu_);
+    std::lock_guard<std::mutex> lock(mu_);
+    if (gen != generation_) {   // la sesion ya se cerro: el puerto se vuelve a cerrar
+      std::thread(UpnpClose, port).detach();
+      return;
+    }
+    pub_ip_ = ip;
+    pub_port_ = upnp_port_ = port;
+    pub_how_ = "router";
+    REXLOG_INFO("dbz3 online: el router abrio el puerto {} (IP publica {})", port, ext);
+  }).detach();
   return true;
 }
 
@@ -517,7 +582,9 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
       if (peer_nonce_ && peer_nonce_ != nonce) return;
       peer_nonce_ = nonce;
       if (type == kHello && role_ == Role::kHost) SendHello(kHelloAck);
+      if (link_ == Link::kError) return;   // no se pudieron leer los mods propios: ese es el error a ensenar
       if (my_build_.empty()) SendHello(kHello);
+      if (link_ == Link::kError) return;
       if (build != my_build_) {
         Fail(Link::kError, T::T("el otro PC tiene otra version del juego", "the other PC has another game version"));
         return;
@@ -540,22 +607,23 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
           save_ready_ = save_size == 0;
         }
       }
-      mods_match_ = mods == my_mods_hash_;
-      if (!mods_match_) {
-        Fail(Link::kError, "identidad de mods/contenido distinta");
-        return;
-      }
+      // Mods distintos: se queda conectado SIN poder empezar (RequestStart, kStart y TakeStart exigen
+      // mods_match_) y se cruzan las listas para decir cuales faltan y ofrecer bajarlos de Nova's Mods.
+      const bool was = mods_match_.exchange(mods == my_mods_hash_);
+      if (!mods_match_ && (was || link_ == Link::kWaiting))
+        REXLOG_INFO("dbz3 online: mods distintos; se cruzan las listas");
       if (link_ == Link::kWaiting) link_ = Link::kConnected;
       break;
     }
-    case kModReq: {   // lista troceada (20 por paquete)
-      for (size_t i = 0; i < my_mods_.size() || i == 0; i += 20) {
+    case kModReq: {   // lista troceada (kModsPerPacket por paquete)
+      if (my_mods_.size() > kMaxMods) break;
+      for (size_t i = 0; i < my_mods_.size() || i == 0; i += kModsPerPacket) {
         Writer w(kModList);
         w.u16(uint16_t(i));
         w.u16(uint16_t(my_mods_.size()));
-        const size_t n = std::min<size_t>(20, my_mods_.size() - std::min(i, my_mods_.size()));
+        const size_t n = std::min(kModsPerPacket, my_mods_.size() - std::min(i, my_mods_.size()));
         w.u8(uint8_t(n));
-        for (size_t k = 0; k < n; ++k) w.str(my_mods_[i + k], 64);
+        for (size_t k = 0; k < n; ++k) w.str(my_mods_[i + k], kModEntry);
         Send(w.b);
         if (my_mods_.empty()) break;
       }
@@ -565,8 +633,9 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
       const uint16_t first = r.u16(), total = r.u16();
       const uint8_t n = r.u8();
       std::lock_guard<std::mutex> lock(mu_);
-      if (peer_mods_.size() != total) peer_mods_.assign(total, {});
-      for (uint8_t k = 0; k < n && first + k < total; ++k) peer_mods_[first + k] = r.str(64);
+      if (!peer_mods_known_ || peer_mods_.size() != total) peer_mods_.assign(total, {});
+      peer_mods_known_ = true;
+      for (uint8_t k = 0; k < n; ++k) peer_mods_[first + k] = r.str(kModEntry);
       break;
     }
     case kSaveReq: {
@@ -660,7 +729,24 @@ void Session::Poll() {
   }
   const uint64_t now = NowMs();
   if (role_ == Role::kGuest && link_ == Link::kWaiting && now - last_send_ms_ > 300) SendHello(kHello);
-  // No STUN request in isolated direct-IP/LAN mode.
+  // anfitrion sin UPnP: pregunta su IP publica al STUN desde el mismo socket (asi el puerto que ve
+  // el STUN es el que vera el rival)
+  if (role_ == Role::kHost && link_ == Link::kWaiting && stun_tries_ < 5 && now - stun_sent_ms_ > 1500) {
+    sockaddr_in stun{};
+    bool ask = false;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      ask = stun_ready_ && !pub_ip_;
+      if (ask) std::memcpy(&stun, stun_addr_, sizeof(stun));
+    }
+    if (ask) {
+      const auto req = StunRequest();
+      ::sendto(decltype(::socket(0, 0, 0))(sock_), reinterpret_cast<const char*>(req.data()), int(req.size()), 0,
+               reinterpret_cast<const sockaddr*>(&stun), sizeof(stun));
+      stun_sent_ms_ = now;
+      ++stun_tries_;
+    }
+  }
   if (link_ == Link::kConnected || link_ == Link::kStarting) {
     if (role_ == Role::kGuest && !save_ready_ && now - last_send_ms_ > 30) {
       int asked = 0;   // pide hasta 8 trozos que falten
@@ -671,6 +757,13 @@ void Session::Poll() {
     if (role_ == Role::kHost && link_ == Link::kStarting && !launch_ && now - last_send_ms_ > 200) {
       std::lock_guard<std::mutex> lock(mu_);
       Send(StartPacket(seed_, ui_snap_));
+    }
+    if (link_ == Link::kConnected && !mods_match_ && now - mod_req_ms_ > 1000) {
+      std::vector<ModDelta> diff;
+      if (!ModDiff(diff)) {   // su lista aun no esta entera: se pide otra vez (UDP)
+        mod_req_ms_ = now;
+        Send(Writer(kModReq).b);
+      }
     }
     if (now - team_sent_ms_ > 500) {   // mi equipo de Tag Team, cada medio segundo (UDP)
       team_sent_ms_ = now;
@@ -683,7 +776,8 @@ void Session::Poll() {
     if (now - last_recv_ms_ > kLostMs) Fail(Link::kLost, T::T("sin respuesta del otro PC", "no reply from the other PC"));
   }
   if (link_ == Link::kWaiting && role_ == Role::kGuest && now - last_recv_ms_ > 30000) {
-    Fail(Link::kError, T::T("no contesta: revisa la IP, el puerto y el cortafuegos del anfitrion", "no answer: check the IP, the port and the host's firewall"));
+    Fail(Link::kError, T::T("no contesta: revisa el codigo, el puerto y el cortafuegos del anfitrion (en la misma casa, usa su IP local)",
+                            "no answer: check the code, the port and the host's firewall (in the same house, use their local IP)"));
   }
 }
 
@@ -837,8 +931,10 @@ void Session::ResetTransport() {
   dbz3::tag::NetApplied(0, 0); dbz3::tag::NetApplied(1, 0);
   for (auto& s : mine_) s = {};
   for (auto& s : theirs_) s = {};
+  mod_req_ms_ = 0;
   std::lock_guard<std::mutex> lock(mu_);
   peer_mods_.clear();
+  peer_mods_known_ = false;
   error_.clear();
 }
 
@@ -865,18 +961,29 @@ std::string Session::Status() const {
   return "";
 }
 
-std::vector<std::string> Session::ModDiff() const {
+bool Session::ModDiff(std::vector<ModDelta>& out) const {
   std::lock_guard<std::recursive_mutex> io(io_mu_);
   std::lock_guard<std::mutex> lock(mu_);
-  std::vector<std::string> out;
-  auto name = [](const std::string& s) { return s.substr(0, s.find('|')); };
-  for (const auto& m : my_mods_) {
-    if (std::find(peer_mods_.begin(), peer_mods_.end(), m) == peer_mods_.end()) out.push_back("+ " + name(m));
+  out.clear();
+  if (!peer_mods_known_ ||
+      std::any_of(peer_mods_.begin(), peer_mods_.end(), [](const std::string& m) { return m.empty(); }))
+    return false;
+  // "carpeta|hash": por carpeta, para distinguir "te falta" de "otra version"
+  auto split = [](const std::vector<std::string>& v) {
+    std::map<std::string, std::string> m;
+    for (const auto& s : v) m[s.substr(0, s.find('|'))] = s;
+    return m;
+  };
+  const auto mine = split(my_mods_), theirs = split(peer_mods_);
+  for (const auto& [name, full] : theirs) {
+    const auto it = mine.find(name);
+    if (it == mine.end()) out.push_back({ModDelta::kMissing, name});
+    else if (it->second != full) out.push_back({ModDelta::kDifferent, name});
   }
-  for (const auto& m : peer_mods_) {
-    if (!m.empty() && std::find(my_mods_.begin(), my_mods_.end(), m) == my_mods_.end()) out.push_back("- " + name(m));
+  for (const auto& [name, full] : mine) {
+    if (!theirs.count(name)) out.push_back({ModDelta::kExtra, name});
   }
-  return out;
+  return true;
 }
 
 std::string Session::RoomCode(std::string* how) const {

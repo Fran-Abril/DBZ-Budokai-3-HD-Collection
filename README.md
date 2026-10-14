@@ -27,7 +27,7 @@ nativo en Windows y Linux (Vulkan).
 | Plataforma | Windows / Linux |
 | Motor | Xbox 360 (ReXGlue SDK) |
 | Género | Lucha 3D |
-| Versión | v1.4.5.1 |
+| Versión | v1.4.5.2 |
 
 Copyright (c) 2026 **NovaPowers**. Licencia MIT (ver `LICENSE`).
 
@@ -36,6 +36,12 @@ Copyright (c) 2026 **NovaPowers**. Licencia MIT (ver `LICENSE`).
 [Mods y personajes nuevos](#mods-y-personajes-nuevos)
 
 ---
+
+## Novedades de la 1.4.5.2
+
+- **Tag Team (beta):** si te sacan del ring y te queda compañero, entra él y el combate sigue; tras un KO el compañero llega volando con el destello de transformación.
+- **Online (beta):** con mods distintos ya no se corta la conexión: el panel dice qué falta y **INSTALAR LO QUE FALTA** lo baja de Nova's Mods. Vuelven la apertura del puerto del router (UPnP) y la IP pública; desde la misma casa se enseña la IP local.
+- **Kit:** ports oficiales (Goku GT, Vegeta GT, Pan, Baby, Janemba, Trunks espada, Gohan del Futuro) recreables con un clic y ajustes estándar por juego; campañas con textos nuevos que se reparten solos (la historia de Freezer ya lo usa).
 
 ## Novedades de la 1.4.5
 

@@ -24,6 +24,7 @@
 #include "generated/dbz3_init.h"
 #include "../launcher/i18n.h"
 #include "../launcher/launcher_state.h"
+#include "../launcher/novas_mods.h"
 #include "../launcher/settings.h"
 #include "../net/netplay.h"
 #include "../launcher/ui_kit.h"
@@ -447,6 +448,7 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
   const Link link = s.link();
   const bool idle = link == Link::kIdle || link == Link::kError || link == Link::kLost;
   const bool host = s.role() == dbz3::net::Role::kHost;
+  if (idle) synced_ = sync_failed_ = false;
   // Admision: los dos PCs tienen que llevar el mismo programa (exe + runtime + GPU); los mods se
   // comparan aparte en el HELLO. 1 contra 1: Tag Team online sigue sin autorizar (falta el relevo guest).
   std::string admission_reason;
@@ -480,13 +482,42 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
     return true;
   };
 
+  // Mods distintos: que falta en cada PC y que se puede bajar de Nova's Mods (carpeta = id del catalogo)
+  using Delta = dbz3::net::Session::ModDelta;
+  std::vector<Delta> diff;
+  const bool diff_ready = link == Link::kConnected && !s.mods_match() && s.ModDiff(diff);
+  std::vector<dbz3::launcher::NovaMod> installable;
+  if (diff_ready) {
+    const bool need = std::any_of(diff.begin(), diff.end(), [](const Delta& d) { return d.kind != Delta::kExtra; });
+    if (need) dbz3::launcher::StartNovaCatalog();
+    for (const auto& m : dbz3::launcher::NovaCatalog()) {
+      for (const auto& d : diff) {
+        if (d.kind != Delta::kExtra && d.name == m.id) installable.push_back(m);
+      }
+    }
+  }
+  const bool installing = std::any_of(installable.begin(), installable.end(),
+                                      [](const auto& m) { return dbz3::launcher::NovaBusy(m.id); });
+  // terminado (una vez, al acabar las descargas: leer los manifest cada cuadro iba al disco): si alguno no
+  // quedo con la version del catalogo (descarga fallida), se puede reintentar
+  if (synced_ && !installing && was_installing_ &&
+      !std::all_of(installable.begin(), installable.end(), [](const auto& m) {
+        const std::string v = dbz3::launcher::NovaInstalledVersion(m.id);   // "?" = instalado sin version en su manifest
+        return v == m.version || v == "?";
+      })) {
+    synced_ = false;
+    sync_failed_ = true;
+  }
+  was_installing_ = installing;
+
   // filas segun el estado
-  enum Row { kHostRow, kJoinRow, kIpRow, kPortRow, kDelayRow, kStartRow, kCancelRow };
+  enum Row { kHostRow, kJoinRow, kIpRow, kPortRow, kDelayRow, kStartRow, kSyncRow, kCancelRow };
   std::vector<Row> rows;
   if (idle) {
     rows = {kHostRow, kJoinRow, kIpRow, kPortRow, kDelayRow};
   } else {
     if (host) rows.push_back(kStartRow);
+    if (!installable.empty()) rows.push_back(kSyncRow);
     rows.push_back(kCancelRow);
   }
   if (!ip_[0] && !ip_loaded_) {   // la de la ultima vez
@@ -526,6 +557,13 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
       case kIpRow: editing_ = true; break;
       case kStartRow:
         if (can_start) s.RequestStart();
+        break;
+      case kSyncRow:
+        if (installing || synced_) break;   // fila en gris: no se vuelve a instalar (moveria el mod en uso)
+        for (const auto& m : installable) dbz3::launcher::InstallNovaMod(m);   // cada uno en su hilo
+        synced_ = true;
+        sync_failed_ = false;
+        was_installing_ = true;   // aunque la descarga acabe antes del siguiente cuadro, se comprueba
         break;
       case kCancelRow: g_close_req = true; break;
       default: break;
@@ -582,6 +620,12 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
         label = T::T("EMPEZAR", "START");
         disabled = !can_start;
         break;
+      case kSyncRow:
+        label = installing ? T::T("INSTALANDO...", "INSTALLING...")
+                : synced_  ? T::T("INSTALADO", "INSTALLED")
+                           : T::T("INSTALAR LO QUE FALTA", "INSTALL WHAT IS MISSING");
+        disabled = installing || synced_;
+        break;
       case kCancelRow: label = T::T("CANCELAR", "CANCEL"); break;
     }
     if (rows[size_t(i)] == kIpRow && editing_) {
@@ -628,8 +672,8 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
                     "Type the host's room code (press A and use the keyboard; their IP also works), then join.");
         break;
       case kPortRow:
-        say += T::T("Puerto UDP de red local. Esta prueba no abre el router.",
-                    "Local network UDP port. This test does not open your router.");
+        say += T::T("Puerto UDP. Al crear la partida el juego intenta abrirlo en tu router; si no puede, abrelo a mano.",
+                    "UDP port. When you host, the game tries to open it on your router; if it can't, forward it by hand.");
         break;
       default:
         say += T::T("Mas retardo, mas suave con mala conexion: 2-3 en casa, 4-6 por internet.",
@@ -647,14 +691,25 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
         copied_code_ = code;
       }
       say += T::T("\nCodigo de sala: ", "\nRoom code: ") + code + T::T("  (copiado)", "  (copied)");
-      if (how == "router") {
+      if (link == Link::kWaiting && how != "local") {
+        // el codigo lleva la IP publica: desde la misma casa muchos routers no dejan entrar por ella
+        if (lan_.empty() || ImGui::GetTime() - lan_at_ > 5.0) {   // gethostname + DNS: no en cada fotograma
+          lan_ = s.LocalAddresses();
+          lan_ = lan_.substr(0, lan_.find(' '));
+          lan_at_ = ImGui::GetTime();
+        }
+        if (!lan_.empty())
+          say += T::T("\nDesde tu misma casa: ", "\nFrom the same house: ") + lan_;   // Join acepta IP (puerto: el de la fila)
+      }
+      if (link == Link::kConnected && !s.mods_match()) {
+        // sin la nota de red: el bocadillo no da para ella y la lista de mods
+      } else if (how == "router") {
         say += T::T("\nPuerto abierto en tu router: vale por internet.", "\nPort opened on your router: works over the internet.");
       } else if (how == "stun") {
         say += T::T("\nPor internet puede necesitar abrir el puerto UDP en el router.",
                     "\nOver the internet the UDP port may need to be forwarded on the router.");
       } else {
-        say += T::T("\nCodigo de red local; sin apertura automatica del router.",
-                    "\nLocal network code; no automatic router port forwarding.");
+        say += T::T("\nCodigo de red local (buscando la IP publica...).", "\nLocal network code (looking for the public IP...).");
       }
     }
     if (link == Link::kConnected || link == Link::kStarting) {
@@ -663,14 +718,30 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
                            "\nSame mods. Press START: you both go to character select (1P VS 2P).")
                     : T::T("\nMods iguales. Esperando a que el anfitrion empiece...",
                            "\nSame mods. Waiting for the host to start...");
+      } else if (!diff_ready) {
+        say += T::T("\nMods distintos: comparando las listas...", "\nDifferent mods: comparing the lists...");
       } else {
-        say += T::T("\nMods distintos: activad los mismos y volved a conectar.",
-                    "\nDifferent mods: enable the same ones and reconnect.");
         int shown = 0;
-        for (const auto& m : s.ModDiff()) {
-          if (shown++ == 2) break;
-          say += "\n- " + m;
+        for (const auto& d : diff) {
+          if (shown++ == 2) { say += " (+" + std::to_string(diff.size() - 2) + ")"; break; }
+          say += "\n" + std::string(d.kind == Delta::kMissing ? T::T("Te falta: ", "You are missing: ")
+                                    : d.kind == Delta::kDifferent ? T::T("Version distinta: ", "Different version: ")
+                                                                  : T::T("Al otro le falta: ", "The other player is missing: ")) + d.name;
         }
+        const std::string nova = dbz3::launcher::NovaStatus();
+        if (synced_ && !installing) {
+          say += T::T("\nCierra el juego, pulsa JUGAR en el launcher y volved a conectar.",
+                      "\nClose the game, press PLAY in the launcher and reconnect.");
+        } else if (!installable.empty()) {
+          say += T::T("\nPulsa INSTALAR LO QUE FALTA (Nova's Mods).", "\nPress INSTALL WHAT IS MISSING (Nova's Mods).");
+        } else if (std::all_of(diff.begin(), diff.end(), [](const Delta& d) { return d.kind == Delta::kExtra; })) {
+          say += T::T("\nEl otro jugador puede instalarlo desde su pantalla, o desactivalo tu en el launcher.",
+                      "\nThe other player can install it from their screen, or disable it in your launcher.");
+        } else {
+          say += T::T("\nActivad los mismos mods en el launcher y volved a conectar.",
+                      "\nEnable the same mods in the launcher and reconnect.");
+        }
+        if ((installing || sync_failed_) && !nova.empty()) say += "\n" + nova;   // tambien el error de una descarga
       }
     }
   }

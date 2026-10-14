@@ -1,0 +1,68 @@
+# Ports oficiales: la receta de cada personaje portado de otro juego, para recrearlo desde TUS
+# discos (los juegos no se reparten):
+#   python importar.py oficiales                 lista (y si tienes el juego de origen)
+#   python importar.py oficial imp_iw_pan        crea o rehace uno (el anterior va a mods_respaldo/)
+#   python importar.py oficial --todos           todos los que puedas crear
+# Cada receta usa un preset estandar de presets_importar.toml, que respeta el juego de origen
+# (golpes, formas, tecnicas, voces y gritos). "opciones" cambia opciones del preset (como
+# --opcion) y "extra" son claves de personaje.toml que se escriben al final.
+
+[imp_iw_goku_gt]
+nombre = "Goku GT"
+fuente = "iw"
+clave = "c:goku (gt)"
+donante = 0
+preset = "original"
+extra = { fisica = 1 }   # pelo con la fisica de Goku SSJ (el de IW no se porta)
+
+[imp_iw_vegeta_gt]
+nombre = "Vegeta GT"
+fuente = "iw"
+clave = "c:vegeta (gt)"
+donante = 7
+preset = "original"
+
+[imp_iw_pan]
+nombre = "Pan"
+fuente = "iw"
+clave = "c:pan"
+donante = 15
+preset = "original"
+
+[imp_iw_baby]
+nombre = "Baby"
+fuente = "iw"
+clave = "c:super baby vegeta 2"
+donante = 7
+preset = "original"
+
+# El mod publicado usa el modelo y las bocas del port de la comunidad (modelos/janemba.bin); la
+# receta da el modelo de Infinite World con los golpes de ese port.
+[cut_janemba]
+nombre = "Janemba"
+fuente = "iw"
+clave = "c:janemba"
+donante = 10
+despues_de = 37
+preset = "original"
+extra = { formas = 1 }   # sin transformaciones: la 2a forma del port era la de Krillin
+
+[port_trunks_espada_sb2]
+nombre = "Trunks SB2"
+fuente = "sb2"
+clave = "TRX"
+donante = 8
+despues_de = 8
+preset = "original"
+
+# El mod publicado lleva ademas modelos retocados a mano (modelos/t1_*.bin, pelo del SSJ2); la
+# receta da los modelos de Another Road tal cual y su definitiva traducida.
+[port_gohan_futuro]
+nombre = "Future Gohan"
+fuente = "sb2"
+clave = "GHF"
+donante = 4
+despues_de = 4
+preset = "original"
+opciones = ["pose_select=false"]   # el reposo de SB cerraba el select
+extra = { ki_base = [3, 4, 4, 5], icono_ajuste = [1, 0, 0, 3] }

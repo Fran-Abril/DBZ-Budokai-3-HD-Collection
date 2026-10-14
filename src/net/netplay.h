@@ -69,7 +69,13 @@ class Session {
   std::string RoomCode(std::string* how = nullptr) const;
   bool mods_match() const { return mods_match_.load(); }
   bool save_ready() const { return save_ready_.load(); }
-  std::vector<std::string> ModDiff() const;   // mods que solo tiene uno de los dos
+  // Con mods distintos la sesion sigue conectada (sin poder empezar) y se cruzan las listas.
+  struct ModDelta {
+    enum Kind : uint8_t { kMissing, kExtra, kDifferent } kind;   // falta aqui / sobra aqui / otra version
+    std::string name;   // carpeta del mod (= id de Nova's Mods si se instalo desde alli)
+  };
+  // false mientras no ha llegado la lista completa del otro PC.
+  bool ModDiff(std::vector<ModDelta>& out) const;
   uint8_t delay() const { return delay_; }
 
   // ---- hilo del guest (hooks), solo con kPlaying
@@ -138,11 +144,15 @@ class Session {
   std::string pub_how_;
   uint64_t stun_sent_ms_ = 0;
   int stun_tries_ = 0;
+  uint8_t stun_addr_[16] = {};   // sockaddr_in del servidor STUN (lo resuelve el hilo de Host; con mu_)
+  bool stun_ready_ = false;
 
   // emparejamiento
   std::string my_build_, my_mods_hash_;
   std::vector<std::string> my_mods_;      // "nombre|hash" por mod
   std::vector<std::string> peer_mods_;
+  bool peer_mods_known_ = false;          // llego al menos un trozo de su lista (con mu_)
+  uint64_t mod_req_ms_ = 0;
   std::atomic<bool> mods_match_{false};
   std::atomic<bool> save_ready_{false};
   std::vector<uint8_t> save_;            // anfitrion: la suya; invitado: la recibida

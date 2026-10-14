@@ -271,6 +271,85 @@ def lst_entries(b):
     return out
 
 
+TEXT_BLOCK = {}   # [textos] del campana.toml: base y entradas del bloque de texto propio (si es automatico)
+
+
+def native_count(us, afs=None):
+    """Entradas del AFS del juego (u32 en +4): las del mod van detras (el runtime las sirve). Sin `afs`, la
+    mayor de los AFS de textos que haya (data_usi en la US; la EU trae data_eng, data_spn...)."""
+    names = [afs] if afs else [x for afss in LANG_AFS.values() for x in afss]
+    counts = []
+    for n in names:
+        if os.path.exists(afs_path(us, n)):
+            with open(afs_path(us, n), "rb") as f:
+                counts.append(struct.unpack("<I", f.read(8)[4:8])[0])
+    if not counts:
+        raise SystemExit("no encuentro los textos del juego (%s) en %s" % (", ".join(names), us))
+    return max(counts)
+
+
+def reservar_textos(mods, mod, need, us, keep=()):
+    """Bloque de `need` entradas de texto propias de esta campana, detras de las del juego y sin
+    pisar las de otros mods (personajes, otras campanas). Fijo por nombre de mod (crc32) y estable:
+    al rehacer, si su bloque anterior (campana.toml [textos]) sigue libre, se reusa. Los textos que
+    el mod ya no usa (otro bloque, o los de `textos_desde` al pasar a automatico) van a mods_respaldo;
+    `keep`: sus [[texto]] a mano."""
+    import zlib  # noqa: PLC0415
+    native = native_count(us)
+    me = os.path.basename(mod)
+    old = {}
+    try:
+        old = tomllib.load(open(os.path.join(mod, "campana.toml"), "rb")).get("textos", {})
+    except (OSError, ValueError, tomllib.TOMLDecodeError):
+        pass
+    # ocupadas: las de cualquier otro mod, tambien desactivado (al activarlo chocarian), y de este solo sus
+    # [[texto]] a mano (escritos antes en cmd_montar); el resto de las suyas se rehace o va a mods_respaldo
+    taken = set()
+    for d in os.listdir(mods) if os.path.isdir(mods) else []:
+        p = os.path.join(mods, d)
+        if d.startswith(".") or not os.path.isdir(p):
+            continue
+        for afss in LANG_AFS.values():
+            for afs in afss:
+                for e in os.listdir(os.path.join(p, "us", afs)) if os.path.isdir(os.path.join(p, "us", afs)) else []:
+                    if e.isdigit() and (d != me or int(e) in keep):
+                        taken.add(int(e))
+    # las 1024 primeras tras las del juego quedan para _roster (nombres de personajes nuevos, crece al
+    # anadir personajes); cada campana empieza en un hueco de 256 que depende de su nombre
+    lo = native + 1024
+    free = lambda b: b >= lo and b + need <= native + 0x4000 and not any(b + k in taken for k in range(need))
+    b = None
+    try:
+        if int(old.get("entradas", 0)) >= need and free(int(old["base"])):
+            b = int(old["base"])
+    except (ValueError, KeyError):
+        pass
+    if b is None:
+        b = lo + 256 * (zlib.crc32(me.encode("utf-8")) % 59)
+        for _ in range(60):
+            if free(b):
+                break
+            b += 256
+            if b + need > native + 0x4000:
+                b = lo
+        else:
+            raise SystemExit("no quedan entradas de texto libres para %s (demasiados mods con textos)" % me)
+    # los textos que ya no usa (bloque anterior, o los fijos de `textos_desde`) no se quedan en el mod
+    # ocupando entradas (chocarian con los nombres de _roster): van a mods_respaldo
+    import shutil  # noqa: PLC0415
+    import time  # noqa: PLC0415
+    bak = os.path.join(os.path.dirname(os.path.abspath(mods)), "mods_respaldo",
+                       "%s_textos_%s" % (me, time.strftime("%Y%m%d_%H%M%S")))
+    for afss in LANG_AFS.values():
+        for afs in afss:
+            d = os.path.join(mod, "us", afs)
+            for e in os.listdir(d) if os.path.isdir(d) else []:
+                if e.isdigit() and int(e) not in keep and not b <= int(e) < b + need:
+                    os.makedirs(os.path.join(bak, afs), exist_ok=True)
+                    shutil.move(os.path.join(d, e), os.path.join(bak, afs, e))
+    return b
+
+
 def story(cfg, us, mod, work):
     """[historia] + [[capitulo]]: historia como las del juego. Cada capitulo es un combate con su
     dialogo en el escenario antes (op 21) y despues (la escena de victoria, que deja en el mapa la
@@ -284,8 +363,24 @@ def story(cfg, us, mod, work):
     cont = lambda code: int(reg[str(code)])
     code = int(h["codigo"])                    # 5122: saga 1 (Namek), casilla 22
     slot, saga0 = code % 100, (code - 5000) // 100
-    txt, dlg = int(h["textos_desde"]), h["dialogos"]
-    dtxt = int(dlg["textos_desde"])
+    dlg = h["dialogos"]
+    if "textos_desde" in h and "textos_desde" in dlg:   # a mano, como las primeras historias (Freezer 3600/3620)
+        txt, dtxt = int(h["textos_desde"]), int(dlg["textos_desde"])
+        narr, cierre = (lambda j: txt + j), (lambda j: txt + 200 + j)
+        talk_b, vict_b, mapa_b, lleg_b = (lambda i: dtxt + i), (lambda i: dtxt + 40 + i), (lambda i: dtxt + 80 + i), \
+            (lambda i: dtxt + 120 + i)
+    else:
+        # automatico: un bloque propio de 6 grupos (narracion, cierre de saga, charla, victoria, vuelta al
+        # mapa, llegada) de len(capitulos)+1 entradas cada uno, detras de las del juego
+        st = len(chapters) + 1
+        if "textos_desde" in h or "textos_desde" in dlg:
+            rb.log("aviso: `textos_desde` va en [historia] y en dialogos a la vez; con uno solo se reparten solos")
+        base = reservar_textos(os.path.dirname(mod), mod, 6 * st, us, {int(t["entrada"]) for t in cfg.get("texto", [])})
+        TEXT_BLOCK.update(base=base, entradas=6 * st)
+        narr, cierre = (lambda j: base + j), (lambda j: base + st + j)
+        talk_b, vict_b, mapa_b, lleg_b = (lambda i: base + 2 * st + i), (lambda i: base + 3 * st + i), \
+            (lambda i: base + 4 * st + i), (lambda i: base + 5 * st + i)
+        rb.log("textos de la historia: entradas %d-%d (automatico)" % (base, base + 6 * st - 1))
     for k, v in h.get("estilos", {}).items():   # estilos de texto propios de esta historia
         STYLES.setdefault(k, dict(STYLES["dialogo"])).update(v)
     s_narr, s_end = int(h.get("guion_narracion", 0xADB)), int(h.get("guion_final", 2790))
@@ -396,7 +491,7 @@ def story(cfg, us, mod, work):
             # introduccion pasa por una escena del mapa (una frase de tu personaje, `llegada_es`); sin
             # ella el personaje salia volando a ras del suelo. Es la entrada 0 de las escenas del mapa
             # de la saga: la introduccion de la primera saga ([[escena]]) acaba en (20, 0, "codigo.0")
-            bank = dtxt + 120 + i
+            bank = lleg_b(i)
             text(bank, {"mapa_es": c.get("llegada_es", ["¡Adelante!"]), "mapa_en": c.get("llegada_en", ["Let's go!"])},
                  "mapa_", "dialogo")
             maps.setdefault(s, []).append(([3, 3, 2, 2, 0, 0, 2899],
@@ -441,7 +536,7 @@ def story(cfg, us, mod, work):
                 struct.pack_into(">I", new, r + 0x38, 0)
             rb.write_entry(mod, "data_cmn.afs", int(c["combate"]), bytes(new), work)
             n += 1
-        talks.setdefault(s, []).append(talk(dtxt + i, c, "dialogo_"))
+        talks.setdefault(s, []).append(talk(talk_b(i), c, "dialogo_"))
         fights.setdefault(s, []).append(([0, 0, 0, 0, 0, 0, s_fight],
                                          [(16, 0, int(c["combate"])), (15, 0, s_after),
                                           (23, 0, bword(i)),                          # quita su marca
@@ -465,18 +560,18 @@ def story(cfg, us, mod, work):
             hdr = list(src[0])
             music = [e for e in src[1] if e[0] == 13][0]
             pic = (1561, 1562) if villain else (1563, 1564)
-            text(txt + i + 1, nxt, "", "final")
+            text(narr(i + 1), nxt, "", "final")
             tail = [(20, 0, (int(fin["codigo"]) << 16) | k)]
-            b = lst_replace(b, k, hdr, [(10, 0, 0x10000 | (txt + i + 1)), (10, 1, 0x10000 | (txt + i + 1)),
+            b = lst_replace(b, k, hdr, [(10, 0, 0x10000 | narr(i + 1)), (10, 1, 0x10000 | narr(i + 1)),
                                         tuple(music), (11, 0, pic[0]), (12, 0, pic[1]), (11, 1, pic[0]), (12, 1, pic[1])])
             rb.write_entry(mod, "data_cmn.afs", int(fin["contenedor"]), b, work)
             n += 1
         elif nxt.get("saga"):                           # cierre de saga -> guardar -> introduccion
             s2 = place[i + 1][0]
             intro, outro = 100 + 2 * s2, 99 + 2 * s2
-            hdr, ev = narration(txt + 200 + i + 1, nxt, "cierre_")
+            hdr, ev = narration(cierre(i + 1), nxt, "cierre_")
             intros[cont(outro)] = (hdr, ev + [(20, 0, (intro << 16) | slot), (50, 0, 0), (47, 0, int(nxt.get("planeta", 0)))])
-            hdr, ev = narration(txt + i + 1, nxt, "")
+            hdr, ev = narration(narr(i + 1), nxt, "")
             # `objetos_mapa_de` = "104.0": los objetos del mapa (op 29, por nombre) de una introduccion del
             # juego, como hace la de Namek a mano. Sin ellos R1 en la Tierra cerraba el juego (2026-10-12)
             objs = []
@@ -492,7 +587,7 @@ def story(cfg, us, mod, work):
             # de tu personaje (`mapa_es`; guion 2899, el de 5000.8); sin ella el dialogo del combate
             # siguiente se cuelga (sub_820AAD30)
             m = nxt.get("marca", [1, 2, 5462, 54, -5448, 1000])
-            bank = dtxt + 80 + i
+            bank = mapa_b(i)
             line = {"mapa_es": c.get("mapa_es", ["Siguiente."]), "mapa_en": c.get("mapa_en", ["Next."])}
             text(bank, line, "mapa_", "dialogo")
             mapk = len(maps.setdefault(s, []))
@@ -506,9 +601,9 @@ def story(cfg, us, mod, work):
         # la escena de victoria es como 2138.1 del juego: cabecera de 28 B con el guion de despues
         # del combate (op 15 + 1) y sus imagenes en orden fondo, jugador, rival (`fondo_dialogo`:
         # 1536 Namek, 1549 la Tierra); con otro orden el guion libera lo que no es y se cuelga
-        nl = text(dtxt + 40 + i, c, "victoria_", "dialogo")
+        nl = text(vict_b(i), c, "victoria_", "dialogo")
         rival, player = c["retratos"]
-        bank = dtxt + 40 + i
+        bank = vict_b(i)
         # las frases van rival, jugador (como dialogo_*) y el guion habla primero con la imagen 1:
         # el rival en la 1 y tu personaje en la 2 para que cada frase salga con su cara
         ev = ([(10, 0, int(c.get("fondo_dialogo", h.get("fondo_dialogo", 1536)))), (10, 1, int(rival)), (10, 2, int(player)),
@@ -720,6 +815,8 @@ def cmd_montar(a):
             f.write("\n[animacion_mapa]\n" + "".join("%d = %d\n" % kv for kv in sorted(MAP_ANIMS.items())))
         if MAP_SUITS:
             f.write("\n[traje_mapa]\n" + "".join("%d = %d\n" % kv for kv in sorted(MAP_SUITS.items())))
+        if TEXT_BLOCK:   # bloque de textos automatico: al rehacer la campana se reusa (reservar_textos)
+            f.write("\n[textos]\nbase = %d\nentradas = %d\n" % (TEXT_BLOCK["base"], TEXT_BLOCK["entradas"]))
     with open(os.path.join(mod, "manifest.txt"), "w", encoding="utf-8") as f:
         f.write("name=%s\ntype=campana\ndescription=%s\n" % (info.get("nombre", "Campana"),
                                                           info.get("descripcion", "Campana de Dragon Universe")))

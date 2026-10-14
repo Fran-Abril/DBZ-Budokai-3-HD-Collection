@@ -27,12 +27,13 @@ altura_mapa = 400            # altura a la que vuelas por el mapa al volver de u
 # idioma = "en"             # opcional: ese idioma en todos (si aun no hay traducciones)
 # musica_narracion = 135269   # opcional: musica de los paneles de narracion (135269 = la de las introducciones del juego)
 # imagenes_desde = 4510       # opcional: primera entrada libre de data_cmn para tus imagenes ("imagen", "cierre_imagen" y [[imagen]])
-textos_desde = 3600           # entradas nuevas de texto (lejos de las de otros mods)
+# textos: cada campana tiene su propio bloque de entradas de texto, elegido solo (sin pisar las del
+# juego ni las de otros mods). Solo si quieres fijarlo a mano: textos_desde = N aqui y en dialogos.
 fondo = 1411                  # panel de los textos de saga
 final = { contenedor = 1728, codigo = 1, entrada = 39, fondo = "heroe" }   # entrada libre; fondo "heroe" (azul) o "villano" (el de Broly)
 # plantilla: combate del juego que da el escenario (709 Namek; 717 la Tierra)
 combates = { codigo = 5522, contenedor = 2132, plantilla = 709 }
-dialogos = { codigo = 5922, contenedor = 1659, textos_desde = 3620 }
+dialogos = { codigo = 5922, contenedor = 1659 }
 
 # Estilo de los textos (opcional). Son tres: dialogo (charlas), narracion (paneles de saga) y final.
 # Cada uno acepta fuente, tamano, interlineado, ancho, borde, color y color_borde. Los valores de
@@ -70,6 +71,8 @@ dialogo_es = ["Frase del rival.", "Respuesta de tu personaje."]
 dialogo_en = ["Rival line.", "Your character's answer."]
 victoria_es = ["El rival cae.", "Tu personaje remata."]
 victoria_en = ["The rival falls.", "Your character finishes it."]
+mapa_es = ["A por el siguiente."]          # opcional: tu frase al volver al mapa (si no, "Siguiente.")
+mapa_en = ["On to the next one."]
 
 # Capitulo que abre saga nueva: al ganar el anterior salen el cierre, "guardar?" y el mapa nuevo.
 [[capitulo]]

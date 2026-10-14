@@ -1043,6 +1043,11 @@ def preset_name(game, name=None):
     return name or next(iter(pre), "")
 
 
+PRESET_VALUES = {"golpes": ("fuente", "donante"), "voces": ("fuente", "donante", "ninguna"),
+                 "fisica": ("auto", "donante", "ninguna"), "altura": (True, False),
+                 "pose_select": (True, False), "combos_tecnica": (True, False)}
+
+
 def preset_options(game, name=None, overrides=()):
     """Opciones finales: valores por defecto < preset (o el primero de la fuente) < --opcion k=v."""
     opt = dict(PRESET_DEFAULTS)
@@ -1051,6 +1056,15 @@ def preset_options(game, name=None, overrides=()):
         k, _, v = kv.partition("=")
         k, v = k.strip(), v.strip()
         opt[k] = {"true": True, "false": False}.get(v.lower(), v)
+    # una opcion mal escrita no se ignora en silencio (el personaje saldria distinto de lo pedido)
+    for k, v in opt.items():
+        vals = PRESET_VALUES.get(k, ())
+        # booleanos de verdad: un 0/1 del TOML pasaria por `in` (0 == False) y luego se perderia
+        ok = isinstance(v, bool) if True in vals else (not isinstance(v, bool) and v in vals)
+        if k != "descripcion" and not ok:
+            raise SystemExit("opcion no valida: %s=%s (valen: %s)" % (
+                k, v, ", ".join("%s=%s" % (o, "/".join(str(x).lower() for x in vals))
+                                for o, vals in PRESET_VALUES.items())))
     return opt
 
 
@@ -1279,6 +1293,8 @@ def do_import(a):
         keys["preset_opciones"] = json.dumps(";".join(a.opcion))
     # receta completa: "importar.py rehacer <mod>" lo vuelve a crear igual (o con otro preset)
     keys.update(origen_fuente=json.dumps(game), origen_clave=json.dumps(a.clave), origen_donante=str(donor))
+    if a.despues_de is not None:   # su sitio en la rueda (rehacer lo perdia)
+        keys["origen_despues_de"] = str(a.despues_de)
     if getattr(a, "golpes_donante", False) and opt.get("golpes") != "donante":   # --golpes-donante a mano
         keys["origen_golpes_donante"] = "true"
     if keys:
@@ -1337,37 +1353,105 @@ def receta(toml_path):
     ops = [o for o in str(c.get("preset_opciones", "")).split(";") if o]
     return dict(fuente=c["origen_fuente"], clave=c["origen_clave"], donante=int(c["origen_donante"]),
                 id=c.get("id"), nombre=c.get("nombre", ""), preset=pre or None, opcion=ops,
+                despues_de=c.get("origen_despues_de", c.get("despues_de")),
                 golpes_donante=bool(c.get("origen_golpes_donante", False)))
 
 
-def rehacer(a):
+def reimportar(mods, ns):
+    """do_import con el mod que hubiera apartado en mods_respaldo/ (nunca se borra); si falla, vuelve."""
     import shutil  # noqa: PLC0415
     import time  # noqa: PLC0415
     import roster_build as rb  # noqa: PLC0415
-    mods = a.mods or rb.default_mods()
-    d = os.path.join(mods, a.mod)
-    rec = receta(os.path.join(d, "personaje.toml"))
-    if rec is None:
-        raise SystemExit("ERROR: %s no guarda su receta (importado con una version anterior)" % a.mod)
-    # nunca se borra: el mod anterior va a mods_respaldo/ junto a mods/ (como el launcher)
+    d = os.path.join(mods, ns.mod)
     bak = os.path.join(os.path.dirname(os.path.abspath(mods)), "mods_respaldo",
-                       "%s_%s" % (a.mod, time.strftime("%Y%m%d_%H%M%S")))
-    os.makedirs(os.path.dirname(bak), exist_ok=True)
-    shutil.move(d, bak)
-    rb.log("respaldo: %s" % bak)
-    ns = argparse.Namespace(fuente=rec["fuente"], clave=rec["clave"], mod=a.mod, nombre=rec["nombre"] or a.mod,
-                            donante=rec["donante"], id=rec["id"], despues_de=None, carpeta=a.carpeta, mods=mods,
-                            us=a.us, golpes_donante=rec["golpes_donante"], preset=a.preset or rec["preset"],
-                            opcion=rec["opcion"] if a.opcion is None else a.opcion)
+                       "%s_%s" % (ns.mod, time.strftime("%Y%m%d_%H%M%S")))
+    n = 1
+    while os.path.exists(bak) or os.path.exists(bak + "_fallido"):   # dos en el mismo segundo: no anidar
+        bak = bak.rsplit("~", 1)[0] + "~%d" % n
+        n += 1
+    had = os.path.exists(d)
+    if had:
+        os.makedirs(os.path.dirname(bak), exist_ok=True)
+        shutil.move(d, bak)
+        rb.log("respaldo: %s" % bak)
     try:
         return do_import(ns)
     except BaseException:
         # fallo: lo hecho a medias tambien va al respaldo y el mod vuelve como estaba
         if os.path.exists(d):
+            os.makedirs(os.path.dirname(bak), exist_ok=True)
             shutil.move(d, bak + "_fallido")
-        shutil.move(bak, d)
-        rb.log("fallo al rehacer: restaurado el mod anterior")
+        if had:
+            shutil.move(bak, d)
+            rb.log("fallo: restaurado el mod anterior")
         raise
+
+
+def rehacer(a):
+    import roster_build as rb  # noqa: PLC0415
+    mods = a.mods or rb.default_mods()
+    rec = receta(os.path.join(mods, a.mod, "personaje.toml"))
+    if rec is None:
+        raise SystemExit("ERROR: %s no guarda su receta (importado con una version anterior)" % a.mod)
+    ns = argparse.Namespace(fuente=rec["fuente"], clave=rec["clave"], mod=a.mod, nombre=rec["nombre"] or a.mod,
+                            donante=rec["donante"], id=rec["id"], despues_de=rec["despues_de"], carpeta=a.carpeta, mods=mods,
+                            us=a.us, golpes_donante=rec["golpes_donante"], preset=a.preset or rec["preset"],
+                            opcion=rec["opcion"] if a.opcion is None else a.opcion)
+    rc = reimportar(mods, ns)
+    # un port oficial rehecho conserva sus retoques de ports_oficiales.toml (fisica, formas, ki...), que la
+    # receta de personaje.toml no guarda
+    r = oficiales().get(a.mod, {}) if os.path.isfile(OFICIALES) else {}
+    if r.get("extra") and r.get("clave") == rec["clave"] and r.get("fuente") == rec["fuente"]:
+        rb.set_toml_keys(os.path.join(mods, a.mod, "personaje.toml"), {k: toml_value(v) for k, v in r["extra"].items()})
+    return rc
+
+
+OFICIALES = os.path.join(HERE, "ports_oficiales.toml")
+
+
+def oficiales():
+    """{mod: receta} de ports_oficiales.toml (los ports del proyecto, para recrearlos con tus discos)."""
+    import roster_build as rb  # noqa: PLC0415
+    with open(OFICIALES, "rb") as fh:
+        return rb.tomllib.load(fh)
+
+
+def toml_value(v):
+    """Valor de Python -> literal TOML (int, texto, lista o booleano) para set_toml_keys."""
+    return ("true" if v else "false") if isinstance(v, bool) else json.dumps(v, ensure_ascii=False)
+
+
+def oficial(a):
+    import roster_build as rb  # noqa: PLC0415
+    cat = oficiales()
+    mods = a.mods or rb.default_mods()
+    if not a.todos and a.mod not in cat:
+        raise SystemExit("no hay receta oficial '%s' (hay: %s)" % (a.mod, ", ".join(cat)))
+    hechos, fallos = [], []
+    for mod in (list(cat) if a.todos else [a.mod]):
+        r = cat[mod]
+        if not source_path(r["fuente"]):
+            rb.log("%s: falta el juego de origen (%s); se salta" % (mod, r["fuente"]))
+            fallos.append(mod)
+            continue
+        ns = argparse.Namespace(fuente=r["fuente"], clave=r["clave"], mod=mod, nombre=r["nombre"],
+                                donante=r.get("donante"), id=r.get("id"), despues_de=r.get("despues_de"),
+                                carpeta=a.carpeta, mods=mods, us=a.us, golpes_donante=False,
+                                preset=r.get("preset"), opcion=list(r.get("opciones", [])))
+        try:
+            reimportar(mods, ns)
+            if r.get("extra"):
+                rb.set_toml_keys(os.path.join(mods, mod, "personaje.toml"),
+                                 {k: toml_value(v) for k, v in r["extra"].items()})
+            hechos.append(mod)
+        except (Exception, SystemExit) as ex:  # noqa: BLE001
+            if not a.todos:
+                raise
+            rb.log("%s: no se pudo crear (%s)" % (mod, ex))
+            fallos.append(mod)
+    rb.log("ports oficiales: %d creados (%s)%s" % (len(hechos), ", ".join(hechos) or "-",
+                                                   "; sin crear: " + ", ".join(fallos) if fallos else ""))
+    return 0 if hechos or not fallos else 1
 
 
 def main():
@@ -1403,9 +1487,28 @@ def main():
     r.add_argument("--preset", help="otro preset (por defecto, el que uso)")
     r.add_argument("--opcion", action="append", default=None, metavar="CLAVE=VALOR",
                    help="sustituye las opciones guardadas")
+    sub.add_parser("oficiales", help="lista los ports oficiales (ports_oficiales.toml)")
+    o = sub.add_parser("oficial", help="crea o rehace un port oficial desde tus discos")
+    o.add_argument("mod", nargs="?")
+    o.add_argument("--todos", action="store_true")
+    o.add_argument("--mods")
+    o.add_argument("--us")
+    o.add_argument("--carpeta")
     a = ap.parse_args()
     if a.cmd == "rehacer":
         return rehacer(a)
+    if a.cmd == "oficial":
+        if not a.mod and not a.todos:
+            ap.error("oficial: di que mod (o --todos)")
+        return oficial(a)
+    if a.cmd == "oficiales":
+        import roster_build as rb  # noqa: PLC0415
+        mods = rb.default_mods()
+        for mod, r in oficiales().items():
+            # mod, nombre, fuente, listo|falta (juego de origen), instalado 1|0, preset
+            emit("oficial", mod, r["nombre"], r["fuente"], "listo" if source_path(r["fuente"]) else "falta",
+                 1 if os.path.isdir(os.path.join(mods, mod)) else 0, "%s.%s" % (r["fuente"], r.get("preset", "")))
+        return 0
     if a.cmd == "presets":
         for nm, pre in presets(a.fuente).items():
             o = preset_options(a.fuente, nm)

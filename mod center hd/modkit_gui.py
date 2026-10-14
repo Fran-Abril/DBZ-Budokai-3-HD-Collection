@@ -2997,12 +2997,23 @@ class ImporterPage(Page):
         self.preset_cb = ttk.Combobox(g, textvariable=self.preset, values=[preset_label(k) for k in self.preset_keys],
                                       state="readonly", width=40)
         self.preset_cb.grid(row=4, column=1, sticky="w", pady=4)
-        self.v_physics = tk.BooleanVar(value=False)
         self.v_ground = tk.BooleanVar(value=True)
-        ttk.Checkbutton(g, text=T("Física del pelo y la ropa del donante", "Donor hair and cloth physics"),
-                        variable=self.v_physics).grid(row=5, column=1, sticky="w")
-        ttk.Checkbutton(g, text=T("Pies al suelo (ajustar la cadera)", "Feet on the ground (adjust hips)"),
-                        variable=self.v_ground).grid(row=6, column=1, sticky="w")
+        self.v_pose = tk.BooleanVar(value=True)
+        self.v_combo_tech = tk.BooleanVar(value=True)
+        # fisica del pelo y la ropa: la del preset, la del donante o ninguna (--opcion fisica)
+        self.physics_opts = [(T("Física: la del preset", "Physics: as the preset says"), None),
+                             (T("Física del pelo y la ropa del donante", "Donor hair and cloth physics"), "donante"),
+                             (T("Sin física (pelo y ropa rígidos)", "No physics (rigid hair and cloth)"), "ninguna")]
+        self.physics_cb = ttk.Combobox(g, values=[x[0] for x in self.physics_opts], state="readonly", width=40)
+        self.physics_cb.current(0)
+        self.physics_cb.grid(row=5, column=1, sticky="w", pady=2)
+        checks = tk.Frame(g, bg=C["card"])
+        checks.grid(row=6, column=1, sticky="w")
+        ttk.Checkbutton(checks, text=T("Pies al suelo", "Feet on the ground"), variable=self.v_ground).pack(side="left")
+        ttk.Checkbutton(checks, text=T("Pose del select propia", "Own select pose"), variable=self.v_pose).pack(
+            side="left", padx=(12, 0))
+        ttk.Checkbutton(checks, text=T("Técnica al final de los combos", "Technique at combo end"),
+                        variable=self.v_combo_tech).pack(side="left", padx=(12, 0))
         # golpes y voces: lo que diga el preset o cambiarlo aqui (--opcion golpes / voces de importar.py)
         self.moves_opts = [(T("Golpes: los del preset", "Moves: as the preset says"), None),
                            (T("Golpes: los del juego original", "Moves: the original game's"), "fuente"),
@@ -3057,7 +3068,66 @@ class ImporterPage(Page):
         self.c3_status.grid(row=r + 1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self._set_donor_choices(None)
 
+        # 4. ports del proyecto con su receta estandar (ports_oficiales.toml): se recrean con TUS discos
+        c4 = Card(body, "4. " + T("Ports oficiales", "Official ports"))
+        c4.pack(fill="x", pady=(0, 12))
+        hint(c4.body, T("Los personajes portados del proyecto con su receta estándar, que respeta el juego de "
+                        "origen. Se crean desde tus juegos de ps2_games; si ya lo tienes, el anterior va a "
+                        "mods_respaldo.",
+                        "The project's ported characters with their standard recipe, faithful to the source "
+                        "game. They are built from your games in ps2_games; an existing one is moved to "
+                        "mods_respaldo."), bg=C["card"]).pack(anchor="w")
+        self.off_list = tk.Frame(c4.body, bg=C["card"])
+        self.off_list.pack(fill="x", pady=(6, 0))
+        self.off_status = self.status_label(c4.body)
+        self.off_status.pack(fill="x", pady=(6, 0))
+
+    def load_official(self, force=False):
+        if not self.env.tools_installed():
+            return
+        if not force and "oficiales" in self.app.cache:
+            self.render_official()
+            return
+
+        def done(job):
+            rows = [ln.split("\t") for ln in job.text.splitlines() if ln.startswith("oficial\t")]
+            self.app.cache["oficiales"] = [dict(mod=r[1], name=r[2], src=r[3], ready=r[4] == "listo", have=r[5] == "1")
+                                           for r in rows if len(r) >= 6]
+            if self.alive:
+                self.render_official()
+        self.run(cmd_importer(self.env, ["oficiales"]), T("Ports oficiales", "Official ports"), done, quiet=True)
+
+    def render_official(self):
+        for w in self.off_list.winfo_children():
+            w.destroy()
+        rows = self.app.cache.get("oficiales") or []
+        names = {"iw": "Infinite World", "sb1": "Shin Budokai", "sb2": "Another Road", "b1": "Budokai 1",
+                 "b2": "Budokai 2", "sdbh": "Heroes"}
+        for i, r in enumerate(rows):
+            label(self.off_list, r["name"], bg=C["card"]).grid(row=i, column=0, sticky="w", padx=(0, 12), pady=2)
+            hint(self.off_list, names.get(r["src"], r["src"]) + ("" if r["ready"] else T("  (falta el juego)",
+                                                                                         "  (game missing)")),
+                 bg=C["card"]).grid(row=i, column=1, sticky="w", padx=(0, 12))
+            b = ttk.Button(self.off_list, text=T("Rehacer", "Rebuild") if r["have"] else T("Crear", "Create"),
+                           command=lambda m=r["mod"]: self.make_official(m))
+            b.grid(row=i, column=2, sticky="w", pady=2)
+            if not r["ready"]:
+                b.state(["disabled"])
+        if rows:
+            ttk.Button(self.off_list, text=T("Crear todos", "Create all"), command=lambda: self.make_official(None)).grid(
+                row=len(rows), column=2, sticky="w", pady=(8, 0))
+
+    def make_official(self, mod):
+        args = ["oficial"] + ([mod] if mod else ["--todos"]) + ["--mods", self.env.mods] + self.env.us_args()
+
+        def done(job):
+            if self.alive:
+                self.set_status(self.off_status, "ok" if job.rc == 0 else "err", last_line(job.text))
+                self.load_official(True)
+        self.run(cmd_importer(self.env, args), T("Creando ports oficiales", "Creating official ports"), done)
+
     def on_show(self):
+        self.load_official()
         if "sources" not in self.app.cache:
             self.query(False)
         else:
@@ -3231,11 +3301,11 @@ class ImporterPage(Page):
         donor = donor_from_index(self.donor_cb.current(), True)
         i = max(0, self.preset_cb.current())
         extra = ["--preset", self.preset_keys[i]] if i < len(self.preset_keys) else []
-        if self.v_physics.get():
-            extra += ["--opcion", "fisica=donante"]
-        if not self.v_ground.get():
-            extra += ["--opcion", "altura=false"]
-        for cb, opts, key in ((self.moves_cb, self.moves_opts, "golpes"), (self.voice_cb, self.voice_opts, "voces")):
+        for var, key in ((self.v_ground, "altura"), (self.v_pose, "pose_select"), (self.v_combo_tech, "combos_tecnica")):
+            if not var.get():
+                extra += ["--opcion", "%s=false" % key]
+        for cb, opts, key in ((self.moves_cb, self.moves_opts, "golpes"), (self.voice_cb, self.voice_opts, "voces"),
+                              (self.physics_cb, self.physics_opts, "fisica")):
             v = opts[max(0, cb.current())][1]
             if v:
                 extra += ["--opcion", "%s=%s" % (key, v)]

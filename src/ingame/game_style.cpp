@@ -255,8 +255,14 @@ void Speech(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float s, const char* text, flo
     dl->AddRectFilled(p0, p1, IM_COL32(248, 246, 236, 235), 26 * s);
     dl->AddRect(p0, p1, IM_COL32(80, 130, 110, 255), 26 * s, 0, 3 * s);
   }
-  const float size = 40.0f * s, wrap = (p1.x - p0.x) - 70 * s;   // como el Duelo
-  const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, wrap, text);
+  float size = 40.0f * s;
+  const float wrap = (p1.x - p0.x) - 70 * s;   // como el Duelo
+  ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, wrap, text);
+  // texto largo (codigo de sala + red + mods): letra mas pequena hasta que quepa en el bocadillo
+  for (const float room = (p1.y - p0.y) - 24 * s; ts.y > room && size > 24.0f * s;) {
+    size *= 0.92f;
+    ts = font->CalcTextSizeA(size, FLT_MAX, wrap, text);
+  }
   dl->AddText(font, size, ImVec2(p0.x + ((p1.x - p0.x) - ts.x) * 0.5f, p0.y + ((p1.y - p0.y) - ts.y) * 0.5f),
               IM_COL32(25, 25, 25, 255), text, nullptr, wrap);
 }

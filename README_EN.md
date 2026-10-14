@@ -28,7 +28,7 @@ emulator. Native Linux builds use Vulkan and SDL3.
 | Platform | Windows / Linux |
 | Engine | Xbox 360 (ReXGlue SDK) |
 | Genre | 3D fighting |
-| Version | v1.4.5.1 |
+| Version | v1.4.5.2 |
 
 Copyright (c) 2026 **NovaPowers**. Released under the MIT License (see `LICENSE`).
 
@@ -37,6 +37,12 @@ Copyright (c) 2026 **NovaPowers**. Released under the MIT License (see `LICENSE`
 [Mods and new characters](#mods-and-new-characters)
 
 ---
+
+## What's new in 1.4.5.2
+
+- **Tag Team (beta):** if you are knocked out of the ring and still have a partner, they come in and the fight goes on; after a KO the partner flies in with the transformation flash.
+- **Online (beta):** different mods no longer drop the connection: the panel shows what is missing and **INSTALL WHAT IS MISSING** downloads it from Nova's Mods. Router port opening (UPnP) and the public IP are back; playing from the same house shows the local IP.
+- **Kit:** official ports (Goku GT, Vegeta GT, Pan, Baby, Janemba, sword Trunks, Future Gohan) rebuilt in one click with standard per-game presets; campaigns with new text that is allocated automatically (Frieza's story already uses it).
 
 ## What's new in 1.4.5
 

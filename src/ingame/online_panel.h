@@ -34,6 +34,11 @@ class OnlinePanel : public rex::ui::ImGuiDialog {
   bool ip_loaded_ = false;   // ya se puso la IP de la ultima vez
   std::string last_err_;     // error de CREAR/UNIRSE: se ve hasta la siguiente accion (no un fotograma)
   std::string copied_code_;   // ultimo codigo de sala copiado al portapapeles
+  bool synced_ = false;       // ya se pidio instalar lo que faltaba (Nova's Mods)
+  bool sync_failed_ = false;  // esa instalacion no quedo completa (se ensena el error y se puede reintentar)
+  bool was_installing_ = false;  // para comprobar las versiones instaladas una vez al acabar (no cada cuadro)
+  std::string lan_;           // IP local del anfitrion (cacheada: LocalAddresses hace DNS)
+  double lan_at_ = 0;
   int port_ = 7777;
   int delay_ = 3;
 };

@@ -134,6 +134,11 @@ struct Team {
   std::array<uint8_t, 5> form{};   // forma con la que salio cada miembro (vuelve con ella)
   uint32_t spare = 0;              // forma del que entra pedida en el hueco kSpare (0 = ninguna)
   uint32_t restore = 0, restore_at = 0;   // forma a la que vuelve el que entro, y desde que tick
+  // ring out con compañero vivo (cuenta como KO): desde que tick lo pide el juego, y donde aterriza
+  // el que entra (dentro del ring; el caido quedo fuera)
+  uint32_t ring_since = 0, ring_last = 0, ring_at = 0;   // ring_at: tick del ultimo ring out convertido
+  bool ring = false, ring_giveup = false;                // giveup: el relevo no cargo, el ring out sigue
+  float ring_pos[3]{};
 };
 
 std::mutex g_mu;
@@ -151,8 +156,7 @@ std::array<std::map<int, uint32_t>, 2> g_face;  // por lado: ID -> hoja de caras
 // ultimo tick en que el juego uso un banco de efectos de la ranura de tecnica del lado (sub_82092C58):
 // mientras un efecto suyo sigue vivo (rayo en pantalla, choque de poderes) el relevo espera, porque
 // esos efectos buscan sus datos en la ranura del lado y tras el cambio ya serian los del que entra
-std::array<std::atomic<uint32_t>, 2> g_tech_seen{};
-// ticks sin efectos; espera maxima (~10 s). Con 8 ticks un efecto del que salia (sus llamadas al
+std::array<std::atomic<uint32_t>, 2> g_tech_seen{};// ticks sin efectos; espera maxima (~10 s). Con 8 ticks un efecto del que salia (sus llamadas al
 // banco no son seguidas) sobrevivia al relevo, buscaba su id en el banco del que entra y el juego se
 // paraba (2026-10-12: trampa en sub_822F8988 via sub_82096FF0, 20-30 ms despues del relevo)
 constexpr uint32_t kFxQuiet = 90, kFxWaitMax = 600;
@@ -599,6 +603,8 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
     AwayDir(base, x, &dx, &dz);
     const float out[3] = {t.home[0] + dx * kExitBack, t.home[1] + kExitRise, t.home[2] + dz * kExitBack};
     StartSlide(t, 1, t.home, out);
+    // (2026-10-14: una accion nativa para la pose de salida no se puede pedir aqui: en reposo X+6048
+    // es nulo y sub_82103908 lo necesita; haria falta el reproductor de movimientos, sub_82136328)
   } else {
     t.slide = 0;
   }
@@ -714,20 +720,18 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
     SwapAura(ctx, base, SideOf(base, x), t.new_aura);
     t.new_aura = 0;
   }
-  // llegada: el que entra baja desde donde subio el que salio y aterriza en su sitio. Tras un KO
-  // (como Freezer al volver como Mecha Freezer) aparece donde cayo el derrotado con el destello de
-  // transformacion del juego (abajo)
-  if (ko) {
-    if (t.slide == 1) {   // cayo mientras salia de un relevo pedido: aparece en el suelo, no en el aire
-      for (const uint32_t o : {48u, 64u, 80u})
-        for (uint32_t i = 0; i < 3; ++i) StoreF(base, x + o + 4 * i, t.home[i]);
-    }
-    t.slide = 0;
-  } else {
+  // llegada: el que entra baja desde atras y arriba y aterriza en el sitio del que salio. Tras un KO
+  // igual, como en Tenkaichi 3 (el companero llega volando cuando el derrotado ya esta en el suelo), y
+  // ademas con el destello de transformacion del juego (como Freezer al volver como Mecha Freezer,
+  // abajo). Si cayo mientras salia de un relevo pedido, aterriza donde estaba (t.home).
+  {
     float dx, dz;
     AwayDir(base, x, &dx, &dz);
     float home[3];
-    for (uint32_t i = 0; i < 3; ++i) home[i] = t.slide == 1 ? t.home[i] : LoadF(base, x + 64 + 4 * i);
+    for (uint32_t i = 0; i < 3; ++i)
+      home[i] = t.ring ? t.ring_pos[i] : t.slide == 1 ? t.home[i] : LoadF(base, x + 64 + 4 * i);
+    t.ring = false;   // tras un ring out, dentro del ring (no donde quedo el caido)
+    t.ring_at = 0;    // el ring out ya se resolvio: los KO y relevos siguientes van por su camino normal
     const float from[3] = {home[0] + dx * kExitBack, home[1] + kExitRise, home[2] + dz * kExitBack};
     StartSlide(t, 2, from, home);
     StepSlide(base, x, t, g_frame.load());
@@ -822,15 +826,19 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       last_mode = mode;
     }
   }
-  // PRUEBA (DBZ3_TEST_RINGOUT=1): a los 10 s el rival aparece fuera del ring (para medir el ring out)
+  // PRUEBA (DBZ3_TEST_RINGOUT=1): a los 5 s de pelea (no de presentacion: antes saltaba en la intro)
+  // el rival aparece fuera del ring (para medir el ring out)
   static const bool test_ro = std::getenv("DBZ3_TEST_RINGOUT") != nullptr;
-  if (test_ro && battle_frames == 600 && !dbz3::g_guest_eu) {
-    if (const uint32_t x2 = Fighter(base, 1)) {
-      for (const uint32_t o : {48u, 64u, 80u}) StoreF(base, x2 + o, 260.0f);
+  if (test_ro && battle_frames == 300 && !dbz3::g_guest_eu) {
+    // como el juego al caer fuera del ring (medido 2026-10-14): aviso pendiente mgr+35569 = hueco del
+    // GANADOR + 1 (el manejador del modo, sub_820FD678, lo da como "motivo 4"). 1 = gana el jugador 1, cae
+    // el rival. Mover al rival no siempre lo provocaba: no todos los escenarios tienen ring.
+    if (const uint32_t mgr = REX_LOAD_U32(0x823D6CF4)) {
+      REX_STORE_U8(mgr + 35569, 1);
       REXLOG_INFO("dbz3 tag: prueba: rival fuera del ring");
     }
   }
-  if (test_ro) ++battle_frames;
+  if (test_ro && BattleState(base) == 4) ++battle_frames;
   if (test_ko) {
     if (const uint32_t x1 = Fighter(base, 0)) StoreF(base, x1 + kHp, LoadF(base, x1 + kHpMax));
     if (++battle_frames >= 120) {
@@ -841,8 +849,7 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       }
     }
   }
-  if (!dbz3::g_guest_eu && REX_LOAD_U32(0x823F39A0) != 0) g_fight_seen = true;
-  // DIAGNOSTICO (fin por tiempo): cambios de la bandera de pelea y de la accion de cada luchador
+  if (!dbz3::g_guest_eu && REX_LOAD_U32(0x823F39A0) != 0) g_fight_seen = true;  // DIAGNOSTICO (fin por tiempo): cambios de la bandera de pelea y de la accion de cada luchador
   if (static const bool fdiag = std::getenv("DBZ3_TAG_FLAGDIAG") != nullptr; fdiag && !dbz3::g_guest_eu) {
     static uint32_t last_flag = 0xFFFFFFFFu;
     const uint32_t fl = REX_LOAD_U32(0x823F39A0);
@@ -1034,13 +1041,35 @@ void Tick(PPCContext& ctx, uint8_t* base) {
           (t.round_owned || now - t.since < kFxWaitMax)) loaded = false;
       if (t.round_owned) loaded = round::CommitReady(loaded, false, false, false, Free(base, x),
           t.down[size_t(t.active)] || form_quiet, now - fx >= kFxQuiet);
-      if (loaded && Free(base, x)) {
+      // tras un ring out convertido el caido queda tumbado (18/19) sin contexto de accion (X+6048 nulo): no
+      // se le puede levantar (sub_82103908 lo necesita) y el juego vaciaba el hueco del que entra antes de
+      // que se levantara solo (medido 2026-10-14). Sin accion en curso no hay nada a medias: se cambia ya.
+      const bool ring_lying = t.ring_at && t.down[size_t(t.active)] && !REX_LOAD_U32(x + 6048) &&
+                              (act == 18 || act == 19);
+      if (loaded && (Free(base, x) || ring_lying)) {
         FinishSwap(ctx, base, x, t);
         g_net_local &= uint16_t(~bit);
       } else if (!loaded && !online && now - t.since > kLoadTimeout) {
         const uint32_t cam = t.new_cam, model = REX_LOAD_U32(x + kModel0 + 4 * kLoad);
         REXLOG_WARN("dbz3 tag: luchador {:08X}: la carga no termina (camara {:08X} +192 {:08X}, modelo {:08X} +36 {:08X})",
                     x, cam, cam ? REX_LOAD_U32(cam + 192) : 0, model, model ? REX_LOAD_U32(model + 36) : 0);
+        // tras un ring out convertido en relevo: si el que entra no carga, el asalto termina como el ring
+        // out que era (aviso del juego mgr+35569 = hueco del ganador + 1); si no, el caido se quedaba fuera
+        // de juego para siempre
+        if (t.ring_at && !t.ring_giveup) {
+          t.ring_giveup = true;
+          t.ring_at = 0;
+          t.ring = false;
+          if (const uint32_t mgr = dbz3::g_guest_eu ? 0 : REX_LOAD_U32(0x823D6CF4)) {
+            REX_STORE_U8(mgr + 35569, uint8_t((p ^ 1) + 1));
+            // sin relevo pendiente ni carga en curso: si no, el tick siguiente lo volvia a pedir
+            t.phase = Phase::kIdle;
+            t.pending = -1;
+            t.target = -1;
+            REXLOG_WARN("dbz3 tag: el relevo tras el ring out no carga: el asalto termina por ring out");
+            continue;
+          }
+        }
         // se quedaba asi el resto del combate, con el que sale suspendido en el aire (2026-10-12: el modelo
         // del que entra no llego tras un modo hiper a mitad de carga). Se pide otra vez y, si tampoco
         // llega, se cancela el relevo y el que salio vuelve a su sitio.
@@ -1278,6 +1307,96 @@ REX_HOOK_RAW(sub_82100FA8) {
                 r4 ? REX_LOAD_U32(r4) : 0, r4 ? REX_LOAD_U32(r4 + 8) : 0, REX_LOAD_U32(0x823F39A0));
   }
   __imp__sub_82100FA8(ctx, base);
+}
+
+// Ring out del activo con compañero vivo: cuenta como un KO. sub_820FD408 es la entrada del estado 5
+// del combate (la llama la tabla de estados desde sub_820FFFC8 cuando el manejador del modo devuelve
+// un perdedor, ya puesto en mgr+35188; medido 2026-10-14). No se deja pasar al estado 5: el caido
+// vuelve dentro del ring (hacia el centro desde el rival, a su altura) y el compañero entra volando
+// como tras un KO, aterrizando ahi. Si el juego insiste 10 s, o era el ultimo, el ring out sigue.
+static bool RingOutToSwap(uint8_t* base, uint32_t x) {
+  namespace tg = dbz3::tag;
+  std::lock_guard<std::mutex> lock(tg::g_mu);
+  tg::Team* t = tg::TeamOf(base, x);
+  if (!t || t->ring_giveup) return false;
+  const uint32_t now = tg::g_frame.load();
+  if (now - t->ring_last > 2) t->ring_since = now;   // primera peticion de esta salida
+  t->ring_last = now;
+  if (now - t->ring_since > 600) return false;        // ponytail: tope de 10 s; despues, ring out normal
+  if (!t->down[size_t(t->active)] && tg::Alive(*t, t->active) <= 0) return false;   // el ultimo: ring out de verdad
+  // (la secuencia de caida del juego se cierra despues, en RingOutReset, fuera de g_mu)
+  if (t->down[size_t(t->active)]) return true;         // ya contado: sigue el relevo
+  // sitio dentro del ring: a 60 del centro del escenario (0, 0), del lado contrario al rival, a su altura
+  // (con "60 desde el rival hacia el centro" quedaba fuera si el rival estaba en el borde, 2026-10-14)
+  const int side = tg::SideOf(base, x);
+  const uint32_t o = side < 0 ? 0 : tg::Fighter(base, side ^ 1);
+  const float rx = o ? tg::LoadF(base, o + 64) : 0.0f, rz = o ? tg::LoadF(base, o + 72) : 0.0f;
+  const float ry = o ? tg::LoadF(base, o + 68) : tg::LoadF(base, x + 68);
+  float dx = -rx, dz = -rz;
+  const float len = std::sqrt(dx * dx + dz * dz);
+  if (len < 1.0f) { dx = 1.0f; dz = 0.0f; } else { dx /= len; dz /= len; }
+  const float p[3] = {dx * 60.0f, ry, dz * 60.0f};
+  for (const uint32_t off : {48u, 64u, 80u})
+    for (uint32_t i = 0; i < 3; ++i) tg::StoreF(base, x + off + 4 * i, p[i]);
+  std::copy(p, p + 3, t->ring_pos);
+  t->ring = true;
+  t->ring_at = now;
+  t->down[size_t(t->active)] = true;
+  if (t->slide == 1) t->slide = 0;
+  t->ko_at = now;
+  t->seen25 = false;
+  // con un relevo ya cargando (SELECT), ese entra; si no, el siguiente vivo
+  t->pending = t->phase == tg::Phase::kIdle ? tg::Pick(*t, false) : -1;
+  t->pending_until = 0;
+  REXLOG_INFO("dbz3 tag: ring out de {:08X} con compañero vivo: cuenta como KO, entra el miembro {} en {:.1f} {:.1f} {:.1f}",
+              x, t->pending, p[0], p[1], p[2]);
+  return true;
+}
+
+// Cierra la secuencia de "cayo fuera" del juego en el caido, como hace el propio juego al acabarla
+// (sub_820FBB38): sub_8211F650 (el aviso de ring out) le pone X+8184 = FF, y con eso sub_8211C098 lo
+// sigue dando por fuera cada fotograma, aunque vuelva al centro y tras el reinicio del relevo, y el que
+// entraba no llegaba a cargar (medido 2026-10-14). X+8184 = 2 y sub_82116808; su estado de caida
+// (X+6300 = -1 reevaluar, X+8164, X+6852) a cero y el aviso mgr+35569 ya consumido, a 0.
+static void RingOutReset(PPCContext& ctx, uint8_t* base, uint32_t mgr, uint32_t x) {
+  if (REX_LOAD_U8(x + 8184) == 0xFF) {
+    REX_STORE_U8(x + 8184, 2);
+    dbz3::tag::Call(ctx, base, sub_82116808, x, 0);
+  }
+  REX_STORE_U32(x + 6300, 0xFFFFFFFFu);
+  REX_STORE_U8(x + 8164, 0);
+  REX_STORE_U32(x + 6852, 0);
+  REX_STORE_U8(mgr + 35569, 0);
+}
+
+// + sonda (DBZ3_ACT_PROBE=1, US): quien la llama y que hay ya puesto (perdedor, pelea).
+REX_HOOK_RAW(sub_820FD408) {
+  const uint32_t mgr = dbz3::g_guest_eu ? 0 : REX_LOAD_U32(0x823D6CF4);
+  // mgr+35136 = hueco (0/1; -1 = ninguno) del GANADOR; el perdedor es el otro, mgr+2096+8240*(1-hueco)
+  // (medido 2026-10-14 con capturas: cayo fuera el jugador 1 y salio 1 = el rival como WINNER; mgr+35188
+  // es el de un asalto anterior). Motivo mgr+35132: 0/2 caido, 4 aviso de ring out, 1 los dos, 3 tiempo.
+  const int32_t slot = mgr ? int32_t(REX_LOAD_U32(mgr + 35136)) : -1;
+  const uint32_t reason = mgr ? REX_LOAD_U32(mgr + 35132) : 1;
+  const uint32_t loser = (slot == 0 || slot == 1) ? mgr + 2096u + 8240u * uint32_t(1 - slot) : 0;
+  static const bool probe = std::getenv("DBZ3_ACT_PROBE") != nullptr;
+  if (probe && mgr) {
+    REXLOG_INFO("dbz3 ringprobe: lr={:08X} estado={} motivo={} hueco={} perdedor={:08X} x={:.1f} z={:.1f}", uint32_t(ctx.lr),
+                REX_LOAD_U32(mgr + 35128), REX_LOAD_U32(mgr + 35132), int32_t(REX_LOAD_U32(mgr + 35136)), loser,
+                loser ? dbz3::tag::LoadF(base, loser + 64) : 0.0f, loser ? dbz3::tag::LoadF(base, loser + 72) : 0.0f);
+    // estado de "sigue en pie" de cada luchador (sub_8211C098: X+6300 retenido, X+6852 que prueba salto,
+    // X+8153/8154, contador X+6296, X+8184 puerta, vida X+6080)
+    for (const uint32_t f : {mgr + 2096u, mgr + 10336u}) {
+      REXLOG_INFO("dbz3 ringprobe:   X={:08X} 6300={} 6852={} 8153={} 8154={} 6296={} 8184={:02X} vida={:.0f}", f,
+                  int32_t(REX_LOAD_U32(f + 6300)), REX_LOAD_U32(f + 6852), REX_LOAD_U8(f + 8153), REX_LOAD_U8(f + 8154),
+                  int32_t(REX_LOAD_U32(f + 6296)), REX_LOAD_U8(f + 8184), dbz3::tag::LoadF(base, f + 6080));
+    }
+  }
+  if (mgr && REX_LOAD_U32(mgr + 35128) == 4 && loser && (reason == 0 || reason == 2 || reason == 4) &&
+      RingOutToSwap(base, loser)) {
+    RingOutReset(ctx, base, mgr, loser);
+    return;
+  }
+  __imp__sub_820FD408(ctx, base);
 }
 
 REX_HOOK_RAW(sub_82103908) {

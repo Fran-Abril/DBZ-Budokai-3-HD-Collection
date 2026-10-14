@@ -142,9 +142,11 @@ void BeforeBattleSetup(uint8_t* base, uint32_t sel) {
   if (!dbz3::ingame::TagTeamMode() && dbz3::net::Session::Get().link() == dbz3::net::Link::kIdle) ClearDynamicTeams();
   for (int k = 0; k < 2; ++k) {
     std::vector<int> team = DynamicTeam(k);
-    // pruebas: DBZ3_TAG_TEST="0,11" = equipo del jugador 1 en cualquier combate; DBZ3_TAG_TEST2
-    // el del jugador 2 (el rival, para probar el relevo por KO)
-    if (const char* env = std::getenv(k ? "DBZ3_TAG_TEST2" : "DBZ3_TAG_TEST"); env && team.empty()) {
+    // pruebas: DBZ3_TAG_TEST="0,11" = equipo del jugador 1 en cualquier combate (tambien en el modo Tag
+    // Team, por encima de lo elegido en la rueda: la rueda recuerda la ultima casilla y las pruebas
+    // automaticas acababan con otros equipos); DBZ3_TAG_TEST2 el del jugador 2
+    if (const char* env = std::getenv(k ? "DBZ3_TAG_TEST2" : "DBZ3_TAG_TEST"); env && *env) {
+      team.clear();
       for (const char* p = env; *p;) {
         team.push_back(std::atoi(p));
         while (*p && *p != ',') ++p;
