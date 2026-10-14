@@ -836,14 +836,105 @@ void D3D12TextureCache::ClearCache() {
 void D3D12TextureCache::BeginSubmission(uint64_t new_submission_index) {
   TextureCache::BeginSubmission(new_submission_index);
 
-  // Liberar los buffers de subida de packs cuya submission ya termino (la copia
-  // a la textura ya se ejecuto en la GPU).
+  // DBZ3: el indice de packs se construye en segundo plano; cuando acaba, lo cargado
+  // con las originales se rehace para que entren las HD.
+  const bool pack_index_ready = Dbz3TexturePackIndex::Get().active();
+  bool pack_state_changed = false;
+  if (pack_index_ready != pack_index_seen_) {
+    pack_index_seen_ = pack_index_ready;
+    pack_state_changed = true;
+  }
+  // DBZ3: pack HD encendido/apagado en vivo (F1): se rehacen todas las texturas (las HD
+  // ya decodificadas estan en RAM y entran repartidas en varios frames, ver abajo).
+  if (pack_index_ready) {
+    const bool packs_on = Dbz3TexturePacksOn();
+    if (packs_on != packs_on_seen_) {
+      packs_on_seen_ = packs_on;
+      pack_state_changed = true;
+    }
+  }
+  if (pack_state_changed) {
+    pack_factor_cache_.clear();
+    pack_entry_cache_.clear();
+    pack_waiting_.clear();
+    pack_retired_keys_.clear();
+    pack_retire_now_.clear();
+    command_processor_.ClearCaches();
+    // Limites de memoria de la cache con pack (como Burst Limit): 1/4 y 1/2 de la VRAM.
+    const bool pack_on = pack_index_ready && packs_on_seen_;
+    const uint64_t vram_mb = video_memory_budget_bytes() >> 20;
+    pack_memory_limit_soft_mb_ =
+        !pack_on ? 0 : vram_mb ? uint32_t(std::clamp<uint64_t>(vram_mb / 4, 512, 4096)) : 1024;
+    pack_memory_limit_hard_mb_ =
+        !pack_on ? 0 : vram_mb ? uint32_t(std::clamp<uint64_t>(vram_mb / 2, 1024, 8192)) : 2048;
+    if (pack_on) {
+      REXGPU_INFO("dbz3: pack HD: cache de texturas hasta {}/{} MB (VRAM {} MB)",
+                  pack_memory_limit_soft_mb_, pack_memory_limit_hard_mb_, vram_mb);
+    }
+  }
+  // Texturas que esperaban su imagen HD: las que ya la tienen en RAM se recrean a su tamano
+  // (hasta ~64 MB por submission); las ilegibles se quedan con la original.
+  pack_grant_bytes_ = 0;
+  for (const TextureKey& key : pack_retire_now_) {
+    pack_factor_cache_.erase(key);
+    pack_entry_cache_.erase(key);
+    RetireTexture(key);
+  }
+  pack_retire_now_.clear();
+  static uint32_t pack_wait_round = 0;
+  const uint64_t vram_budget_now = pack_waiting_.empty() ? 0 : video_memory_budget_bytes();
+  const bool vram_full = vram_budget_now != 0 && video_memory_usage_bytes() * 100 >= vram_budget_now * 92;
+  const bool rerequest = ++pack_wait_round % 60 == 0;
+  if (!pack_waiting_.empty() && !vram_full) {
+    const Dbz3TexturePackIndex& index = Dbz3TexturePackIndex::Get();
+    for (auto it = pack_waiting_.begin(); it != pack_waiting_.end();) {
+      if (index.IsBroken(it->second)) {
+        it = pack_waiting_.erase(it);
+        continue;
+      }
+      const Dbz3TexturePackEntry* entry = index.Find(it->second);
+      if (entry == nullptr) {
+        it = pack_waiting_.erase(it);
+        continue;
+      }
+      if (!index.IsDecoded(it->second)) {
+        if (rerequest) {
+          index.TryDecoded(*entry);   // por si la LRU la solto antes de llegar aqui (sin duplicar)
+        }
+        ++it;
+        continue;
+      }
+      const uint64_t bytes = Dbz3PackGpuBytes(*entry);
+      if (pack_grant_bytes_ != 0 && pack_grant_bytes_ + bytes > kDbz3PackGrantBytesPerSubmission) {
+        break;
+      }
+      pack_grant_bytes_ += bytes;
+      pack_factor_cache_.erase(it->first);
+      pack_entry_cache_.erase(it->first);
+      if (RetireTexture(it->first)) {
+        pack_retired_keys_.insert(it->first);
+      }
+      it = pack_waiting_.erase(it);
+    }
+  }
+
+  // Buffers de subida de packs cuya submission ya termino (la copia a la textura ya se
+  // ejecuto en la GPU): vuelven a la reserva para la siguiente subida, o se liberan.
   if (!pending_pack_uploads_.empty()) {
+    constexpr uint64_t kPackUploadPoolBytes = uint64_t(256) << 20;
     const uint64_t completed = command_processor_.GetCompletedSubmission();
-    pending_pack_uploads_.erase(
-        std::remove_if(pending_pack_uploads_.begin(), pending_pack_uploads_.end(),
-                       [completed](const auto& e) { return e.first <= completed; }),
-        pending_pack_uploads_.end());
+    for (auto it = pending_pack_uploads_.begin(); it != pending_pack_uploads_.end();) {
+      if (it->first > completed) {
+        ++it;
+        continue;
+      }
+      const uint64_t size = it->second->GetDesc().Width;
+      if (pack_upload_pool_bytes_ + size <= kPackUploadPoolBytes) {
+        pack_upload_pool_bytes_ += size;
+        pack_upload_pool_.push_back(std::move(it->second));
+      }
+      it = pending_pack_uploads_.erase(it);
+    }
   }
 
   // ExecuteCommandLists is a full UAV and aliasing barrier.
@@ -2617,10 +2708,13 @@ uint32_t D3D12TextureCache::GetTexturePackFactor(const TextureKey& key) const {
   if (cached != pack_factor_cache_.end()) {
     return cached->second;
   }
-  uint8_t factor = 0;
+  uint32_t factor = 0;
   const Dbz3TexturePackEntry* entry = nullptr;
   do {
     if (!Dbz3TexturePackIndex::Get().active()) {
+      break;
+    }
+    if (!Dbz3TexturePacksOn()) {
       break;
     }
     // Mismas restricciones estructurales que el upscale: solo 2D simples y con
@@ -2672,19 +2766,52 @@ uint32_t D3D12TextureCache::GetTexturePackFactor(const TextureKey& key) const {
       entry = nullptr;
       break;
     }
+    // Cualquier factor entero (x5, x8...): el recurso se crea a guest x factor =
+    // tamano del pack, y el cargador ya limita la imagen a 16384 (maximo 2D).
     const uint32_t fx = entry->width / width;
     const uint32_t fy = entry->height / height;
-    if (fx != fy || fx < 1 || fx > 4) {
+    if (fx != fy || fx < 1) {
       static int factor_logged = 0;
       if (factor_logged < 12) {
         ++factor_logged;
-        REXGPU_WARN("dbz3: pack '{}' factor invalido ({}x{} vs {}x{}; max x4)",
+        REXGPU_WARN("dbz3: pack '{}' proporcion distinta ({}x{} vs {}x{}; mismo factor en ancho y alto)",
                     entry->pack_name, entry->width, entry->height, width, height);
       }
       entry = nullptr;
       break;
     }
-    factor = uint8_t(fx);
+    // Guardia de VRAM (la misma del upscale): con la memoria de video casi llena, las
+    // texturas NUEVAS del pack se quedan en la original en vez de hacer paginar al driver
+    // (FPS hundidos de forma sostenida). Las ya concedidas no cambian.
+    if (fx > 1) {
+      const uint64_t vram_budget = video_memory_budget_bytes();
+      if (vram_budget != 0 && video_memory_usage_bytes() * 100 >= vram_budget * 92) {
+        static bool vram_logged = false;
+        if (!vram_logged) {
+          vram_logged = true;
+          REXGPU_WARN("dbz3: pack '{}': VRAM casi llena, las texturas nuevas esperan con la "
+                      "original hasta que haya sitio", entry->pack_name);
+        }
+        pack_waiting_[key] = entry->hash;   // se reintenta cuando baje (BeginSubmission)
+        entry = nullptr;
+        break;
+      }
+    }
+    // Como Burst Limit: sin la imagen en RAM (o con el reparto de esta submission ya
+    // gastado) la textura se crea normal, con la original, y se recrea cuando llegue.
+    if (pack_retired_keys_.erase(key) == 0) {
+      const Dbz3TexturePackIndex& index = Dbz3TexturePackIndex::Get();
+      const uint64_t bytes = Dbz3PackGpuBytes(*entry);
+      if (!index.IsDecoded(entry->hash) ||
+          (pack_grant_bytes_ != 0 && pack_grant_bytes_ + bytes > kDbz3PackGrantBytesPerSubmission)) {
+        index.TryDecoded(*entry);  // a la cola de los hilos de fondo, sin esperar
+        pack_waiting_[key] = entry->hash;
+        entry = nullptr;
+        break;
+      }
+      pack_grant_bytes_ += bytes;
+    }
+    factor = fx;
   } while (false);
   pack_factor_cache_.emplace(key, factor);
   pack_entry_cache_.emplace(key, entry);
@@ -2707,6 +2834,8 @@ const Dbz3TexturePackEntry* D3D12TextureCache::FindPackEntry(const TextureKey& k
 }
 
 bool D3D12TextureCache::UploadPackTextureData(D3D12Texture& texture, const TextureKey& key) {
+  using dbz3_clock = std::chrono::steady_clock;
+  const auto dbz3_t0 = dbz3_clock::now();
   const Dbz3TexturePackEntry* entry = FindPackEntry(key);
   if (entry == nullptr) {
     return false;
@@ -2720,52 +2849,75 @@ bool D3D12TextureCache::UploadPackTextureData(D3D12Texture& texture, const Textu
     if (LinearizeGuestTexture(key, key.GetGuestLayout(), key.base_page << 12, linear)) {
       entry = Dbz3PackRevalidate(entry, XXH3_64bits(linear.data(), linear.size()));
       if (entry == nullptr) {
-        return false;
+        // Ya no es del pack: se recrea en la proxima submission como textura normal (cargar
+        // la original en el recurso del pack necesitaba la pasada de upscale, lenta, o
+        // rompia el dispositivo en los x1). Mientras, un frame con la imagen anterior.
+        pack_retire_now_.push_back(key);
+        return true;
       }
     }
   }
-  // Decodificada una sola vez (cache de RAM + precarga, dbz3_texture_pack.cpp).
-  const auto image = Dbz3TexturePackIndex::Get().Decoded(*entry);
-  if (!image || image->width != entry->width || image->height != entry->height) {
-    static int decode_logged = 0;
-    if (decode_logged < 8) {
-      ++decode_logged;
-      REXGPU_WARN("dbz3: pack '{}': no se pudo decodificar '{}'", entry->pack_name,
-                  entry->path.filename().string());
-    }
+  // La textura HD solo se crea con su imagen en RAM (GetTexturePackFactor), asi que esto es
+  // casi siempre inmediato; si el LRU la echo justo entre medias, se decodifica aqui (raro).
+  const Dbz3TexturePackIndex& index = Dbz3TexturePackIndex::Get();
+  auto image = index.TryDecoded(*entry);
+  const bool decoded_here = !image;
+  if (!image) {
+    image = index.Decoded(*entry);
+  }
+  if (!image) {
     return false;
   }
+  const auto dbz3_t1 = dbz3_clock::now();
   ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
-  const uint32_t levels = key.mip_max_level + 1;
-  // Cadena de mips (box filter) con pitch y offsets alineados a 512 B, que es lo
-  // que exige el footprint de las copias de D3D12.
-  std::vector<uint8_t> buffer;
+  // Mips ya hechos por el hilo de fondo; aqui solo se disponen con pitch y offsets
+  // alineados a 512 B (lo que exige el footprint de las copias de D3D12) y se copian.
   std::vector<Dbz3PackLevel> layouts;
   const uint32_t pack_width = image->width, pack_height = image->height;
-  Dbz3BuildPackMips(image->rgba, pack_width, pack_height, levels, 512, buffer, layouts,
-                    Dbz3PackSwapsRedBlue(key.format));
-  const uint64_t total_size = buffer.size();
-  D3D12_RESOURCE_DESC buffer_desc = {};
-  buffer_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-  buffer_desc.Width = total_size;
-  buffer_desc.Height = 1;
-  buffer_desc.DepthOrArraySize = 1;
-  buffer_desc.MipLevels = 1;
-  buffer_desc.SampleDesc.Count = 1;
-  buffer_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-  buffer_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+  const uint64_t total_size = Dbz3PackLayout(*image, key.mip_max_level + 1, layouts);
+  const uint32_t levels = uint32_t(layouts.size());
+  // Un buffer de la reserva si hay uno que sirva (sin pasarse mucho de tamano); si no, uno
+  // nuevo (redondeado a 64 KB).
   Microsoft::WRL::ComPtr<ID3D12Resource> upload;
-  if (FAILED(device->CreateCommittedResource(
-          &ui::d3d12::util::kHeapPropertiesUpload, D3D12_HEAP_FLAG_NONE, &buffer_desc,
-          D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)))) {
-    return false;
+  {
+    size_t best = SIZE_MAX;
+    for (size_t i = 0; i < pack_upload_pool_.size(); ++i) {
+      const uint64_t width = pack_upload_pool_[i]->GetDesc().Width;
+      if (width >= total_size && width <= std::max(total_size * 2, total_size + (uint64_t(4) << 20)) &&
+          (best == SIZE_MAX || width < pack_upload_pool_[best]->GetDesc().Width)) {
+        best = i;
+      }
+    }
+    if (best != SIZE_MAX) {
+      upload = std::move(pack_upload_pool_[best]);
+      pack_upload_pool_.erase(pack_upload_pool_.begin() + best);
+      pack_upload_pool_bytes_ -= upload->GetDesc().Width;
+    }
   }
+  if (!upload) {
+    D3D12_RESOURCE_DESC buffer_desc = {};
+    buffer_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer_desc.Width = rex::align(total_size, uint64_t(64) << 10);
+    buffer_desc.Height = 1;
+    buffer_desc.DepthOrArraySize = 1;
+    buffer_desc.MipLevels = 1;
+    buffer_desc.SampleDesc.Count = 1;
+    buffer_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    buffer_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+    if (FAILED(device->CreateCommittedResource(
+            &ui::d3d12::util::kHeapPropertiesUpload, D3D12_HEAP_FLAG_NONE, &buffer_desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)))) {
+      return false;
+    }
+  }
+  const auto dbz3_t2 = dbz3_clock::now();
   uint8_t* mapped = nullptr;
   if (FAILED(upload->Map(0, nullptr, reinterpret_cast<void**>(&mapped)))) {
     return false;
   }
-  std::memcpy(mapped, buffer.data(), buffer.size());
+  Dbz3PackCopyLevels(*image, total_size, mapped, Dbz3PackSwapsRedBlue(key.format));
   upload->Unmap(0, nullptr);
+  const auto dbz3_t3 = dbz3_clock::now();
 
   ID3D12Resource* texture_resource = texture.resource();
   command_processor_.PushTransitionBarrier(
@@ -2792,11 +2944,18 @@ bool D3D12TextureCache::UploadPackTextureData(D3D12Texture& texture, const Textu
   }
   pending_pack_uploads_.emplace_back(command_processor_.GetCurrentSubmission(), upload);
   g_dbz3_pack_uploads.fetch_add(1, std::memory_order_relaxed);
+  Dbz3PackNoteUsed(entry->hash);
   static int upload_logged = 0;
   if (upload_logged < 48) {
     ++upload_logged;
-    REXGPU_INFO("dbz3: pack '{}' subido {}x{} ({} niveles, {} B)", entry->pack_name, pack_width,
-                pack_height, levels, total_size);
+    const auto ms = [](auto a, auto b) {
+      return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count() / 1000.0;
+    };
+    REXGPU_INFO("dbz3: pack '{}' subido {}x{} ({} niveles, {} B; {:.1f} ms: imagen {:.1f}{}, "
+                "buffer {:.1f}, copia {:.1f})",
+                entry->pack_name, pack_width, pack_height, levels, total_size,
+                ms(dbz3_t0, dbz3_clock::now()), ms(dbz3_t0, dbz3_t1),
+                decoded_here ? " (decodificada aqui)" : "", ms(dbz3_t1, dbz3_t2), ms(dbz3_t2, dbz3_t3));
   }
   return true;
 }

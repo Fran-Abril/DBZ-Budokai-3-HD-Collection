@@ -13,11 +13,14 @@
 #include "../launcher/i18n.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <random>
+#include <stdexcept>
 #include <thread>
 
 #include <rex/filesystem.h>
@@ -41,17 +44,29 @@
 #include <unistd.h>
 #endif
 
+// Existing Tag Team control bits; no resource or swap state is touched here.
+namespace dbz3::tag { extern std::atomic<uint16_t> g_net_local; }
 namespace dbz3::net {
 namespace {
 
 namespace fs = std::filesystem;
+bool HexDigest(const std::string& s, size_t width = 40) {
+  return s.size() == width && std::all_of(s.begin(), s.end(), [](char x) {
+    return (x >= '0' && x <= '9') || (x >= 'a' && x <= 'f');
+  });
+}
+uint32_t NewNonce() {
+  std::random_device rd;
+  uint32_t n = (uint32_t(rd()) ^ uint32_t(rd() << 1));
+  return n ? n : 1;
+}
 namespace T = dbz3::i18n;
 
-constexpr uint8_t kProto = 2;   // 2: HELLO lleva la region (US/EU); los PCs con 1 se ignoran
+constexpr uint8_t kProto = 3;   // F4: full identity, challenge and directional session nonces
 constexpr char kMagic[4] = {'D', 'B', 'Z', '3'};
 enum Msg : uint8_t {
   kHello = 1, kHelloAck, kModReq, kModList, kSaveReq, kSaveData, kStart, kStartAck, kInput, kBye,
-  kTeam   // equipo de Tag Team de quien lo manda (n, n ids u16); al final: los PCs viejos lo ignoran
+  kTeam, kChallenge, kReject   // equipo de Tag Team de quien lo manda (n, n ids u16); al final: los PCs viejos lo ignoran
 };
 constexpr uint32_t kChunk = 1024;
 constexpr uint64_t kLostMs = 10000;
@@ -87,7 +102,7 @@ struct Reader {
   size_t o = 6;
   bool ok = true;
   explicit Reader(const std::vector<uint8_t>& v) : b(v) {}
-  bool need(size_t n) { ok = ok && o + n <= b.size(); return ok; }
+  bool need(size_t n) { ok = ok && o <= b.size() && n <= b.size() - o; return ok; }
   uint8_t u8() { return need(1) ? b[o++] : 0; }
   uint16_t u16() { if (!need(2)) return 0; uint16_t v = uint16_t(b[o] | b[o + 1] << 8); o += 2; return v; }
   uint32_t u32() {
@@ -112,22 +127,12 @@ struct Reader {
 };
 
 // ---- huella de los mods: lo que cambia la partida (personajes, modelos, movesets, AFS).
-// Fuera: _roster (se genera igual en los dos PCs a partir de lo demas), vistas previas y packs
-// de texturas (solo cambian el aspecto, no la simulacion).
-std::map<std::string, std::string>& HashCache() {
-  static std::map<std::string, std::string> c;
-  return c;
-}
-
+// Fuera solo los packs de texturas (solo aspecto). _roster y las vistas previas SI cuentan: dos
+// kits distintos pueden montar plazas distintas con los mismos mods (mejor rechazar que desincronizar).
 std::string FileHash(const fs::path& p) {
-  std::error_code ec;
-  const auto size = fs::file_size(p, ec);
-  const auto t = fs::last_write_time(p, ec).time_since_epoch().count();
-  const std::string key = rex::path_to_utf8(p) + "|" + std::to_string(size) + "|" + std::to_string(static_cast<long long>(t));
-  auto& c = HashCache();
-  auto it = c.find(key);
-  if (it != c.end()) return it->second;
-  return c[key] = rex::hash_file(p);
+  const auto hash = rex::hash_file(p);
+  if (!HexDigest(hash, 32)) throw std::runtime_error("no se pudo verificar contenido");
+  return hash;
 }
 
 std::vector<std::string> ModFingerprints() {
@@ -139,8 +144,8 @@ std::vector<std::string> ModFingerprints() {
        !iec && it != fs::directory_iterator(); it.increment(iec)) {
     if (!it->is_directory(ec)) continue;
     const std::string name = rex::path_to_utf8(it->path().filename());
-    if (name == "_roster" || name.ends_with(".disabled") || fs::exists(it->path() / ".disabled", ec)) continue;
-    if (settings::IsTexturePackMod(rex::path_to_utf8(it->path()))) continue;
+    // ".respaldo", ".install_*": carpetas internas del launcher, no mods
+    if (name.empty() || name[0] == '.' || name.ends_with(".disabled") || fs::exists(it->path() / ".disabled", ec)) continue;
     mods.push_back(it->path());
   }
   std::sort(mods.begin(), mods.end());
@@ -149,10 +154,18 @@ std::vector<std::string> ModFingerprints() {
     for (auto [it, iec] = std::pair{fs::recursive_directory_iterator(m, ec), std::error_code{}};
          !iec && it != fs::recursive_directory_iterator(); it.increment(iec)) {
       if (!it->is_regular_file(ec)) continue;
+      // Texturas de pack (<hash XXH3>.png/.dds): solo aspecto, cada jugador puede llevar el suyo.
+      // Ademas un pack HD son miles de PNG (GB): hashearlos bloqueaba el emparejamiento.
+      std::string ext = rex::path_to_utf8(it->path().extension());
+      std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+      if ((ext == ".png" || ext == ".dds") &&
+          settings::IsTexturePackFileName(rex::path_to_utf8(it->path().stem())))
+        continue;
       const std::string rel = rex::path_to_utf8(fs::relative(it->path(), m, ec));
-      if (rel.find("_vista") != std::string::npos) continue;
+      // Include previews: conservative false rejection is preferable to false equality.
       files.emplace_back(rel, it->path());
     }
+    if (files.empty()) continue;   // mod solo de texturas: no cuenta para el online
     std::sort(files.begin(), files.end());
     std::string acc;
     for (const auto& [rel, p] : files) acc += rel + "|" + FileHash(p) + "\n";
@@ -190,6 +203,91 @@ Session& Session::Get() {
   return s;
 }
 
+// F4 v3: complete structural and phase validation BEFORE peer claim or mutation.
+// Directional nonce pair rejects delayed packets from previous sessions.
+bool Session::ConfigureIdentity(const std::string& digest, bool safe_selection, bool safe_tagteam) {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
+  if (link_ != Link::kIdle || guest_owner_) return false;
+  identity_ready_ = safe_selection && HexDigest(digest, 32);   // XXH3-128 (rex::hash_bytes)
+  identity_admission_ = identity_ready_;
+  safe_tagteam_ = identity_ready_ && safe_tagteam;
+  identity_ = identity_ready_ ? digest : "";
+  return identity_ready_;
+}
+
+bool Session::ValidPacket(const std::vector<uint8_t>& pkt) const {
+  if (pkt.size() < 6 || pkt.size() > 2048 ||
+      std::memcmp(pkt.data(), kMagic, 4) || pkt[5] != kProto) return false;
+  const auto state = link_.load();
+  if (state == Link::kIdle || state == Link::kLost || state == Link::kError) return false;
+  const auto type = pkt[4];
+  Reader r(pkt);
+  if (type == kHello || type == kHelloAck) {
+    if (state != Link::kWaiting && state != Link::kConnected) return false;
+    if ((type == kHello) != (role_ == Role::kHost)) return false;
+    auto build = r.str(40), mods = r.str(40);
+    const auto delay = r.u8();
+    const auto save = r.u32();
+    const auto region = r.u8();
+    const auto nonce = r.u32(), echo = r.u32();
+    return r.ok && r.o == pkt.size() && identity_ready_ && build == identity_ &&
+           HexDigest(mods, 32) && delay >= 1 && delay <= 10 && !save && !region &&
+           nonce && (!peer_nonce_ || peer_nonce_ == nonce) &&
+           echo == local_nonce_;
+  }
+  if (!peer_nonce_ || r.u32() != peer_nonce_ || r.u32() != local_nonce_) return false;
+  switch (type) {
+    // F4 uses memory UI only. No save transfer or unbounded diagnostic lists.
+    case kModReq: case kModList: case kSaveReq: case kSaveData: return false;
+    case kTeam: {
+      if (state != Link::kConnected && state != Link::kStarting) return false;
+      const auto n = r.u8();
+      if (n > 3) return false;
+      if (n >= 2 && !safe_tagteam_) return false;
+      std::vector<int> ids;
+      for (int i = 0; i < n; ++i) { const auto id = r.u16(); if (id >= 64) return false; ids.push_back(id); }
+      if (team_ready_ && ids != peer_team_) return false;
+      return r.ok && r.o == pkt.size();
+    }
+    case kStart: {
+      if (role_ != Role::kGuest || !mods_match_ || !team_ready_ ||
+          (state != Link::kConnected && state != Link::kStarting)) return false;
+      const auto seed = r.u32();
+      const auto n = r.u16();
+      if (!seed || n != kUiSnapSize || !r.need(n) || r.o + n != pkt.size()) return false;
+      if (state == Link::kStarting && (seed != seed_ ||
+          !std::equal(pkt.begin() + r.o, pkt.end(), ui_snap_.begin(), ui_snap_.end()))) return false;
+      return true;
+    }
+    case kStartAck:
+      return role_ == Role::kHost && state == Link::kStarting && r.o == pkt.size();
+    case kInput: {
+      if (state != Link::kPlaying && !(role_ == Role::kHost && state == Link::kStarting)) return false;
+      const auto n = r.u8();
+      if (!n || n > 8 || pkt.size() != 23u + 16u * n) return false;
+      const uint32_t now = tick_.load();
+      uint32_t prev = 0;
+      for (int i = 0; i < n; ++i) {
+        const auto t = r.u32();
+        const auto pad = r.pad();
+        // small window prevents poisoning another modulo slot; no rollover session.
+        if (t == 0xFFFFFFFFu || (i && t <= prev) ||
+            uint64_t(t) + 8 < now || uint64_t(t) > uint64_t(now) + 32) return false;
+        const auto& slot = theirs_[t % kRing];
+        if (slot.tick == t && (slot.pad.buttons != pad.buttons || slot.pad.lt != pad.lt ||
+            slot.pad.rt != pad.rt || slot.pad.lx != pad.lx || slot.pad.ly != pad.ly ||
+            slot.pad.rx != pad.rx || slot.pad.ry != pad.ry)) return false;
+        prev = t;
+      }
+      const auto rt = r.u32(); r.u32();
+      return r.ok && r.o == pkt.size() && (rt == 0xFFFFFFFFu ||
+          (rt % 60 == 0 && uint64_t(rt) <= uint64_t(now) + 32 && uint64_t(rt) + 240 >= now));
+    }
+    case kBye: return r.ok && r.o == pkt.size();
+    default: return false;
+  }
+}
+
 // ---------------------------------------------------------------- socket
 bool Session::OpenSocket(uint16_t port, std::string* error) {
 #ifdef _WIN32
@@ -223,13 +321,20 @@ bool Session::OpenSocket(uint16_t port, std::string* error) {
 }
 
 void Session::Send(const std::vector<uint8_t>& pkt) {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
   if (sock_ < 0 || !have_peer_) return;
-  ::sendto(decltype(::socket(0, 0, 0))(sock_), reinterpret_cast<const char*>(pkt.data()), int(pkt.size()), 0,
+  auto wire = pkt;
+  if (pkt.size() >= 6 && pkt[4] != kHello && pkt[4] != kHelloAck) {
+    Writer ids(0); ids.u32(local_nonce_); ids.u32(peer_nonce_);
+    wire.insert(wire.begin() + 6, ids.b.begin() + 6, ids.b.end());
+  }
+  ::sendto(decltype(::socket(0, 0, 0))(sock_), reinterpret_cast<const char*>(wire.data()), int(wire.size()), 0,
            reinterpret_cast<const sockaddr*>(peer_addr_), peer_len_);
   last_send_ms_ = NowMs();
 }
 
 bool Session::Recv(std::vector<uint8_t>& pkt) {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
   if (sock_ < 0) return false;
   uint8_t buf[2048];
   sockaddr_in from{};
@@ -238,34 +343,84 @@ bool Session::Recv(std::vector<uint8_t>& pkt) {
                                reinterpret_cast<sockaddr*>(&from), &len));
   if (n < 0) return false;                       // nada pendiente
   pkt.clear();
-  if (IsStun(buf, n)) {                          // respuesta STUN: nuestra IP publica y puerto
-    uint32_t ip = 0;
-    uint16_t port = 0;
-    if (StunMapped(buf, n, &ip, &port)) {
-      std::lock_guard<std::mutex> lock(mu_);
-      if (pub_how_ != "router") {
-        pub_ip_ = ip;
-        pub_port_ = port;
-        pub_how_ = "stun";
-      }
-    }
+  if (n < 6 || std::memcmp(buf, kMagic, 4) != 0) return true;
+  if (buf[5] != kProto) {
+    if (have_peer_ && role_ == Role::kGuest &&
+        std::memcmp(peer_addr_, &from, sizeof(from)) == 0)
+      Fail(Link::kError, "protocolo incompatible (se requiere F4/v3)");
     return true;
   }
-  if (n < 6 || std::memcmp(buf, kMagic, 4) != 0 || buf[5] != kProto) return true;   // basura: se ignora
+  std::vector<uint8_t> candidate(buf, buf + n);
+  if (role_ == Role::kGuest && link_ == Link::kWaiting && have_peer_ &&
+      std::memcmp(peer_addr_, &from, sizeof(from)) == 0) {
+    Reader reply(candidate);
+    if (buf[4] == kChallenge && n == 14 && reply.u32() == local_nonce_) {
+      const auto challenge = reply.u32();
+      if (challenge && (!peer_nonce_ || peer_nonce_ == challenge)) {
+        peer_nonce_ = challenge;
+        SendHello(kHello);
+      }
+      return true;
+    }
+    if (buf[4] == kReject && n == 10 && reply.u32() == local_nonce_) {
+      Fail(Link::kError, "identidad/protocolo incompatible (F4/v3)");
+      return true;
+    }
+  }
+  // Stateless admission challenge: no endpoint claim on initial HELLO.
+  // Random echo prevents stale HELLO capture, not user authentication.
+  if (!have_peer_ && role_ == Role::kHost && link_ == Link::kWaiting &&
+      buf[4] == kHello && n == 100) {
+    Reader hello(candidate);
+    const auto identity = hello.str(40), mods = hello.str(40);
+    const auto delay = hello.u8(); const auto save = hello.u32(); const auto region = hello.u8();
+    const auto nonce = hello.u32(), echo = hello.u32();
+    if (!hello.ok || !nonce || delay < 1 || delay > 10 || save || region || !HexDigest(mods, 32)) return true;
+    if (identity != identity_) {
+      Writer reject(kReject); reject.u32(nonce);
+      ::sendto(decltype(::socket(0, 0, 0))(sock_), reinterpret_cast<const char*>(reject.b.data()),
+               int(reject.b.size()), 0, reinterpret_cast<const sockaddr*>(&from), len);
+      return true;
+    }
+    if (echo != local_nonce_) {
+      Writer challenge(kChallenge); challenge.u32(nonce); challenge.u32(local_nonce_);
+      ::sendto(decltype(::socket(0, 0, 0))(sock_), reinterpret_cast<const char*>(challenge.b.data()),
+               int(challenge.b.size()), 0, reinterpret_cast<const sockaddr*>(&from), len);
+      return true;
+    }
+  }
+  if (!ValidPacket(candidate)) return true;
   if (!have_peer_ && role_ == Role::kHost && buf[4] == kHello) {
-    std::memcpy(peer_addr_, &from, sizeof(from));   // el primero que llama es el rival
+    std::memcpy(peer_addr_, &from, sizeof(from));
     peer_len_ = int(len);
     have_peer_ = true;
   }
-  if (!have_peer_ || std::memcmp(peer_addr_, &from, sizeof(from)) != 0) return true;   // otro: se ignora
-  pkt.assign(buf, buf + n);
+  if (!have_peer_ || std::memcmp(peer_addr_, &from, sizeof(from)) != 0) return true;
+  pkt = std::move(candidate);
   last_recv_ms_ = NowMs();
   return true;
 }
 
 // ---------------------------------------------------------------- emparejamiento
 bool Session::Host(uint16_t port, uint8_t delay, std::string* error) {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
+  if (guest_owner_) { if (error) *error = "sesion del juego aun activa"; return false; }
   Close();
+  if (!identity_ready_ || !identity_admission_ || dbz3::g_guest_eu) {
+    if (error) *error = "F4: falta identidad verificada US/seleccion segura";
+    return false;
+  }
+  identity_admission_ = false;
+  local_nonce_ = NewNonce();
+  local_team_ = dbz3::tag::MyLastTeam();
+  if (local_team_.size() >= 2 && !safe_tagteam_) {
+    if (error) *error = "F4: Tag Team necesita prueba de aborto seguro/relevo identificado";
+    return false;
+  }
+  if (local_team_.size() > 3 || std::any_of(local_team_.begin(), local_team_.end(), [](int x) { return x < 0 || x >= 64; })) {
+    if (error) *error = "equipo fuera del contrato F4";
+    return false;
+  }
   role_ = Role::kHost;
   delay_ = uint8_t(std::clamp<int>(delay, 1, 10));
   if (!OpenSocket(port, error)) { role_ = Role::kNone; return false; }
@@ -273,26 +428,29 @@ bool Session::Host(uint16_t port, uint8_t delay, std::string* error) {
   last_recv_ms_ = NowMs();
   static const bool room_ok = RoomSelfTest();   // codigo de sala: ida y vuelta
   if (!room_ok) REXLOG_ERROR("dbz3 online: el codigo de sala no pasa su prueba");
-  // el router abre el puerto solo (UPnP) en un hilo: tarda unos segundos y no debe parar el juego
-  std::string local = LocalAddresses();
-  local = local.substr(0, local.find(' '));
-  std::thread([this, port, local] {
-    const std::string ext = UpnpOpen(port, local);
-    uint32_t ip = 0;
-    if (ext.empty() || inet_pton(AF_INET, ext.c_str(), &ip) != 1) return;
-    std::lock_guard<std::mutex> lock(mu_);
-    pub_ip_ = ip;
-    pub_port_ = port;
-    pub_how_ = "router";
-    upnp_port_ = port;
-    UpnpCloseAtExit(port);
-    REXLOG_INFO("dbz3 online: el router abrio el puerto {} (IP publica {})", port, ext);
-  }).detach();
+  // F4 isolated direct-IP/LAN mode: no detached UPnP job.
   return true;
 }
 
 bool Session::Join(const std::string& ip, uint16_t port, std::string* error) {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
+  if (guest_owner_) { if (error) *error = "sesion del juego aun activa"; return false; }
   Close();
+  if (!identity_ready_ || !identity_admission_ || dbz3::g_guest_eu) {
+    if (error) *error = "F4: falta identidad verificada US/seleccion segura";
+    return false;
+  }
+  identity_admission_ = false;
+  local_nonce_ = NewNonce();
+  local_team_ = dbz3::tag::MyLastTeam();
+  if (local_team_.size() >= 2 && !safe_tagteam_) {
+    if (error) *error = "F4: Tag Team necesita prueba de aborto seguro/relevo identificado";
+    return false;
+  }
+  if (local_team_.size() > 3 || std::any_of(local_team_.begin(), local_team_.end(), [](int x) { return x < 0 || x >= 64; })) {
+    if (error) *error = "equipo fuera del contrato F4";
+    return false;
+  }
   role_ = Role::kGuest;
   sockaddr_in a{};
   a.sin_family = AF_INET;
@@ -317,39 +475,47 @@ bool Session::Join(const std::string& ip, uint16_t port, std::string* error) {
 }
 
 void Session::SendHello(uint8_t type) {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
   if (my_build_.empty()) {
-    my_build_ = std::string(__DATE__ " " __TIME__);
-    my_mods_ = ModFingerprints();
+    my_build_ = identity_;
+    try { my_mods_ = ModFingerprints(); }
+    catch (const std::exception&) { Fail(Link::kError, "no se pudo verificar contenido"); return; }
     std::string acc;
     for (const auto& m : my_mods_) acc += m + "\n";
     my_mods_hash_ = rex::hash_bytes(acc);
-    if (role_ == Role::kHost) {
-      const fs::path sp = SavePath();
-      save_ = sp.empty() ? std::vector<uint8_t>{} : ReadFile(sp);
-      save_size_ = uint32_t(save_.size());
-      save_ready_ = true;
-    }
+    // UI snapshot only: never read/write/download the personal save.
+    save_size_ = 0;
+    save_ready_ = true;
   }
   Writer w(type);
-  w.str(my_build_, 32);
+  w.str(my_build_, 40);
   w.str(my_mods_hash_, 40);
   w.u8(delay_);
   w.u32(save_size_);
   w.u8(dbz3::g_guest_eu ? 1 : 0);
+  w.u32(local_nonce_);
+  w.u32(peer_nonce_);
   Send(w.b);
 }
 
 void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
+  if (!ValidPacket(pkt)) return;
   Reader r(pkt);
   const uint8_t type = pkt[4];
+  if (type != kHello && type != kHelloAck) r.o += 8;
   switch (type) {
     case kHello:
     case kHelloAck: {
-      const std::string build = r.str(32), mods = r.str(40);
+      const std::string build = r.str(40), mods = r.str(40);
       const uint8_t delay = r.u8();
       const uint32_t save_size = r.u32();
       const uint8_t region = r.u8();   // 1 = EU
+      const uint32_t nonce = r.u32(), echo = r.u32();
+      (void)echo;
       if (!r.ok) return;
+      if (peer_nonce_ && peer_nonce_ != nonce) return;
+      peer_nonce_ = nonce;
       if (type == kHello && role_ == Role::kHost) SendHello(kHelloAck);
       if (my_build_.empty()) SendHello(kHello);
       if (build != my_build_) {
@@ -375,7 +541,10 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
         }
       }
       mods_match_ = mods == my_mods_hash_;
-      if (!mods_match_ && peer_mods_.empty()) Send(Writer(kModReq).b);
+      if (!mods_match_) {
+        Fail(Link::kError, "identidad de mods/contenido distinta");
+        return;
+      }
       if (link_ == Link::kWaiting) link_ = Link::kConnected;
       break;
     }
@@ -454,6 +623,7 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
         their_rng_[i] = rv;
         if (my_rng_tick_[i] == rt && my_rng_[i] != rv && !desync_.exchange(true)) {
           REXLOG_WARN("dbz3 online: DESINCRONIA en el tick {} (rng {:08X} / {:08X})", rt, my_rng_[i], rv);
+          Fail(Link::kError, "desincronia RNG: sesion abortada");
         }
       }
       if (role_ == Role::kHost && link_ == Link::kStarting) launch_ = true;   // el invitado ya juega
@@ -467,7 +637,9 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
         if (id < 64) ids.push_back(id);   // IDs del juego 0-43 y extra 44-63: otro valor se saldria de la tabla
       }
       std::lock_guard<std::mutex> lock(mu_);
+      if (team_ready_ && peer_team_ != ids) return; // frozen agreement
       peer_team_ = ids;
+      team_ready_ = true;
       break;
     }
     case kBye:
@@ -479,7 +651,8 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
 }
 
 void Session::Poll() {
-  if (link_ == Link::kIdle || link_ == Link::kPlaying) return;
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
+  if (guest_owner_ || link_ == Link::kIdle || link_ == Link::kPlaying || link_ == Link::kError || link_ == Link::kLost) return;
   std::vector<uint8_t> pkt;
   for (int i = 0; i < 256 && Recv(pkt); ++i) {
     if (!pkt.empty()) Handle(pkt, true);
@@ -487,34 +660,7 @@ void Session::Poll() {
   }
   const uint64_t now = NowMs();
   if (role_ == Role::kGuest && link_ == Link::kWaiting && now - last_send_ms_ > 300) SendHello(kHello);
-  // anfitrion sin UPnP: pregunta su IP publica a un servidor STUN (desde el mismo socket, asi el
-  // puerto que ve el STUN es el que vera el rival)
-  if (role_ == Role::kHost && link_ == Link::kWaiting && stun_tries_ < 5 && now - stun_sent_ms_ > 1500) {
-    bool known;
-    {
-      std::lock_guard<std::mutex> lock(mu_);
-      known = pub_ip_ != 0;
-    }
-    if (!known) {
-      static sockaddr_in stun{};
-      static const bool resolved = [] {
-        addrinfo hints{}, *res = nullptr;
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_DGRAM;
-        if (getaddrinfo("stun.l.google.com", "19302", &hints, &res) != 0 || !res) return false;
-        std::memcpy(&stun, res->ai_addr, sizeof(stun));
-        freeaddrinfo(res);
-        return true;
-      }();
-      if (resolved) {
-        const auto req = StunRequest();
-        ::sendto(decltype(::socket(0, 0, 0))(sock_), reinterpret_cast<const char*>(req.data()), int(req.size()), 0,
-                 reinterpret_cast<const sockaddr*>(&stun), sizeof(stun));
-      }
-      stun_sent_ms_ = now;
-      ++stun_tries_;
-    }
-  }
+  // No STUN request in isolated direct-IP/LAN mode.
   if (link_ == Link::kConnected || link_ == Link::kStarting) {
     if (role_ == Role::kGuest && !save_ready_ && now - last_send_ms_ > 30) {
       int asked = 0;   // pide hasta 8 trozos que falten
@@ -528,7 +674,7 @@ void Session::Poll() {
     }
     if (now - team_sent_ms_ > 500) {   // mi equipo de Tag Team, cada medio segundo (UDP)
       team_sent_ms_ = now;
-      const std::vector<int> team = dbz3::tag::MyLastTeam();
+      const std::vector<int>& team = local_team_;
       Writer w(kTeam);
       w.u8(uint8_t(std::min<size_t>(team.size(), 3)));
       for (size_t i = 0; i < team.size() && i < 3; ++i) w.u16(uint16_t(team[i]));
@@ -542,8 +688,9 @@ void Session::Poll() {
 }
 
 void Session::SetUiSnapshot(const uint8_t* p, size_t n) {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
   std::lock_guard<std::mutex> lock(mu_);
-  ui_snap_.assign(p, p + n);
+  if (link_ != Link::kStarting && p && n == kUiSnapSize) ui_snap_.assign(p, p + n);
 }
 
 namespace {
@@ -557,7 +704,8 @@ std::vector<uint8_t> StartPacket(uint32_t seed, const std::vector<uint8_t>& snap
 }  // namespace
 
 void Session::RequestStart() {
-  if (role_ != Role::kHost || link_ != Link::kConnected || !mods_match_) return;
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
+  if (role_ != Role::kHost || link_ != Link::kConnected || !mods_match_ || !team_ready_ || ui_snap_.size() != kUiSnapSize) return;
   link_ = Link::kStarting;
   start_sent_ = true;
   seed_ = uint32_t(NowMs() * 2654435761u) | 1u;
@@ -566,6 +714,7 @@ void Session::RequestStart() {
 }
 
 void Session::ReseedBattle(uint8_t* base) {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
   if (!active() || !base || dbz3::g_guest_eu) return;
   const uint32_t v = (seed_ ^ (++battles_ * 0x9E3779B9u)) | 1u;   // nunca 0 (el LFSR se quedaria)
   const uint8_t be[4] = {uint8_t(v >> 24), uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)};
@@ -579,20 +728,25 @@ void Session::BattleBarrier() {
   // los dos bits en el mismo tick aplicado y salen a la vez
   const uint16_t mine = role_ == Role::kHost ? 0x0400 : 0x0800;
   const uint32_t from = tick_;
-  for (int i = 0; i < 60 * 60 && active(); ++i) {   // un minuto como mucho
+  const auto deadline = NowMs() + 60000;
+  for (int i = 0; i < 60 * 60 && active() && NowMs() < deadline; ++i) {   // bounded both by ticks and monotonic time
     Pad p{};
     p.buttons = mine;
     RunTick(p, 0);
     if ((applied_[0].buttons & 0x0400) && (applied_[1].buttons & 0x0800)) {
-      REXLOG_INFO("dbz3 online: combate alineado en el tick {} ({} ticks de espera)", tick_, tick_ - from);
+      REXLOG_INFO("dbz3 online: combate alineado en el tick {} ({} ticks de espera)", tick_.load(), tick_.load() - from);
       return;
     }
   }
+  if (active()) Fail(Link::kLost, "plazo real de barrera agotado");
   REXLOG_WARN("dbz3 online: el otro PC no llego al combate");
 }
 
 bool Session::TakeStart(uint8_t* base) {
-  if (!launch_.exchange(false)) return false;
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
+  if (link_ != Link::kStarting || !mods_match_ || !team_ready_ ||
+      ui_snap_.size() != kUiSnapSize || !base || !launch_.exchange(false)) return false;
+  guest_owner_ = true; // explicit handoff under io_mu_; Poll now excluded
   {
     std::lock_guard<std::mutex> lock(mu_);
     // invitado: desbloqueos, ultima eleccion... del anfitrion (misma rueda, mismos cursores)
@@ -606,7 +760,7 @@ bool Session::TakeStart(uint8_t* base) {
     std::memcpy(base + 0x82310670u, be, 4);
   }
   {   // Tag Team: lado 1 el anfitrion, lado 2 el invitado, igual en los dos PCs (sin COM)
-    std::vector<int> mine = dbz3::tag::MyLastTeam(), peer;
+    std::vector<int> mine = local_team_, peer;
     { std::lock_guard<std::mutex> lock(mu_); peer = peer_team_; }
     dbz3::tag::SetDynamicTeam(0, role_ == Role::kHost ? mine : peer, false);   // el invitado no hace suyo el del anfitrion
     dbz3::tag::SetDynamicTeam(1, role_ == Role::kHost ? peer : mine, false);
@@ -623,11 +777,17 @@ bool Session::TakeStart(uint8_t* base) {
   link_ = Link::kPlaying;
   last_recv_ms_ = NowMs();
   REXLOG_INFO("dbz3 online: empieza la partida ({} , retardo {})", role_ == Role::kHost ? "anfitrion" : "invitado",
-              delay_);
+              delay_.load());
   return true;
 }
 
 void Session::Close() {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
+  if (guest_owner_) { leave_req_ = true; return; }
+  ResetTransport();
+}
+
+void Session::ResetTransport() {
   if (sock_ >= 0) {
     if (have_peer_) Send(Writer(kBye).b);
 #ifdef _WIN32
@@ -663,12 +823,29 @@ void Session::Close() {
   their_rng_tick_.fill(0xFFFFFFFFu);
   desync_ = false;
   my_build_.clear();
+  ++generation_;
+  guest_owner_ = false;
+  local_nonce_ = peer_nonce_ = 0;
+  last_send_ms_ = last_recv_ms_ = team_sent_ms_ = 0;
+  peer_len_ = 0;
+  std::memset(peer_addr_, 0, sizeof(peer_addr_));
+  local_team_.clear(); peer_team_.clear(); ui_snap_.clear();
+  team_ready_ = false;
+  tick_ = 0; battles_ = seed_ = 0; armed_ = false;
+  applied_[0] = {}; applied_[1] = {};
+  dbz3::tag::g_net_local = 0;
+  dbz3::tag::NetApplied(0, 0); dbz3::tag::NetApplied(1, 0);
+  for (auto& s : mine_) s = {};
+  for (auto& s : theirs_) s = {};
   std::lock_guard<std::mutex> lock(mu_);
   peer_mods_.clear();
   error_.clear();
 }
 
 void Session::Fail(Link l, const std::string& why) {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
+  guest_owner_ = false;
+  ResetTransport();
   std::lock_guard<std::mutex> lock(mu_);
   error_ = why;
   link_ = l;
@@ -689,6 +866,7 @@ std::string Session::Status() const {
 }
 
 std::vector<std::string> Session::ModDiff() const {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
   std::lock_guard<std::mutex> lock(mu_);
   std::vector<std::string> out;
   auto name = [](const std::string& s) { return s.substr(0, s.find('|')); };
@@ -702,6 +880,7 @@ std::vector<std::string> Session::ModDiff() const {
 }
 
 std::string Session::RoomCode(std::string* how) const {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
   {
     std::lock_guard<std::mutex> lock(mu_);
     if (pub_ip_) {
@@ -810,7 +989,9 @@ void Session::RunTick(const Pad& local, uint32_t rng) {
   armed_ = false;
   if (!active()) return;
   if (leave_req_.exchange(false)) {   // salir pedido desde la pantalla: lo cierra el hilo del socket
-    Close();
+    std::lock_guard<std::recursive_mutex> io(io_mu_);
+    guest_owner_ = false;
+    ResetTransport();
     REXLOG_INFO("dbz3 online: sesion cerrada por el jugador");
     return;
   }
@@ -827,8 +1008,12 @@ void Session::RunTick(const Pad& local, uint32_t rng) {
     std::vector<uint8_t> pkt;
     uint64_t start = NowMs();
     while (theirs_[t % kRing].tick != t) {
+      if (leave_req_.load()) {
+        std::lock_guard<std::recursive_mutex> io(io_mu_);
+        guest_owner_ = false; ResetTransport(); return;
+      }
       bool got = false;
-      while (Recv(pkt)) {
+      for (int batch = 0; batch < 64 && Recv(pkt); ++batch) {
         if (!pkt.empty()) { Handle(pkt, true); got = true; }
         if (!active()) return;   // BYE u otro fallo: sin esperar 10 s a que caduque
         pkt.clear();
@@ -837,7 +1022,7 @@ void Session::RunTick(const Pad& local, uint32_t rng) {
       const uint64_t now = NowMs();
       if (now - last_send_ms_ > 15) SendInputs();
       // el primer tick espera a que el otro PC termine de arrancar
-      if (now - last_recv_ms_ > (t <= delay_ ? 120000 : kLostMs)) {
+      if (now - start > (t <= delay_ ? 30000 : kLostMs)) {
         Fail(Link::kLost, T::T("sin respuesta del otro PC", "no reply from the other PC"));
         REXLOG_WARN("dbz3 online: conexion perdida en el tick {}", t);
         return;

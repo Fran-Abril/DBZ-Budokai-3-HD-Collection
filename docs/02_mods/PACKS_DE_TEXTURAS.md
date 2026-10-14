@@ -23,8 +23,9 @@
 > suya, sube esa en lugar de la del juego.
 >
 > Estado: **Fase 1 (volcado) + Fase 2 (cargador) implementadas y validadas.**
-> El cargador soporta DDS (DXT1/3/5 y 32bpp sin comprimir) y PNG, con factor
-> x1..x4 y generación de mips.
+> El cargador soporta DDS (DXT1/3/5 y 32bpp sin comprimir) y PNG, con cualquier
+> factor entero (x1, x2, x4, x8...; igual en ancho y alto, imagen ≤ 16384 px) y
+> generación de mips. Hasta 2026-10-13 el runtime descartaba lo que pasara de x4.
 >
 > **v1.2.8.1 — el volcado cubre también los formatos del HUD/UI**: además de los
 > comprimidos (DXT1/DXT3/DXT5) se vuelcan los SIN comprimir que el juego usa de
@@ -41,7 +42,7 @@
    bitmap original de cada textura (el mismo dato que guarda el `#AZT`).
 2. Un pack es una carpeta en `mods/` con ficheros nombrados con ese hash.
 3. Al cargar una textura, si su hash está en el pack, se usa la imagen del pack
-   (decodificada a RGBA8) a la resolución que tenga el fichero (x1..x4) y se
+   (decodificada a RGBA8) a la resolución que tenga el fichero (factor entero) y se
    generan los mips. Si no, se usa la textura del juego.
 
 No hay override de ficheros ni reempaquetado: es una capa host, igual que la
@@ -138,7 +139,8 @@ python "mod center hd\texture_pack.py" validar "mods\MiPack" --dump "D:\Proyecto
 ```
 
 Comprueba nombres, que las dimensiones del fichero coincidan con el nombre y,
-si le pasas el volcado, que el hash exista y que el factor sea válido (1..4).
+si le pasas el volcado, que el hash exista y que el factor sea válido (entero,
+igual en ancho y alto, imagen ≤ 16384 px).
 
 ### 3.6 Activar
 

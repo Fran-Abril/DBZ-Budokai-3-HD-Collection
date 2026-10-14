@@ -184,9 +184,9 @@ REXCVAR_DEFINE_BOOL(dbz3_present_dither, false, "DBZ3/Video",
 // Old presets ("low"/"medium"/"high"/"ultra") are accepted as aliases and
 // mapped to the new ones at load, and old installs (toml without this key) are
 // migrated to "manual" so an existing custom setup is never silently changed.
-REXCVAR_DEFINE_STRING(dbz3_quality_preset, "auto", "DBZ3/Video",
+REXCVAR_DEFINE_STRING(dbz3_quality_preset, "unset", "DBZ3/Video",
                       "Quality preset: auto, performance, balanced, quality, manual")
-    .allowed({"auto", "performance", "balanced", "quality", "manual",
+    .allowed({"unset", "auto", "performance", "balanced", "quality", "manual",
               "low", "medium", "high", "ultra"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
@@ -504,6 +504,19 @@ bool g_user_data_portable = true;
 // Result of the last LoadUserSettings(): lets the launcher warn when the file
 // had to be repaired or is still unusable (see ConfigLoadState).
 ConfigLoadState g_config_load_state = ConfigLoadState::kMissing;
+// Bloqueo de sesión: un fallo de respaldo protege también el auto-guardado.
+bool g_settings_write_blocked = false;
+bool PreserveSettings(const std::filesystem::path& path) {
+  std::error_code ec;
+  auto backup = std::filesystem::path(path.string() + ".backup");
+  unsigned suffix = 0;
+  while (std::filesystem::exists(backup, ec) && !ec) {
+    backup = path.string() + ".backup." + std::to_string(++suffix);
+  }
+  if (ec || !std::filesystem::copy_file(path, backup, std::filesystem::copy_options::none, ec)) return false;
+  REXLOG_INFO("dbz3: ajustes preservados en {}", backup.string());
+  return true;
+}
 
 // True when `dir` can be created and written to. Used to keep the release
 // portable (everything next to the exe) without breaking when the install
@@ -576,6 +589,12 @@ void LoadUserSettings() {
   // fails to parse as a whole, so the runtime would ignore EVERY setting. Repair
   // first (idempotent), then load, and remember what happened for the UI.
   if (!TomlParses(path)) {
+    if (!PreserveSettings(path)) {
+      g_settings_write_blocked = true;
+      g_config_load_state = ConfigLoadState::kInvalid;
+      REXLOG_ERROR("dbz3: respaldo imposible: ajustes intactos, guardado bloqueado");
+      return;
+    }
     REXLOG_WARN("dbz3: user settings at {} failed to parse; attempting repair", path.string());
     EscapeTomlStrings(path);
     if (TomlParses(path)) {
@@ -590,14 +609,16 @@ void LoadUserSettings() {
       if (g_config_load_state != ConfigLoadState::kInvalid) {
         g_config_load_state = ConfigLoadState::kInvalid;
         std::error_code ec;
-        std::filesystem::copy_file(path, path.string() + ".bak",
-                                   std::filesystem::copy_options::overwrite_existing, ec);
+        if (!PreserveSettings(path)) {
+          g_settings_write_blocked = true;
+          ec = std::make_error_code(std::errc::permission_denied);
+        }
         if (ec) {
           REXLOG_ERROR("dbz3: user settings at {} are invalid (backup failed: {}); not loaded",
                        path.string(), ec.message());
         } else {
-          REXLOG_ERROR("dbz3: user settings at {} are invalid; backed up to {}.bak, not loaded",
-                       path.string(), path.string());
+          REXLOG_ERROR("dbz3: user settings at {} are invalid; preserved in unique backup (see log), not loaded",
+                       path.string());
         }
       }
       return;
@@ -625,6 +646,10 @@ void LoadUserSettings() {
 ConfigLoadState LastConfigLoadState() { return g_config_load_state; }
 
 void SaveUserSettings() {
+  if (g_settings_write_blocked) {
+    REXLOG_WARN("dbz3: guardado omitido para conservar ajustes sin respaldo");
+    return;
+  }
   // Persist the friendly dbz3_* cvars plus the derived SDK cvars the user
   // controls (draw_resolution_scale_x/y). SaveConfig writes all modified
   // cvars; ensure the SDK scale is kept in sync with the friendly option.
@@ -650,27 +675,42 @@ std::string RepairInstallation() {
   line("[OK] Reparacion del launcher iniciada");
 
   // 1. User settings: quarantine an unreadable file, then write a clean one.
+  bool settings_ok_to_write = true;
   const auto settings_path = UserSettingsPath();
   if (std::filesystem::exists(settings_path)) {
     bool parses = TomlParses(settings_path);
     if (!parses) {
-      EscapeTomlStrings(settings_path);
-      parses = TomlParses(settings_path);
+      if (PreserveSettings(settings_path)) {
+        EscapeTomlStrings(settings_path);
+        parses = TomlParses(settings_path);
+      } else {
+        settings_ok_to_write = false;
+        g_settings_write_blocked = true;
+        line("[!] No se pudo respaldar: se conservan los ajustes originales");
+      }
     }
-    if (!parses) {
+    if (!parses && settings_ok_to_write) {
       std::error_code ec;
-      const std::filesystem::path quarantine = settings_path.string() + ".invalid";
-      std::filesystem::remove(quarantine, ec);
-      std::filesystem::rename(settings_path, quarantine, ec);
+      std::filesystem::path quarantine = settings_path.string() + ".invalid";
+      unsigned suffix = 0;
+      while (std::filesystem::exists(quarantine, ec) && !ec) {
+        quarantine = settings_path.string() + ".invalid." + std::to_string(++suffix);
+      }
+      if (!ec) std::filesystem::rename(settings_path, quarantine, ec);
       if (ec) {
+        settings_ok_to_write = false;
+        g_settings_write_blocked = true;
         line("[!] No se pudo apartar el archivo de ajustes: " + ec.message());
       } else {
         line("[i] Archivo de ajustes ilegible apartado en: " + quarantine.string());
       }
     }
   }
-  SaveUserSettings();
-  line("[OK] Ajustes escritos en: " + UserSettingsPath().string());
+  if (settings_ok_to_write) {
+    g_settings_write_blocked = false;
+    SaveUserSettings();
+    line("[i] Guardado solicitado en: " + UserSettingsPath().string());
+  }
 
   // 2. Runtime DLLs next to the executable.
   const auto exe_dir = rex::filesystem::GetExecutableFolder();
@@ -1608,7 +1648,7 @@ static bool PreviousSessionLostGpu() {
   const std::streamoff size = in.tellg();
   const std::streamoff tail = std::min<std::streamoff>(size, 256 * 1024);
   in.seekg(size - tail);
-  std::string text(static_cast<size_t>(tail), ' ');
+  std::string text(static_cast<size_t>(tail), '\0');
   in.read(text.data(), tail);
   return text.find("D3D12 device removed:") != std::string::npos;
 }
@@ -1957,7 +1997,10 @@ void ApplyQualityConfig(const QualityConfig& cfg, bool persist) {
   }
 }
 
-std::string QualityPreset() { return REXCVAR_GET(dbz3_quality_preset); }
+std::string QualityPreset() {
+  const auto value = REXCVAR_GET(dbz3_quality_preset);
+  return value == "unset" ? "auto" : value;
+}
 
 void SetQualityPreset(const std::string& preset) { REXCVAR_SET(dbz3_quality_preset, preset); }
 
@@ -1987,6 +2030,7 @@ void ApplyQualityPresetIfAuto() {
   }
   applied = true;
   if (QualityPreset() == "auto") {
+    if (REXCVAR_GET(dbz3_quality_preset) == "unset") REXCVAR_SET(dbz3_quality_preset, "auto");
     ApplyQualityPreset();
   }
 }
@@ -2211,6 +2255,13 @@ void RefreshTexturePacks() {
         continue;
       }
       if (std::filesystem::exists(mod_entry.path() / ".disabled", fec)) {
+        continue;
+      }
+      // Igual que ListMods: "<mod>.disabled" es un mod desactivado y ".install_*" un zip a medio
+      // instalar; antes ambos se cargaban como pack aunque la pestana Mods no los mostrara.
+      const std::string folder = PathUtf8(mod_entry.path().filename());
+      if (folder.empty() || folder[0] == '.' ||
+          (folder.size() > 9 && folder.compare(folder.size() - 9, 9, ".disabled") == 0)) {
         continue;
       }
       try {

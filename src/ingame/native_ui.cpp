@@ -22,6 +22,7 @@
 #include <rex/logging.h>
 #include <rex/system/lzx.h>
 
+#include "../launcher/settings.h"
 #include "../region.h"
 
 namespace dbz3::ingame::native_ui {
@@ -67,16 +68,26 @@ uint16_t Be16(const uint8_t* p) { return uint16_t(p[0] << 8 | p[1]); }
 uint32_t Le32(const uint8_t* p) { return uint32_t(p[3]) << 24 | uint32_t(p[2]) << 16 | uint32_t(p[1]) << 8 | p[0]; }
 
 std::vector<uint8_t> ReadEntry(const std::filesystem::path& afs, int n) {
-  std::ifstream f(afs, std::ios::binary);
+  if (n < 0) return {};
+  std::ifstream f(afs, std::ios::binary | std::ios::ate);
+  const auto end = f.tellg();
+  if (end < std::streamoff(8)) return {};
+  const uint64_t file_size = static_cast<uint64_t>(end);
+  f.seekg(0);
   uint8_t head[8];
-  if (!f.read(reinterpret_cast<char*>(head), 8) || std::memcmp(head, "AFS", 3) != 0 || int(Le32(head + 4)) <= n) {
-    return {};
-  }
+  if (!f.read(reinterpret_cast<char*>(head), 8) || std::memcmp(head, "AFS", 3) != 0) return {};
+  const uint64_t count = Le32(head + 4);
+  const uint64_t table_end = 8 + count * 8;
+  if (static_cast<uint64_t>(n) >= count || table_end > file_size) return {};
   uint8_t ent[8];
   f.seekg(8 + 8 * std::streamoff(n));
   if (!f.read(reinterpret_cast<char*>(ent), 8)) return {};
-  std::vector<uint8_t> raw(Le32(ent + 4));
-  f.seekg(Le32(ent));
+  const uint64_t offset = Le32(ent), length = Le32(ent + 4);
+  // El lector de UI ya limita descompresión a 64 MiB; acotar también entrada cruda.
+  if (!length || length > (64ull << 20) || offset < table_end ||
+      offset > file_size || length > file_size - offset) return {};
+  std::vector<uint8_t> raw(static_cast<size_t>(length));
+  f.seekg(static_cast<std::streamoff>(offset));
   if (raw.empty() || !f.read(reinterpret_cast<char*>(raw.data()), std::streamsize(raw.size()))) return {};
   // XMemCompress nativo: las tramas LZX seguidas, sin sus cabeceras, como hace el SDK con el xex
   if (raw.size() < 0x30 || Be32(raw.data()) != 0x0FF512EE) return raw;
@@ -222,8 +233,16 @@ void Extract(std::filesystem::path dir) {
   for (const Piece& p : kPieces) {
     if (std::find(entries.begin(), entries.end(), p.entry) == entries.end()) entries.push_back(p.entry);
   }
+  // EU no trae data_usi.afs: la de US si esta al lado, si no su data_eng.afs. Las piezas se
+  // reconocen por el hash de la textura, asi que un archivo que no las tenga solo no las da.
+  std::filesystem::path usi = dir / "data_usi.afs";
+  std::error_code ec;
+  for (const auto& alt : {dir.parent_path() / "us" / "data_usi.afs", dir / "data_eng.afs"}) {
+    if (std::filesystem::exists(usi, ec)) break;
+    usi = alt;
+  }
   for (const int n : entries) {
-    const std::vector<uint8_t> b = ReadEntry(dir / "data_usi.afs", n);
+    const std::vector<uint8_t> b = ReadEntry(usi, n);
     for (size_t i = 0; i + 128 <= b.size(); ++i) {
       if (std::memcmp(&b[i], "DDS |", 5) != 0) continue;
       const size_t size = DdsSize(&b[i], b.size() - i);
@@ -264,7 +283,8 @@ void Extract(std::filesystem::path dir) {
 void Prefetch() {
   const std::filesystem::path root = dbz3::EffectiveGameRoot();
   if (root.empty() || g_started.exchange(true)) return;
-  std::thread([dir = root / "us"]() {
+  // B24: la carpeta de la region montada (dbz3_region) gana aunque exista la otra
+  std::thread([dir = root / (dbz3::settings::Region() == "eu" ? "eu" : "us")]() {
     Extract(dir);
     g_ready = true;
   }).detach();

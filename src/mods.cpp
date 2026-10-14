@@ -6,6 +6,9 @@
 #include <rex/logging.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -181,7 +184,8 @@ bool HasModContent(const std::filesystem::path& d) {
   for (auto [it_2, iec_2] = std::pair{std::filesystem::recursive_directory_iterator(
            d, std::filesystem::directory_options::skip_permission_denied, ec), std::error_code{}}; !iec_2 && it_2 != std::filesystem::recursive_directory_iterator(); it_2.increment(iec_2)) {
     const auto& e = *it_2;
-    if (e.is_regular_file() && PackStem(e.path().stem().string(), w, h)) return true;
+    std::error_code fec;   // sin ec, una entrada rara (ruta > MAX_PATH) lanzaria fuera del launcher
+    if (e.is_regular_file(fec) && PackStem(rex::path_to_utf8(e.path().stem()), w, h)) return true;
   }
   return false;
 }
@@ -213,11 +217,21 @@ void CheckProblems(const std::filesystem::path& dir, ModInfo& info) {
     std::vector<std::filesystem::path> subs;
     for (auto [it_3, iec_3] = std::pair{std::filesystem::directory_iterator(dir, ec), std::error_code{}}; !iec_3 && it_3 != std::filesystem::directory_iterator(); it_3.increment(iec_3)) {
     const auto& e = *it_3;
-      if (e.is_directory()) subs.push_back(e.path());
+      if (e.is_directory(ec) && e.path().filename() != "__MACOSX") subs.push_back(e.path());   // = WrappedModDir
     }
     if (subs.size() == 1 && HasModContent(subs[0])) {
       info.problems.emplace_back(ModInfo::kNested, rex::path_to_utf8(subs[0].filename()));
       return;
+    }
+    // pack de varios mods copiado tal cual (LEEME + mods/_roster, mods/cut_*...): FixNestedMod lo reparte
+    if (subs.size() == 1 && subs[0].filename() == "mods") {
+      for (auto [it_m, iec_m] = std::pair{std::filesystem::directory_iterator(subs[0], ec), std::error_code{}};
+           !iec_m && it_m != std::filesystem::directory_iterator(); it_m.increment(iec_m)) {
+        if (it_m->is_directory(ec) && HasModContent(it_m->path())) {
+          info.problems.emplace_back(ModInfo::kNested, "mods");
+          return;
+        }
+      }
     }
   }
   for (const char* tn : {"personaje.toml", "traje.toml"}) {
@@ -231,54 +245,243 @@ void CheckProblems(const std::filesystem::path& dir, ModInfo& info) {
       info.problems.emplace_back(ModInfo::kBadToml, std::string(tn) + ": " + std::string(e.description()));
     }
   }
-  // Pack de texturas: nombres que el juego no reconoce y tamanos que no son x1-x4 del original.
-  int pack = 0, bad_name = 0;
+  // Pack de texturas: nombres que el juego no reconoce y tamanos que el runtime descarta (no son
+  // un multiplo entero del original, igual en ancho y alto, o pasan de 16384; texture_cache.cpp y
+  // dbz3_texture_pack.cpp del SDK).
+  int pack = 0, bad_name = 0, bad_sizes = 0;
   std::string bad_size;
+  // Abrir cada imagen es lo caro: un pack recien instalado (12345 PNG) tardaba ~70 s con el
+  // antivirus revisando cada fichero, con el launcher congelado. Como mucho 2 s por mod; la
+  // siguiente lista vuelve a empezar con esas ya en cache y llega mas lejos.
+  // ponytail: tope por tiempo, no por fichero; hilo aparte si algun dia hace falta el 100% al abrir.
+  const auto size_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   for (auto [it_4, iec_4] = std::pair{std::filesystem::recursive_directory_iterator(
            dir, std::filesystem::directory_options::skip_permission_denied, ec), std::error_code{}}; !iec_4 && it_4 != std::filesystem::recursive_directory_iterator(); it_4.increment(iec_4)) {
     const auto& e = *it_4;
     if (!e.is_regular_file()) continue;
-    std::string ext = e.path().extension().string();
+    std::string ext = rex::path_to_utf8(e.path().extension());   // .string() lanza con nombres no ANSI
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
     if (ext != ".png" && ext != ".dds") continue;
     uint32_t w0, h0, w, h;
-    if (!PackStem(e.path().stem().string(), w0, h0)) { ++bad_name; continue; }
+    const std::string stem = rex::path_to_utf8(e.path().stem());
+    std::string label = stem;
+    std::transform(label.begin(), label.end(), label.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    if (label == "preview" || label == "cover" || label == "icon") continue;
+    if (!PackStem(stem, w0, h0)) { ++bad_name; continue; }
     ++pack;
-    if (bad_size.empty() && ImageSize(e.path(), w, h) &&
-        (w % w0 || h % h0 || w / w0 != h / h0 || w / w0 < 1 || w / w0 > 4)) {
-      bad_size = rex::path_to_utf8(e.path().filename());
+    if (std::chrono::steady_clock::now() < size_deadline && ImageSize(e.path(), w, h) &&
+        (w % w0 || h % h0 || w / w0 != h / h0 || w / w0 < 1 || w > 16384 || h > 16384)) {
+      // con la carpeta: el usuario tiene que poder encontrarlo dentro del pack
+      if (!bad_sizes++) bad_size = rex::path_to_utf8(e.path().lexically_relative(dir));
     }
   }
   if (pack && bad_name) info.problems.emplace_back(ModInfo::kBadTextureName, std::to_string(bad_name));
+  if (bad_sizes > 1) bad_size += " (+" + std::to_string(bad_sizes - 1) + ")";
   if (!bad_size.empty()) info.problems.emplace_back(ModInfo::kBadTextureSize, bad_size);
+}
+
+// ---- instalacion transaccional (Fase 0 A1/A2, B11, B16): todo se prepara en una carpeta
+// oculta de mods/ (mismo disco) y se publica con un solo rename; lo que se pisa va a
+// mods_respaldo/ (junto a mods/, como Nova's Mods) y vuelve a su sitio si el segundo paso falla. Nada se borra.
+namespace fs = std::filesystem;
+
+std::string Stamp() {   // unico por operacion: nunca se reutiliza una carpeta .install_ vieja
+  static std::atomic<uint32_t> n{0};
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+  return std::to_string(ms) + "_" + std::to_string(n++);
+}
+
+// El antivirus o el indexador sueltan un archivo recien escrito en unos ms: se reintenta.
+bool RenameRetry(const fs::path& from, const fs::path& to) {
+  for (int i = 0; i < 10; ++i) {
+    std::error_code ec;
+    fs::rename(from, to, ec);
+    if (!ec) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  }
+  return false;
+}
+
+// Archivos del propio mod en la raiz (no documentos): con ellos la carpeta ya es el mod.
+bool RootHasModFiles(const fs::path& d) {
+  std::error_code ec;
+  for (const char* n : {"us", "eu", "personaje.toml", "traje.toml", "roster.toml", "manifest.txt", "ui_ingame"}) {
+    if (fs::exists(d / n, ec)) return true;
+  }
+  uint32_t w, h;
+  for (auto [it, iec] = std::pair{fs::directory_iterator(d, ec), std::error_code{}};
+       !iec && it != fs::directory_iterator(); it.increment(iec)) {
+    if (it->is_regular_file(ec) && PackStem(rex::path_to_utf8(it->path().stem()), w, h)) return true;
+  }
+  return false;
+}
+
+// Carpeta unica que envuelve el mod (ignora __MACOSX); vacia si no hay que desenvolver.
+// B11: los documentos sueltos (LEEME, capturas...) ya no impiden desenvolver.
+fs::path WrappedModDir(const fs::path& d) {
+  std::error_code ec;
+  fs::path inner;
+  for (auto [it, iec] = std::pair{fs::directory_iterator(d, ec), std::error_code{}};
+       !iec && it != fs::directory_iterator(); it.increment(iec)) {
+    if (!it->is_directory(ec) || it->path().filename() == "__MACOSX") continue;
+    if (!inner.empty()) return {};
+    inner = it->path();
+  }
+  if (inner.empty() || RootHasModFiles(d) || !HasModContent(inner)) return {};
+  return inner;
+}
+
+// Mete los archivos sueltos de 'from' en 'to' sin pisar nada (choque -> to/_del_zip/).
+void MoveLooseFiles(const fs::path& from, const fs::path& to) {
+  std::error_code ec;
+  std::vector<fs::path> files;
+  for (auto [it, iec] = std::pair{fs::directory_iterator(from, ec), std::error_code{}};
+       !iec && it != fs::directory_iterator(); it.increment(iec)) {
+    if (it->is_regular_file(ec)) files.push_back(it->path());
+  }
+  for (const auto& f : files) {
+    fs::path target = to / f.filename();
+    if (fs::exists(target, ec)) {
+      fs::create_directories(to / "_del_zip", ec);
+      target = to / "_del_zip" / f.filename();
+      if (fs::exists(target, ec)) continue;   // se queda donde estaba (no se pierde)
+    }
+    RenameRetry(f, target);
+  }
+}
+
+// Publica 'ready' (completa, dentro de mods/) como mods/<name>. Si ya habia uno, va al respaldo
+// y vuelve si la publicacion falla (compensacion del primer paso).
+bool PublishMod(const fs::path& ready, const std::string& name, std::string& err) {
+  std::error_code ec;
+  const fs::path root = ModsRoot(), dest = root / fs::u8path(name);   // nombres UTF-8 (tildes, japones)
+  // la version anterior, activa ("X") o desactivada ("X.disabled"), va al respaldo como Nova's Mods
+  std::vector<std::pair<fs::path, fs::path>> moved;   // (respaldo, sitio original)
+  auto restore = [&] {
+    for (const auto& [bak, old] : moved) {
+      if (!RenameRetry(bak, old)) REXLOG_ERROR("dbz3: mod anterior queda en {}", rex::path_to_utf8(bak));
+    }
+  };
+  for (const fs::path& old : {dest, root / fs::u8path(name + ".disabled")}) {
+    if (!fs::exists(old, ec)) continue;
+    const fs::path bak = root.parent_path() / "mods_respaldo" / fs::u8path(rex::path_to_utf8(old.filename()) + "_" + Stamp());
+    fs::create_directories(bak.parent_path(), ec);
+    if (!RenameRetry(old, bak)) {
+      restore();
+      err = "el mod '" + name + "' ya instalado esta en uso (cierra el juego y vuelve a probar)";
+      return false;
+    }
+    moved.emplace_back(bak, old);
+  }
+  if (!RenameRetry(ready, dest)) {
+    restore();
+    err = "no se pudo colocar el mod (carpeta en uso o sin permisos)";
+    return false;
+  }
+  for (const auto& [bak, old] : moved) {
+    REXLOG_INFO("dbz3: mod '{}' sustituido; el anterior en {}", name, rex::path_to_utf8(bak));
+  }
+  return true;
+}
+
+// Extraccion terminada en 'staging' (oculta, en mods/): desenvuelve y publica.
+std::string SanitizeModName(const std::string& raw);   // mas abajo (Windows / POSIX)
+
+// Pack de varios mods (el zip oficial de personajes trae LEEME + mods/_roster, mods/cut_*): cada
+// carpeta de 'mods' de dentro se publica como un mod suelto (PublishMod respalda el que hubiera) y
+// lo que sobra (documentos) va a mods_respaldo. Devuelve el primer mod publicado ("" = no aplica).
+std::string PublishModsFolder(const fs::path& container, const std::string& label, std::string& err) {
+  std::error_code ec;
+  const fs::path inner = container / "mods";
+  if (HasModContent(container) || !fs::is_directory(inner, ec)) return {};
+  std::vector<fs::path> kids;
+  for (auto [it, iec] = std::pair{fs::directory_iterator(inner, ec), std::error_code{}};
+       !iec && it != fs::directory_iterator(); it.increment(iec)) {
+    const std::string kid = rex::path_to_utf8(it->path().filename());
+    if (it->is_directory(ec) && !kid.empty() && kid[0] != '.' && HasModContent(it->path())) kids.push_back(it->path());
+  }
+  std::string first;
+  for (const fs::path& kid : kids) {
+    const std::string name = SanitizeModName(rex::path_to_utf8(kid.filename()));
+    std::string e;
+    if (PublishMod(kid, name, e)) {
+      if (first.empty()) first = name;
+    } else {
+      err = e;
+      REXLOG_WARN("dbz3: pack '{}': no se pudo instalar '{}' ({})", label, name, e);
+    }
+  }
+  if (!first.empty()) {
+    fs::create_directories(ModsRoot().parent_path() / "mods_respaldo", ec);
+    RenameRetry(container, ModsRoot().parent_path() / "mods_respaldo" / fs::u8path(label + "_documentos_" + Stamp()));
+    REXLOG_INFO("dbz3: pack '{}' repartido en {} mods", label, kids.size());
+  }
+  return first;
+}
+
+bool FinishInstall(const fs::path& staging, const std::string& name, std::string& out_name,
+                   std::string& out_error) {
+  std::error_code ec;
+  if (std::string multi_err, first = PublishModsFolder(staging, name, multi_err); !first.empty()) {
+    out_name = first;   // un mod real (SetModEnabled sobre el nombre del zip crearia una carpeta)
+    return true;
+  }
+  fs::path ready = staging;
+  if (const fs::path inner = WrappedModDir(staging); !inner.empty()) {
+    MoveLooseFiles(staging, inner);   // los documentos del zip viajan con el mod
+    ready = inner;
+  }
+  if (!PublishMod(ready, name, out_error)) {
+    fs::remove_all(staging, ec);      // solo la copia extraida: el zip sigue intacto
+    return false;
+  }
+  if (ready != staging) {
+    // queda __MACOSX / carpetas vacias; si algun documento no se pudo mover, no se pierde
+    bool loose_left = false;
+    for (auto [it, iec] = std::pair{fs::directory_iterator(staging, ec), std::error_code{}};
+         !iec && it != fs::directory_iterator(); it.increment(iec)) {
+      loose_left = loose_left || it->is_regular_file(ec);
+    }
+    if (!loose_left) {
+      fs::remove_all(staging, ec);
+    } else {
+      RenameRetry(staging, ModsRoot().parent_path() / "mods_respaldo" / fs::u8path(name + "_documentos_" + Stamp()));
+    }
+  }
+  out_name = name;
+  REXLOG_INFO("dbz3: mod instalado desde zip -> '{}'", name);
+  return true;
 }
 }  // namespace
 
+// B16: se mueve la carpeta entera (un rename), no archivo a archivo; si algo falla vuelve igual.
 bool FixNestedMod(const std::string& mod_name) {
-  const std::filesystem::path dir = ModsRoot() / mod_name;
   std::error_code ec;
-  std::filesystem::path inner;
-  for (auto [it_5, iec_5] = std::pair{std::filesystem::directory_iterator(dir, ec), std::error_code{}}; !iec_5 && it_5 != std::filesystem::directory_iterator(); it_5.increment(iec_5)) {
-    const auto& e = *it_5;
-    if (e.is_directory()) {
-      if (!inner.empty()) return false;
-      inner = e.path();
-    }
+  const fs::path root = ModsRoot(), dir = root / fs::u8path(mod_name);
+  if (std::string err; !PublishModsFolder(dir, mod_name, err).empty()) return true;
+  const fs::path inner = WrappedModDir(dir);
+  if (inner.empty()) return false;
+  const fs::path work = root / (".arreglo_" + Stamp());
+  if (!RenameRetry(dir, work)) return false;               // nada ha cambiado
+  const fs::path inner_w = work / inner.filename();
+  MoveLooseFiles(work, inner_w);
+  if (!RenameRetry(inner_w, dir)) {
+    RenameRetry(work, dir);                                // vuelve como estaba (docs ya dentro)
+    return false;
   }
-  if (inner.empty() || !HasModContent(inner)) return false;
-  for (auto [it_6, iec_6] = std::pair{std::filesystem::directory_iterator(inner, ec), std::error_code{}}; !iec_6 && it_6 != std::filesystem::directory_iterator(); it_6.increment(iec_6)) {
-    const auto& e = *it_6;
-    const auto to = dir / e.path().filename();
-    if (std::filesystem::exists(to, ec)) return false;   // nunca se pisa nada
-    std::filesystem::rename(e.path(), to, ec);
-    if (ec) return false;
+  if (fs::is_empty(work, ec)) {
+    fs::remove(work, ec);
+  } else {                                                 // __MACOSX y demas: al respaldo
+    fs::create_directories(root.parent_path() / "mods_respaldo", ec);
+    RenameRetry(work, root.parent_path() / "mods_respaldo" / fs::u8path(mod_name + "_envoltorio_" + Stamp()));
   }
-  std::filesystem::remove(inner, ec);   // ya vacia
   REXLOG_INFO("dbz3: mod '{}' sacado de su carpeta interior", mod_name);
   return true;
 }
 
-std::vector<ModInfo> ListMods() {
+std::vector<ModInfo> ListMods(bool check_problems) {
   std::vector<ModInfo> result;
   std::error_code ec;
   const std::filesystem::path mods_root = ModsRoot();
@@ -296,7 +499,7 @@ std::vector<ModInfo> ListMods() {
     const std::string raw_name = rex::path_to_utf8(mod_entry.path().filename());
     if (!raw_name.empty() && raw_name[0] == '.') continue;   // .install_* a medias (launcher cerrado al instalar)
     if (EndsWithDotDisabled(raw_name) &&
-        std::filesystem::exists(mods_root / StripDotDisabled(raw_name))) {
+        std::filesystem::exists(mods_root / std::filesystem::u8path(StripDotDisabled(raw_name)))) {
       continue;
     }
     ModInfo info;
@@ -304,7 +507,7 @@ std::vector<ModInfo> ListMods() {
     info.enabled = !FolderIsDisabled(mod_entry.path(), raw_name);
     LoadManifest(mod_entry.path(), info);
     InferTypeAndCount(mod_entry.path(), info);
-    CheckProblems(mod_entry.path(), info);
+    if (check_problems) CheckProblems(mod_entry.path(), info);
     result.push_back(std::move(info));
     } catch (const std::exception& ex) {
       REXLOG_WARN("dbz3: mod '{}' skipped while listing: {}", rex::path_to_utf8(mod_entry.path()), ex.what());
@@ -322,12 +525,12 @@ std::vector<ModInfo> ListMods() {
 
 void SetModEnabled(const std::string& mod_name, bool enable) {
   const std::filesystem::path mods_root = ModsRoot();
-  const std::filesystem::path mod_dir = mods_root / mod_name;
+  const std::filesystem::path mod_dir = mods_root / std::filesystem::u8path(mod_name);
   const std::filesystem::path marker = mod_dir / ".disabled";
   std::error_code ec;
   if (enable) {
     std::filesystem::remove(marker, ec);
-    const std::filesystem::path suffixed = mods_root / (mod_name + ".disabled");
+    const std::filesystem::path suffixed = mods_root / std::filesystem::u8path(mod_name + ".disabled");
     if (!std::filesystem::exists(mod_dir) &&
         std::filesystem::exists(suffixed)) {
       std::filesystem::rename(suffixed, mod_dir, ec);
@@ -343,7 +546,7 @@ void SetModEnabled(const std::string& mod_name, bool enable) {
 namespace {
 
 std::filesystem::path ModDir(const std::string& mod_name) {
-  return ModsRoot() / StripDotDisabled(mod_name);
+  return ModsRoot() / std::filesystem::u8path(StripDotDisabled(mod_name));
 }
 
 std::string ReadManifestValue(const std::filesystem::path& manifest,
@@ -382,7 +585,12 @@ std::string ReadManifestValue(const std::filesystem::path& manifest,
 
 std::string GetModManifestValue(const std::string& mod_name,
                                 const std::string& key) {
-  return ReadManifestValue(ModDir(mod_name) / "manifest.txt", key);
+  auto dir = ModDir(mod_name);
+  std::error_code ec;
+  if (!std::filesystem::is_directory(dir, ec)) {
+    dir = ModsRoot() / std::filesystem::u8path(StripDotDisabled(mod_name) + ".disabled");
+  }
+  return ReadManifestValue(dir / "manifest.txt", key);
 }
 
 bool SetModManifestValue(const std::string& mod_name, const std::string& key,
@@ -489,20 +697,11 @@ std::string Base64Encode(const uint8_t* data, size_t len) {
   return out;
 }
 
-// Runs a PowerShell script hidden (no console window) via -EncodedCommand,
-// which is immune to quoting/encoding issues in the path strings. Blocks up to
-// 60 s and returns whether the process exited 0.
-bool RunHiddenPowerShell(const std::wstring& script) {
-  std::vector<uint8_t> le;
-  le.reserve(script.size() * 2);
-  for (wchar_t c : script) {
-    le.push_back(uint8_t(c & 0xFF));
-    le.push_back(uint8_t((c >> 8) & 0xFF));
-  }
-  const std::string b64 = Base64Encode(le.data(), le.size());
-  std::wstring cmdline = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ";
-  cmdline.append(b64.begin(), b64.end());
-
+// Runs a command line hidden (no console window). Blocks up to `timeout_ms` and
+// returns whether the process exited 0. On timeout the process is terminated: a
+// pack HD de 3 GB tardaba mas de 60 s y el instalador borraba la carpeta temporal
+// mientras Expand-Archive seguia escribiendo en ella.
+bool RunHidden(std::wstring cmdline, DWORD timeout_ms) {
   STARTUPINFOW si{};
   si.cb = sizeof(si);
   si.dwFlags = STARTF_USESHOWWINDOW;
@@ -514,12 +713,30 @@ bool RunHiddenPowerShell(const std::wstring& script) {
                       CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
     return false;
   }
-  WaitForSingleObject(pi.hProcess, 60000);
-  DWORD code = 0;
-  GetExitCodeProcess(pi.hProcess, &code);
+  DWORD code = 1;
+  if (WaitForSingleObject(pi.hProcess, timeout_ms) == WAIT_OBJECT_0) {
+    GetExitCodeProcess(pi.hProcess, &code);
+  } else {
+    TerminateProcess(pi.hProcess, 1);
+    WaitForSingleObject(pi.hProcess, 10000);
+  }
   CloseHandle(pi.hThread);
   CloseHandle(pi.hProcess);
   return code == 0;
+}
+
+// PowerShell via -EncodedCommand (immune to quoting/encoding issues in paths).
+bool RunHiddenPowerShell(const std::wstring& script, DWORD timeout_ms) {
+  std::vector<uint8_t> le;
+  le.reserve(script.size() * 2);
+  for (wchar_t c : script) {
+    le.push_back(uint8_t(c & 0xFF));
+    le.push_back(uint8_t((c >> 8) & 0xFF));
+  }
+  const std::string b64 = Base64Encode(le.data(), le.size());
+  std::wstring cmdline = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ";
+  cmdline.append(b64.begin(), b64.end());
+  return RunHidden(std::move(cmdline), timeout_ms);
 }
 
 std::wstring Utf8ToWide(const std::string& utf8) {
@@ -535,17 +752,50 @@ std::wstring Utf8ToWide(const std::string& utf8) {
 std::string SanitizeModName(const std::string& raw) {
   std::string s = raw;
   for (char& c : s) {
-    if (c < 32 || std::strchr("\\/:*?\"<>|", c)) {
+    // ';' separa la lista de packs de texturas (dbz3_texture_packs): rompia "Pack;HD.zip".
+    // unsigned: los bytes UTF-8 (tildes) son >= 0x80, no caracteres de control
+    if (static_cast<unsigned char>(c) < 32 || std::strchr("\\/:*?\"<>|;", c)) {
       c = '_';
     }
   }
   while (!s.empty() && (s.back() == '.' || s.back() == ' ')) {
     s.pop_back();
   }
+  // un nombre con punto delante seria una carpeta oculta (ListMods no la ve)
+  while (!s.empty() && s.front() == '.') s.erase(s.begin());
   if (s.empty()) {
     s = "mod";
   }
   return s;
+}
+
+// Descomprime con el tar.exe de Windows (10 1803+; un pack HD de 2,9 GB en segundos) y,
+// si no esta o falla, con Expand-Archive. Sin el tope de 60 s de antes.
+bool ExtractZipWin(const std::wstring& zip, const std::filesystem::path& dest) {
+  constexpr DWORD kTimeout = 30 * 60 * 1000;
+  std::error_code ec;
+  std::filesystem::create_directories(dest, ec);
+  wchar_t sys[MAX_PATH] = {};
+  const UINT n = GetSystemDirectoryW(sys, MAX_PATH);
+  if (n > 0 && n < MAX_PATH) {
+    const std::wstring tar = std::wstring(sys) + L"\\tar.exe";
+    if (std::filesystem::exists(tar, ec) &&
+        RunHidden(L"\"" + tar + L"\" -xf \"" + zip + L"\" -C \"" + dest.wstring() + L"\"", kTimeout)) {
+      return true;
+    }
+  }
+  std::filesystem::remove_all(dest, ec);
+  const auto ps_quote = [](const std::wstring& s) {
+    std::wstring out = L"'";
+    for (wchar_t c : s) {
+      out += (c == L'\'') ? L"''" : std::wstring(1, c);
+    }
+    out += L"'";
+    return out;
+  };
+  return RunHiddenPowerShell(L"Expand-Archive -LiteralPath " + ps_quote(zip) + L" -DestinationPath " +
+                                 ps_quote(dest.wstring()) + L" -Force",
+                             kTimeout);
 }
 
 }  // namespace
@@ -566,70 +816,14 @@ bool InstallModFromZip(const std::string& zip_path_utf8, std::string& out_name,
   const std::string base =
       SanitizeModName(rex::path_to_utf8(zip_fs.stem()));
 
-  // Extract to a temp folder under mods/ (cleaned on failure).
-  const fs::path temp_dir = mods_root / (".install_" + base);
-  fs::remove_all(temp_dir, ec);
-  const auto ps_quote = [](const std::wstring& s) {
-    std::wstring out = L"'";
-    for (wchar_t c : s) {
-      out += (c == L'\'') ? L"''" : std::wstring(1, c);
-    }
-    out += L"'";
-    return out;
-  };
-  const std::wstring script =
-      L"Expand-Archive -LiteralPath " + ps_quote(zip_wide) +
-      L" -DestinationPath " + ps_quote(temp_dir.wstring()) + L" -Force";
-  if (!RunHiddenPowerShell(script)) {
+  // Extraccion en una carpeta oculta y nueva de mods/ (nunca se reutiliza ni se borra una vieja).
+  const fs::path temp_dir = mods_root / (".install_" + Stamp());
+  if (!ExtractZipWin(zip_wide, temp_dir)) {
     fs::remove_all(temp_dir, ec);
-    out_error = "Expand-Archive fallo (zip corrupto o protegido)";
+    out_error = "no se pudo descomprimir (zip corrupto, protegido o sin espacio en disco)";
     return false;
   }
-
-  // Normalize the layout: if the archive wraps everything in a single folder
-  // with no loose files at its root, unwrap that folder.
-  fs::path base_dir = temp_dir;
-  {
-    bool loose_file = false;
-    std::vector<fs::path> subdirs;
-    for (auto [it_8, iec_8] = std::pair{fs::directory_iterator(temp_dir, ec), std::error_code{}}; !iec_8 && it_8 != fs::directory_iterator(); it_8.increment(iec_8)) {
-    const auto& e = *it_8;
-      if (e.is_regular_file()) {
-        loose_file = true;
-      } else if (e.is_directory()) {
-        subdirs.push_back(e.path());
-      }
-    }
-    if (!loose_file && subdirs.size() == 1) {
-      base_dir = subdirs[0];
-    }
-  }
-
-  // Final name (suffix on collision).
-  std::string name = base;
-  fs::path dest = mods_root / name;
-  int k = 2;
-  while (fs::exists(dest, ec)) {
-    dest = mods_root / (name + "_" + std::to_string(k++));
-  }
-  name = rex::path_to_utf8(dest.filename());
-
-  std::error_code rv;
-  fs::rename(base_dir, dest, rv);
-  if (rv) {
-    fs::copy(base_dir, dest, fs::copy_options::recursive, rv);
-    if (rv) {
-      out_error = "no se pudieron mover los archivos extraidos";
-      fs::remove_all(temp_dir, ec);
-      return false;
-    }
-    fs::remove_all(base_dir, ec);
-  }
-  fs::remove_all(temp_dir, ec);
-
-  out_name = name;
-  REXLOG_INFO("dbz3: mod instalado desde zip -> '{}'", name);
-  return true;
+  return FinishInstall(temp_dir, base, out_name, out_error);
 }
 
 #else  // !REX_PLATFORM_WIN32
@@ -639,9 +833,10 @@ namespace {
 std::string SanitizeModName(const std::string& raw) {
   std::string s = raw;
   for (char& c : s) {
-    if (c < 32 || c == '/' || c == '\\') c = '_';
+    if (static_cast<unsigned char>(c) < 32 || c == '/' || c == '\\' || c == ';') c = '_';
   }
   while (!s.empty() && (s.back() == '.' || s.back() == ' ')) s.pop_back();
+  while (!s.empty() && s.front() == '.') s.erase(s.begin());
   return s.empty() ? "mod" : s;
 }
 
@@ -678,45 +873,14 @@ bool InstallModFromZip(const std::string& zip_path_utf8, std::string& out_name,
   }
 
   const std::string base = SanitizeModName(rex::path_to_utf8(zip.stem()));
-  const fs::path temp_dir = mods_root / (".install_" + base);
-  fs::remove_all(temp_dir, ec);
+  const fs::path temp_dir = mods_root / (".install_" + Stamp());
   fs::create_directories(temp_dir, ec);
   if (!ExtractZip(zip, temp_dir)) {
     fs::remove_all(temp_dir, ec);
     out_error = "no se pudo extraer el zip (instala unzip)";
     return false;
   }
-
-  fs::path base_dir = temp_dir;
-  bool loose_file = false;
-  std::vector<fs::path> subdirs;
-  for (auto [it_9, iec_9] = std::pair{fs::directory_iterator(temp_dir, ec), std::error_code{}}; !iec_9 && it_9 != fs::directory_iterator(); it_9.increment(iec_9)) {
-    const auto& entry = *it_9;
-    if (entry.is_regular_file()) loose_file = true;
-    else if (entry.is_directory()) subdirs.push_back(entry.path());
-  }
-  if (!loose_file && subdirs.size() == 1) base_dir = subdirs[0];
-
-  std::string name = base;
-  fs::path dest = mods_root / name;
-  for (int suffix = 2; fs::exists(dest, ec); ++suffix) {
-    dest = mods_root / (name + "_" + std::to_string(suffix));
-  }
-  name = rex::path_to_utf8(dest.filename());
-  fs::rename(base_dir, dest, ec);
-  if (ec) {
-    ec.clear();
-    fs::copy(base_dir, dest, fs::copy_options::recursive, ec);
-    if (ec) {
-      fs::remove_all(temp_dir, ec);
-      out_error = "no se pudieron mover los archivos extraidos";
-      return false;
-    }
-  }
-  fs::remove_all(temp_dir, ec);
-  out_name = name;
-  REXLOG_INFO("dbz3: mod instalado desde zip -> '{}'", name);
-  return true;
+  return FinishInstall(temp_dir, base, out_name, out_error);
 }
 
 #endif  // REX_PLATFORM_WIN32
@@ -734,6 +898,7 @@ void LoadProfiles(std::map<std::string, std::vector<std::string>>& out) {
   std::string line;
   std::string current;
   while (std::getline(in, line)) {
+    if (line.rfind("\xEF\xBB\xBF", 0) == 0) line.erase(0, 3);   // BOM (guardado con el Bloc de notas)
     while (!line.empty() && (line.back() == '\r' || line.back() == ' ' ||
                              line.back() == '\t')) {
       line.pop_back();
@@ -741,9 +906,8 @@ void LoadProfiles(std::map<std::string, std::vector<std::string>>& out) {
     if (line.empty() || line[0] == '#') {
       continue;
     }
-    if (line[0] == '[') {
-      const size_t close = line.find(']');
-      current = close == std::string::npos ? "" : line.substr(1, close - 1);
+    if (line[0] == '[' && line.back() == ']') {   // "[HD] Goku" es un mod, no un perfil
+      current = line.substr(1, line.size() - 2);
     } else if (!current.empty()) {
       out[current].push_back(line);
     }
@@ -828,7 +992,7 @@ bool DeleteProfile(const std::string& name) {
 
 void ApplyProfile(const std::string& name) {
   const std::vector<std::string> want = ProfileEnabledMods(name);
-  for (const ModInfo& mod : ListMods()) {
+  for (const ModInfo& mod : ListMods(false)) {
     const bool on = std::find(want.begin(), want.end(), mod.name) != want.end();
     if (mod.enabled != on) {
       SetModEnabled(mod.name, on);
@@ -836,5 +1000,93 @@ void ApplyProfile(const std::string& name) {
   }
   REXLOG_INFO("dbz3: perfil '{}' aplicado ({} mods activos)", name, want.size());
 }
+
+std::vector<ModConflict> FindConflicts() {
+  namespace fs = std::filesystem;
+  std::vector<std::string> mods;
+  for (const ModInfo& m : ListMods(false)) {
+    if (m.enabled && m.name != "_roster") mods.push_back(m.name);   // _roster lo genera el kit
+  }
+  // mismo orden que ScanModDirs del runtime (ruta de carpeta, alfabetico)
+  std::sort(mods.begin(), mods.end(), [](const std::string& a, const std::string& b) {
+    return fs::u8path(a) < fs::u8path(b);
+  });
+  std::map<std::string, std::string> owner;                  // recurso -> primer mod (el que gana)
+  std::map<std::pair<std::string, std::string>, int> pairs;  // (gana, pierde) -> recursos
+  for (const std::string& mod : mods) {
+    for (const char* region : {"us", "eu"}) {
+      const fs::path base = ModsRoot() / fs::u8path(mod) / region;
+      std::error_code ec;
+      for (auto [it, iec] = std::pair{fs::directory_iterator(base, ec), std::error_code{}};
+           !iec && it != fs::directory_iterator(); it.increment(iec)) {
+        const std::string top = rex::path_to_utf8(it->path().filename());
+        std::vector<std::string> keys;
+        if (it->is_regular_file(ec)) {
+          keys.push_back(top);                                  // archivo entero (data_*.afs...)
+        } else if (it->is_directory(ec)) {
+          for (auto [e, eec] = std::pair{fs::directory_iterator(it->path(), ec), std::error_code{}};
+               !eec && e != fs::directory_iterator(); e.increment(eec)) {
+            keys.push_back(top + "/" + rex::path_to_utf8(e->path().filename()));   // entrada <afs>/<n>
+          }
+        }
+        for (const std::string& k : keys) {
+          const auto [at, fresh] = owner.emplace(std::string(region) + "/" + k, mod);
+          if (!fresh && at->second != mod) ++pairs[{at->second, mod}];
+        }
+      }
+    }
+  }
+  std::vector<ModConflict> out;
+  for (const auto& [p, n] : pairs) out.push_back({p.first, p.second, n});
+  return out;
+}
+
+// ---- memoria de la ultima partida: una palabra en dbz3_ultima_partida.txt junto al exe
+namespace {
+std::filesystem::path SessionFile() { return ModsRoot().parent_path() / "dbz3_ultima_partida.txt"; }
+std::string SessionState() {
+  std::ifstream in(SessionFile());
+  std::string s;
+  std::getline(in, s);
+  return s;
+}
+void SetSessionState(const char* s) {
+  std::ofstream(SessionFile(), std::ios::trunc) << s << "\n";
+}
+std::vector<std::string> EnabledMods() {
+  std::vector<std::string> on;
+  for (const ModInfo& m : ListMods(false)) {
+    if (m.enabled && m.name != "_roster") on.push_back(m.name);   // _roster lo genera el kit
+  }
+  return on;
+}
+}  // namespace
+
+void SessionStart() { SetSessionState("en_marcha"); }
+
+void SessionEnd(bool ok) {
+  if (SessionState() != "en_marcha") return;   // sin JUGAR desde el launcher (o ya cerrada)
+  if (!ok) {   // desde el gestor de cierres: solo la marca, nada pesado
+    SetSessionState("cerrado_de_golpe");
+    return;
+  }
+  SetSessionState("ok");
+  SaveProfile(kGoodProfile, EnabledMods());
+}
+
+std::vector<std::string> SessionSuspects() {
+  const std::string st = SessionState();
+  if (st.empty() || st == "ok") return {};
+  const auto good = ProfileEnabledMods(kGoodProfile);
+  std::vector<std::string> out;
+  for (const std::string& m : EnabledMods()) {
+    // sin partida buena anterior no se sabe cual fue: se ofrecen todos los activos
+    if (std::find(good.begin(), good.end(), m) == good.end()) out.push_back(m);
+  }
+  REXLOG_WARN("dbz3: la ultima partida no termino bien ({}); mods nuevos desde la buena: {}", st, out.size());
+  return out;
+}
+
+void SessionForget() { SetSessionState("ok"); }
 
 }  // namespace dbz3

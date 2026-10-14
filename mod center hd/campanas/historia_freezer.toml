@@ -84,6 +84,9 @@ filas = 17
 llegada_es = ["Las Bolas de Dragón de Namek serán mías."]   # frase al llegar al mapa de la saga
 llegada_en = ["The Dragon Balls of Namek will be mine."]
 combate = 654
+# dialogo recortado del juego (paginas y voces originales)
+dialogo_paginas = ["1180.1", 1, 2, 3]
+dialogo_voz = [2717, 0, 0, 0]
 rival = 7
 traje_rival = 3                   # Vegeta con la armadura de Namek
 premio = 96
@@ -102,6 +105,12 @@ victoria_en = ["Curse... you...", "Now tell me where the Dragon Balls are."]
 
 [[capitulo]]
 combate = 655
+# dialogo recortado del juego (paginas y voces originales)
+retratos_dialogo = [1449, 1464]
+dialogo_paginas = ["1190.3", "1189.0", 2, "1189.4"]
+dialogo_voz = [2766, 2757, 0, 2761]
+victoria_paginas = [0, "1191.1"]
+victoria_voz = [0, 2768]
 rival = 11
 premio = 97
 forma_jugador = 1
@@ -120,6 +129,11 @@ victoria_en = ["Impossible... this power...", "And I still have more transformat
 
 [[capitulo]]
 combate = 656
+# dialogo recortado del juego (paginas y voces originales)
+dialogo_paginas = [0, "1191.3"]
+dialogo_voz = [0, 2770]
+victoria_paginas = [0, "1192.1"]
+victoria_voz = [0, 2775]
 rival = 11
 premio = 98
 forma_jugador = 2
@@ -134,6 +148,10 @@ victoria_en = ["I can't... move...", "Kneel before the emperor of the universe."
 
 [[capitulo]]
 combate = 657
+# dialogo recortado del juego (paginas y voces originales)
+retratos_dialogo = [1466, 1436]
+dialogo_paginas = ["1194.0", "1194.1"]
+dialogo_voz = [2779, 2780]
 rival = 7
 traje_rival = 3                   # Vegeta con la armadura de Namek
 forma_jugador = 3
@@ -152,6 +170,11 @@ victoria_en = ["Ka... Kakarot... avenge me...", "Saiyan pride is worthless befor
 
 [[capitulo]]
 combate = 658
+# dialogo recortado del juego (paginas y voces originales)
+dialogo_paginas = ["1196.0", "1196.1", "1196.2", "1196.3"]
+dialogo_voz = [2782, 2783, 2784, 2785]
+victoria_paginas = [0, "1196.7"]
+victoria_voz = [0, 2789]
 rival = 0
 premio = 100
 forma_jugador = 3
@@ -170,6 +193,8 @@ victoria_en = ["I'm... not finished yet...", "You don't have much left, monkey."
 
 [[capitulo]]
 combate = 659
+# dialogo recortado del juego (paginas y voces originales)
+dialogo_paginas = ["1201.0", 1, 2, 3]
 rival = 10
 traje_rival = 2                   # Krilin con la armadura de Namek
 forma_jugador = 3
@@ -188,6 +213,9 @@ victoria_en = ["Goku... forgive me...", "One less insect."]
 
 [[capitulo]]
 combate = 660
+# dialogo recortado del juego (paginas y voces originales)
+dialogo_paginas = [0, "1197.0", 2, "1197.1"]
+dialogo_voz = [0, 2790, 0, 2791]
 rival = 0
 premio = 101
 forma_jugador = 3
@@ -206,6 +234,9 @@ victoria_en = ["I have... no strength left...", "No one can defeat Frieza."]
 
 [[capitulo]]
 combate = 661
+# dialogo recortado del juego (paginas y voces originales)
+dialogo_paginas = [0, 1, "1202.2", 3]
+dialogo_voz = [0, 0, 2804, 0]
 rival = 2
 traje_rival = 1                   # Gohan con la armadura de Namek
 forma_jugador = 3
@@ -224,6 +255,11 @@ victoria_en = ["Dad...", "Your father can't save you."]
 
 [[capitulo]]
 combate = 662
+# dialogo recortado del juego (paginas y voces originales)
+dialogo_paginas = ["1252.1", "1252.2"]
+dialogo_voz = [2917, 2918]
+victoria_paginas = ["1252.5", 1]
+victoria_voz = [2921, 0]
 rival = 10
 traje_rival = 2                   # Krilin con la armadura de Namek
 forma_jugador = 3
@@ -238,6 +274,11 @@ victoria_en = ["Gokuuu!", "Now, Saiyan, get angry already!"]
 
 [[capitulo]]
 combate = 663
+# dialogo recortado del juego (paginas y voces originales)
+dialogo_paginas = ["1252.6", 1, "1253.0", "1198.0"]
+dialogo_voz = [2922, 0, 2923, 2792]
+victoria_paginas = [0, "1198.2"]
+victoria_voz = [0, 2794]
 rival = 0
 premio = 102
 forma_jugador = 4                 # Freezer al 100%

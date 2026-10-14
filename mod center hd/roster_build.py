@@ -90,6 +90,7 @@ esqueleto. El runtime (src/roster_ext.cpp + select_ext.cpp) lee `_roster/roster.
 Necesita el runtime con entradas AFS anadidas (AfsVirtualSize, handback 2026-10-03).
 """
 import argparse
+from hornada_support import TreePublish, retire_tree, validate_roster
 import hashlib
 import io
 import json
@@ -107,6 +108,20 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def toml_file(path):
+    """TOML de un mod: tolera el BOM del Bloc de notas (tomllib lo rechaza); un archivo que no es
+    UTF-8 da TOMLDecodeError como cualquier TOML roto (los except ya lo tratan)."""
+    with open(path, "rb") as fh:
+        data = fh.read()
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise tomllib.TOMLDecodeError("no es UTF-8 (%s)" % exc, "", 0) from exc
+    return tomllib.loads(text)
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 for p in (os.path.join(HERE, "lib"), os.path.join(ROOT, "awo_tools")):
     if os.path.isdir(p) and p not in sys.path:
@@ -801,15 +816,26 @@ def hud_images(c, ui, form_models, fetch=None):
 
 
 # ---------------------------------------------------------------- trajes extra
+def mod_off(mods_dir, name):
+    """Igual que ListMods y el runtime: marcador .disabled, carpeta X.disabled o .carpeta
+    (zip a medio instalar, copias internas)."""
+    return (name.startswith(".") or name.endswith(".disabled") or
+            os.path.exists(os.path.join(mods_dir, name, ".disabled")))
+
+
 def traje_mods(mods_dir):
     out = []
     for name in sorted(os.listdir(mods_dir)):
         d = os.path.join(mods_dir, name)
         f = os.path.join(d, "traje.toml")
-        if name == OUT_MOD or not os.path.isfile(f) or os.path.exists(os.path.join(d, ".disabled")):
+        if name == OUT_MOD or not os.path.isfile(f) or mod_off(mods_dir, name):
             continue
-        with open(f, "rb") as fh:
-            out.append((name, d, dict(tomllib.load(fh).get("traje", {}))))
+        try:
+            cfg = dict(toml_file(f).get("traje", {}))
+        except (OSError, ValueError, TypeError) as exc:
+            log("!! %s: traje.toml no valido (%s): omitido" % (name, exc))
+            continue
+        out.append((name, d, cfg))
     return out
 
 
@@ -849,11 +875,14 @@ def source_mods(mods_dir):
     for name in sorted(os.listdir(mods_dir)):
         d = os.path.join(mods_dir, name)
         f = os.path.join(d, "personaje.toml")
-        if name == OUT_MOD or not os.path.isfile(f) or os.path.exists(os.path.join(d, ".disabled")):
+        if name == OUT_MOD or not os.path.isfile(f) or mod_off(mods_dir, name):
             continue
-        with open(f, "rb") as fh:
-            doc = tomllib.load(fh)
-        cfg = dict(doc.get("personaje", {}))
+        try:
+            doc = toml_file(f)
+            cfg = dict(doc.get("personaje", {}))
+        except (OSError, ValueError, TypeError) as exc:
+            log("!! %s: personaje.toml no valido (%s): omitido" % (name, exc))
+            continue
         cfg["_capsulas"] = doc.get("capsula", [])
         out.append((name, d, cfg))
     return out
@@ -889,14 +918,13 @@ def all_source_mods(mods_dir):
     for name in sorted(os.listdir(mods_dir)):
         d = os.path.join(mods_dir, name)
         f = os.path.join(d, "personaje.toml")
-        if name == OUT_MOD or not os.path.isfile(f):
+        if name == OUT_MOD or name.startswith(".") or not os.path.isfile(f):
             continue
         try:
-            with open(f, "rb") as fh:
-                cfg = tomllib.load(fh).get("personaje", {})
+            cfg = toml_file(f).get("personaje", {})
         except (OSError, tomllib.TOMLDecodeError):
             cfg = {}
-        out.append((name, d, cfg, not os.path.exists(os.path.join(d, ".disabled"))))
+        out.append((name, d, cfg, not mod_off(mods_dir, name)))
     return out
 
 
@@ -936,7 +964,8 @@ def status(a):
 def set_toml_keys(path, values):
     """Escribe/actualiza claves `k = v` en la seccion [personaje] (v ya en sintaxis TOML;
     None borra la clave)."""
-    lines = open(path, encoding="utf-8").read().splitlines()
+    original = open(path, encoding="utf-8").read()
+    lines = original.splitlines()
     sec, end = None, len(lines)
     for i, ln in enumerate(lines):
         s = ln.strip()
@@ -963,7 +992,17 @@ def set_toml_keys(path, values):
         else:
             lines.insert(end, "%s = %s" % (k, v))
             end += 1
-    open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    text = "\n".join(lines) + "\n"
+    if text == original:
+        return
+    # copia del anterior en mods_respaldo (son ajustes del usuario: nunca se pierden)
+    mod_dir = os.path.dirname(os.path.abspath(path))
+    bak_dir = os.path.join(os.path.dirname(os.path.dirname(mod_dir)), "mods_respaldo")
+    os.makedirs(bak_dir, exist_ok=True)
+    import uuid  # noqa: PLC0415
+    shutil.copyfile(path, os.path.join(bak_dir, "%s_%s_%s_%s" % (
+        os.path.basename(mod_dir), time.strftime("%Y%m%d_%H%M%S"), uuid.uuid4().hex[:8], os.path.basename(path))))
+    open(path, "w", encoding="utf-8").write(text)
 
 
 def write_rgba(path, img):
@@ -980,8 +1019,7 @@ def preview(a):
     mods = a.mods or default_mods()
     d = os.path.join(mods, a.mod)
     tf = os.path.join(d, "personaje.toml")
-    with open(tf, "rb") as fh:
-        c = tomllib.load(fh).get("personaje", {})
+    c = toml_file(tf).get("personaje", {})
     edits = {}
     ui = os.path.join(d, "ui")
     os.makedirs(ui, exist_ok=True)
@@ -1593,9 +1631,14 @@ def build(a):
     srcs = source_mods(mods)
     trajes = traje_mods(mods)
     if not srcs and not trajes:
+        # Fuentes presentes pero ilegibles: no retirar el roster que funcionaba.
+        if any(not mod_off(mods, n) and
+               any(os.path.isfile(os.path.join(mods, n, f)) for f in
+                   ("personaje.toml", "traje.toml")) for n in os.listdir(mods) if n != OUT_MOD):
+            raise ValueError("ninguna fuente valida: _roster anterior conservado")
         if os.path.isdir(out_dir):
-            shutil.rmtree(out_dir)
-            log("sin personajes nuevos activos: _roster eliminado")
+            retire_tree(out_dir)
+            log("sin personajes nuevos activos: _roster apartado en mods_respaldo")
         else:
             log("sin personajes nuevos activos")
         return 0
@@ -1604,6 +1647,8 @@ def build(a):
     if not a.force and os.path.isfile(stamp) and open(stamp).read().strip() == digest:
         log("_roster al dia (%d personajes)" % len(srcs))
         return 0
+    target_dir = out_dir
+    txn = None
     work = tempfile.mkdtemp(prefix="roster_")
     global _POOL
     from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
@@ -1614,9 +1659,9 @@ def build(a):
         # data_eng; lo escrito en data_usi no lo lee el juego EU (inofensivo).
         usi_path = os.path.join(us, "data_usi.afs")
         usi = Afs(usi_path if os.path.isfile(usi_path) else os.path.join(us, "data_eng.afs"), work)
-        if os.path.isdir(out_dir):
-            shutil.rmtree(out_dir)
-        os.makedirs(out_dir)
+        txn = TreePublish(target_dir)
+        out_dir = str(txn.stage)
+        stamp = os.path.join(out_dir, "build.hash")
         next_fid = len(cmn.index)
         sel = bytearray(usi.entry(SELECT_ENTRY))
         texs = azt_textures(sel)
@@ -1646,20 +1691,35 @@ def build(a):
             if cid is None:
                 log("!! %s: no quedan IDs libres (maximo %d personajes nuevos)" % (name, len(free)))
                 continue
-            donor = int(c.get("donante", 21))
-            dn = IDS[donor]
+            try:
+                donor = int(c.get("donante", 21))
+                dn = IDS[donor]
+                if not dn.get("models"):
+                    raise ValueError("donante sin modelos")
+            except (ValueError, TypeError, KeyError) as exc:
+                log("!! %s: donante no valido (%s): omitido" % (name, exc))
+                continue
             # modelos
             files = c.get("modelos", [])
             if not files:
                 log("!! %s: sin modelos" % name)
                 continue
-            per = int(c.get("modelos_por_traje", 1))
-            nforms, mforma, form_lines = forms_config(c, dn, per, donor, name)
+            try:
+                per = int(c.get("modelos_por_traje", 1))
+                if not 1 <= per <= 8:
+                    raise ValueError("modelos_por_traje debe ser 1..8")
+                nforms, mforma, form_lines = forms_config(c, dn, per, donor, name)
+            except (ValueError, TypeError, KeyError) as exc:
+                log("!! %s: formas no validas (%s): omitido" % (name, exc))
+                continue
             model_fids, heights, prefixes, hds = [], [], [], []
             first_hd = None
             hdbs = []
             try:              # un modelo que no se puede leer no tumba el montaje de los demas
-                raws = [open(os.path.join(d, rel), "rb").read() for rel in files]
+                raws = []
+                for rel in files:
+                    with open(os.path.join(d, rel), "rb") as fh:
+                        raws.append(fh.read())
                 if c.get("moveset") and c.get("altura", True):
                     try:
                         raws = forms_height_fixed(raws, per, load_bin(os.path.join(d, c["moveset"][0]), work),
@@ -1669,7 +1729,7 @@ def build(a):
                 for rel, raw in zip(files, raws):
                     hdbs.append(to_hd(raw, work))
             except Exception as e:  # noqa: BLE001
-                log("!! %s: modelo %s no valido (%s): personaje omitido" % (name, rel, e))
+                log("!! %s: modelo no valido (%s): personaje omitido" % (name, e))
                 continue
             for hdb in hdbs:
                 first_hd = first_hd or hdb
@@ -1717,6 +1777,11 @@ def build(a):
                 ic, pors, notes = select_images(c, ui, first_hd, portrait_size(tpls[0]), fetch=cmn.entry)
             except Exception as e:  # noqa: BLE001
                 log("!! %s: %s" % (name, e))
+                continue
+            missing_por = [v + 1 for v in (0, 1) if pors[v] is None and not
+                           os.path.isfile(os.path.join(ui, "retrato_p%d.png" % (v + 1)))]
+            if missing_por:
+                log("!! %s: faltan retratos terminados %s: omitido" % (name, missing_por))
                 continue
             for n_ in notes:
                 log("   %s: %s" % (name, n_))
@@ -2084,7 +2149,11 @@ def build(a):
         open(os.path.join(out_dir, "manifest.txt"), "w", encoding="utf-8").write(
             "Personajes nuevos (generado por roster_build.py)\n" + "\n".join(manifest) + "\n")
         open(stamp, "w").write(digest)
-        clean_custom_lists(mods, first_new, own_caps)
+        txn.commit(validate_roster)
+        try:   # el _roster ya esta publicado: un fallo aqui es un aviso, no un montaje fallido
+            clean_custom_lists(mods, first_new, own_caps)
+        except Exception as exc:  # noqa: BLE001
+            log("aviso: listas Custom sin revisar (%s)" % exc)
         log("_roster listo: %d personajes, data_cmn %d..%d" % (len(manifest), len(cmn.index), next_fid - 1))
         return 0
     finally:
@@ -2094,6 +2163,8 @@ def build(a):
             if _POOL is not None:
                 _POOL.shutdown(wait=True)
                 _POOL = None
+            if txn is not None:
+                txn.finish()
             shutil.rmtree(work, ignore_errors=True)
 
 
@@ -2118,7 +2189,9 @@ def clean_custom_lists(mods, first_new, own_caps):
         else:
             keep.append(ln)
     if gone:
-        shutil.copyfile(path, path + time.strftime(".%Y%m%d_%H%M%S.bak"))
+        # copia unica (A4/C7): dos montajes en el mismo segundo ya no se pisan la copia
+        import uuid  # noqa: PLC0415
+        shutil.copyfile(path, path + time.strftime(".%Y%m%d_%H%M%S.") + uuid.uuid4().hex[:8] + ".bak")
         open(path, "w", encoding="utf-8").write("\n".join(keep) + "\n")
         log("capsulas Custom de los IDs %s: sus capsulas cambiaron, vuelven a la lista Normal "
             "(copia: capsulas_custom.txt.*.bak)" % gone)
@@ -2182,8 +2255,7 @@ CAP_KEYS = ("nombre", "tipo", "forma", "formas", "ki", "equipada", "reemplaza", 
 
 
 def read_caps(path):
-    with open(path, "rb") as fh:
-        return [dict(c) for c in tomllib.load(fh).get("capsula", [])]
+    return [dict(c) for c in toml_file(path).get("capsula", [])]
 
 
 def write_caps(path, caps):
@@ -2550,6 +2622,10 @@ def make_team(a):
     work = tempfile.mkdtemp(prefix="equipo_")
     try:
         cmn = Afs(os.path.join(us, "data_cmn.afs"), work)
+        anm_by_id = {m: next((x for x in IDS[m].get("anm", []) if 0 <= x < len(cmn.index)), None)
+                     for m in members}
+        if any(v is None for v in anm_by_id.values()):
+            raise SystemExit("ERROR: equipo con miembro sin animacion valida en este AFS")
         mod = a.mod or "equipo_" + "_".join(re.sub(r"[^a-z0-9]", "", IDS[m]["name"].lower()) for m in members)
         d = os.path.join(mods, mod)
         for sub in ("modelos", "bocas", "moveset", "ui"):
@@ -2560,7 +2636,7 @@ def make_team(a):
             open(os.path.join(d, "modelos", "forma%d.amb" % (k + 1)), "wb").write(cmn.entry(dm["models"][0]))
             open(os.path.join(d, "bocas", "forma%d.bin" % (k + 1)), "wb").write(cmn.entry(dm["lips"][0]))
             open(os.path.join(d, "moveset", "anm_forma%d.bin" % (k + 1)), "wb").write(
-                cmn.entry(next(x for x in dm["anm"] if 0 <= x < len(cmn.index))))
+                cmn.entry(anm_by_id[m]))
             cam = cmn.entry(dm["cam"])
             at = capsulas.ccm_child(cam)
             cams.append((cam, at))
@@ -2603,8 +2679,7 @@ def caps_cmd(a):
     caps = read_caps(path)
     changed = False
     if a.importar:
-        with open(path, "rb") as fh:
-            c = tomllib.load(fh).get("personaje", {})
+        c = toml_file(path).get("personaje", {})
         new = import_caps(a, path, c, os.path.join(mods, a.mod))
         if new is None:
             return 1

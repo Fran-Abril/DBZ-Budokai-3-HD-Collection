@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -341,15 +342,6 @@ int AfsFindEntry(const std::filesystem::path& host_path, uint64_t byte_offset,
 // release subfolder (dbz3_avx2/dbz3_legacy) while the mods stay next to the
 // game data, so walk up from the executable looking for a "mods" directory.
 std::filesystem::path AfsModsRoot() {
-  std::filesystem::path probe = rex::filesystem::GetExecutableFolder();
-  std::error_code ec;
-  for (int depth = 0; depth < 4; ++depth) {
-    const std::filesystem::path candidate = probe / "mods";
-    if (std::filesystem::is_directory(candidate, ec)) {
-      return candidate;
-    }
-    probe = probe.parent_path();
-  }
   return rex::filesystem::GetExecutableFolder() / "mods";
 }
 
@@ -374,13 +366,25 @@ void ScanModDirs() {
   const std::filesystem::path mods_root = AfsModsRoot();
   std::error_code ec;
   if (std::filesystem::is_directory(mods_root, ec)) {
-    for (const auto& mod_entry : std::filesystem::directory_iterator(mods_root, ec)) {
-      if (mod_entry.is_directory()) {
-        // Disabled mods have a ".disabled" marker file.
-        if (!std::filesystem::exists(mod_entry.path() / ".disabled")) {
-          g_mod_dirs_cache.push_back(mod_entry.path());
-        }
+    std::filesystem::directory_iterator it(mods_root, ec);
+    for (; !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+      const auto& mod_entry = *it;
+      std::error_code fec;
+      if (!mod_entry.is_directory(fec)) {
+        continue;
       }
+      // Desactivado = marcador ".disabled" dentro o carpeta "<mod>.disabled" (como ListMods del
+      // launcher); ".install_*" es un zip a medio instalar. Antes solo se miraba el marcador.
+      // native(): string() lanza con nombres fuera de la pagina de codigos de Windows
+      const std::filesystem::path::string_type name = mod_entry.path().filename().native();
+      const std::filesystem::path::string_type off = std::filesystem::path(".disabled").native();
+      const bool suffix = name.size() > off.size() &&
+                          name.compare(name.size() - off.size(), off.size(), off) == 0;
+      if (name.empty() || name[0] == '.' || suffix ||
+          std::filesystem::exists(mod_entry.path() / ".disabled", fec)) {
+        continue;
+      }
+      g_mod_dirs_cache.push_back(mod_entry.path());
     }
   }
   std::sort(g_mod_dirs_cache.begin(), g_mod_dirs_cache.end());
@@ -388,6 +392,29 @@ void ScanModDirs() {
 }
 
 }  // namespace
+
+// Forma carpeta (mods/<mod>/us/<afs>/<n>/<archivo>): el primer archivo en orden alfabetico.
+// Las tres busquedas (contenido, tamano de la tabla y desplazamiento) usan esta misma eleccion.
+// Se saltan los restos de Windows/Mac y las notas (Thumbs.db, desktop.ini, .DS_Store, LEEME.txt).
+static std::filesystem::path FirstFileIn(const std::filesystem::path& dir) {
+  std::filesystem::path first;
+  std::error_code ec;
+  for (auto [it, iec] = std::pair{std::filesystem::directory_iterator(dir, ec), std::error_code{}};
+       !iec && it != std::filesystem::directory_iterator(); it.increment(iec)) {
+    std::error_code fec;
+    std::string name = rex::path_to_utf8(it->path().filename());
+    for (char& c : name) c = char(std::tolower(uint8_t(c)));
+    const auto ends = [&name](std::string_view s) {
+      return name.size() >= s.size() && name.compare(name.size() - s.size(), s.size(), s) == 0;
+    };
+    if (name.empty() || name[0] == '.' || name == "thumbs.db" || name == "desktop.ini" ||
+        ends(".txt") || ends(".md") || ends(".url")) {
+      continue;
+    }
+    if (it->is_regular_file(fec) && (first.empty() || it->path() < first)) first = it->path();
+  }
+  return first;
+}
 
 // Look for a mod-provided replacement for the given AFS entry. A mod is a
 // subfolder under <exe>/mods/<mod>/us/<afs_filename>/<entry_index>. The first
@@ -432,16 +459,16 @@ bool AfsFindModOverride(const std::filesystem::path& host_path, int entry_index,
     }
     if (std::filesystem::is_directory(candidate, ec)) {
       // Folder form: mods/<mod>/us/<afs>/<entry_index>/<file>. Use the first
-      // regular file inside (lexicographic order).
-      for (const auto& mod_file : std::filesystem::directory_iterator(candidate, ec)) {
-        if (mod_file.is_regular_file()) {
-          if (log_override_lookups) {
-            REXLOG_INFO("AFS OVERRIDE HIT (folder): {}", rex::path_to_utf8(mod_file.path()));
-          }
-          out_path = mod_file.path();
-          g_override_cache[cache_key] = out_path;
-          return true;
+      // regular file inside in lexicographic order (A9: directory_iterator no
+      // garantiza orden; antes el ganador dependia del sistema de archivos).
+      const std::filesystem::path first = FirstFileIn(candidate);
+      if (!first.empty()) {
+        if (log_override_lookups) {
+          REXLOG_INFO("AFS OVERRIDE HIT (folder): {}", rex::path_to_utf8(first));
         }
+        out_path = first;
+        g_override_cache[cache_key] = out_path;
+        return true;
       }
     }
   }
@@ -522,11 +549,9 @@ bool FindModOverrideQuiet(const std::filesystem::path& host_path, int entry_inde
       return true;
     }
     if (std::filesystem::is_directory(candidate, ec)) {
-      for (const auto& mod_file : std::filesystem::directory_iterator(candidate, ec)) {
-        if (mod_file.is_regular_file()) {
-          out_path = mod_file.path();
-          return true;
-        }
+      if (const auto first = FirstFileIn(candidate); !first.empty()) {
+        out_path = first;
+        return true;
       }
     }
   }
@@ -552,6 +577,10 @@ int64_t MaxAppendedOverride(const std::filesystem::path& host_path, uint32_t fir
       if (name.empty() || name.size() > 6 ||
           name.find_first_not_of("0123456789") != std::string::npos) {
         continue;
+      }
+      std::error_code dec;
+      if (e.is_directory(dec) && FirstFileIn(e.path()).empty()) {
+        continue;   // carpeta <N> vacia: no hay nada que servir
       }
       const int64_t idx = std::stoll(name);
       if (idx >= int64_t(first_new) && idx > best) {
@@ -859,12 +888,10 @@ int AfsTranslateOffset(const std::filesystem::path& host_path, uint64_t virtual_
       return found;
     }
     if (std::filesystem::is_directory(candidate, ec)) {
-      for (const auto& mod_file : std::filesystem::directory_iterator(candidate, ec)) {
-        if (mod_file.is_regular_file()) {
-          out_override_path = mod_file.path();
-          out_override_mod_offset = virtual_offset - start;
-          return found;
-        }
+      if (const auto first = FirstFileIn(candidate); !first.empty()) {
+        out_override_path = first;
+        out_override_mod_offset = virtual_offset - start;
+        return found;
       }
     }
   }
@@ -924,12 +951,22 @@ void AfsResetModCache() {
     g_mod_dirs_scanned = false;
     g_mod_dirs_cache.clear();
   }
+  // A7/A8 (B26): los lectores guardan punteros a estas caches y los usan sin lock (la tabla
+  // virtual de AfsGetVirtualTableFast, el indice de AfsFindEntry). Un clear() los dejaba
+  // colgando si alguien leia durante el reset. Ahora se retiran sin liberar: mover un std::map
+  // no mueve sus nodos, asi que todo puntero ya entregado sigue valido.
+  // ponytail: crece una copia por reset (hoy 2 por arranque, antes del guest); si algun dia se
+  // resetea en plena partida, pasar a snapshots shared_ptr<const T>.
+  static std::vector<std::map<std::string, AfsFileIndex>> retired_index;
+  static std::vector<std::map<std::string, VirtualAfsLayout>> retired_vafs;
   {
     std::lock_guard<std::mutex> lock(g_afs_index_mutex);
+    retired_index.push_back(std::move(g_afs_index_cache));
     g_afs_index_cache.clear();
   }
   {
     std::lock_guard<std::mutex> lock(g_vafs_mutex);
+    retired_vafs.push_back(std::move(g_vafs_cache));
     g_vafs_cache.clear();
   }
 }

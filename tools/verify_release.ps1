@@ -1,4 +1,4 @@
-﻿# dbz3 - Verificacion de un paquete de release (github/release-stage) antes de
+# dbz3 - Verificacion de un paquete de release (github/release-stage) antes de
 # publicar. Comprueba que las DLLs del runtime son las del SDK baseline, que el
 # exe es el core dual esperado con VERSIONINFO correcto, que no hay assets del
 # juego en el zip, y que mods/ va vacia.
@@ -23,12 +23,13 @@ $errors = @()
 # Tamanos de las DLL canonicas de la release actual (SDK rama dbz3-burstlimit,
 # 2026-10-05). Historico: v1.3.0 = 10920448 / 6360064, v1.4.0 = 11034624 / 6372864,
 # v1.4.3 = 11109888 / 6431232.
-# v1.4.3.1 = 11127296 / 6448640.
+# v1.4.3.1 = 11127296 / 6448640. v1.4.4.5 (publicada) = 11129344 / 6482432.
+# 1.4.4.5 + Fase 0 SDK (B29/MODS-ROOT/MAPPINGS/VFS) + packs xN, 2026-10-13.
 # amd_fidelityfx_dx12.dll no cambia desde 2026-08-28.
-$canonVersion = "1.4.4.2"
+$canonVersion = "1.4.4.5"
 $canonSizes = @{
-    "rexruntime.dll"          = 11129344
-    "rexgpu-xenos.dll"        = 6482432
+    "rexruntime.dll"          = 11145216
+    "rexgpu-xenos.dll"        = 6537216
     "amd_fidelityfx_dx12.dll" = 5413888
 }
 
@@ -50,7 +51,19 @@ if (-not (Test-Path -LiteralPath $exe)) {
     $base_ver = if ($Version -ne "") {
         ([regex]::Match($Version.TrimStart('v'), '^[0-9]+(\.[0-9]+)*')).Value
     } else { "" }
-    if ($base_ver -ne "" -and $vi.FileVersion -and -not $vi.FileVersion.StartsWith($base_ver)) {
+    $versionMatch = $true
+    if ($Version -ne "" -and $base_ver -eq "") { $versionMatch = $false }
+    if ($base_ver -ne "" -and $vi.FileVersion) {
+        $want = @($base_ver.Split('.'))
+        $have = @($vi.FileVersion.Split('.'))
+        if ($want.Count -gt $have.Count) { $versionMatch = $false }
+        else {
+            for ($i = 0; $i -lt $want.Count; ++$i) {
+                if ([int]$want[$i] -ne [int]$have[$i]) { $versionMatch = $false }
+            }
+        }
+    }
+    if (-not $versionMatch) {
         $errors += "VERSIONINFO ($($vi.FileVersion)) no coincide con -Version ($Version)"
     }
     if (-not $vi.FileVersion) { $errors += "dbz3.exe sin VERSIONINFO (no se enlazo version.rc)" }

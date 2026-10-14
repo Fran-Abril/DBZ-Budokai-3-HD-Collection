@@ -8,7 +8,8 @@ volcado dev:
 
 donde `hash` identifica la textura ORIGINAL del juego (XXH3-64 de su bitmap) y
 `W`x`H` es el tamano de LA IMAGEN DEL PACK. El runtime deduce el factor de
-escala:  factor = W_pack / W_original  (debe ser entero, 1..4, e igual en X e Y).
+escala:  factor = W_pack / W_original  (entero e igual en X e Y; x5, x8... valen
+mientras la imagen no pase de 16384 px, el maximo 2D del runtime).
 
 Uso:
     python "mod center hd\\texture_pack.py" validar <carpeta_pack> [--dump <carpeta_volcado>]
@@ -32,7 +33,7 @@ import struct
 import sys
 
 NAME_RE = re.compile(r"^([0-9A-Fa-f]{16})_(\d+)x(\d+)_(.+)$")
-MAX_FACTOR = 4
+MAX_SIDE = 16384  # rexglue-sdk dbz3_texture_pack.cpp ReadImageSize
 
 
 def parse_name(stem):
@@ -169,8 +170,8 @@ def cmd_validar(pack_dir, dump_dir, strict):
             if fx != fy:
                 errors.append(f"{base}: factor distinto en X ({fx}) e Y ({fy})")
                 continue
-            if fx < 1 or fx > MAX_FACTOR:
-                errors.append(f"{base}: factor x{fx} fuera de rango (1..{MAX_FACTOR})")
+            if fx < 1 or w > MAX_SIDE or ht > MAX_SIDE:
+                errors.append(f"{base}: factor x{fx} fuera de rango (minimo x1, maximo {MAX_SIDE} px)")
                 continue
         ok += 1
 

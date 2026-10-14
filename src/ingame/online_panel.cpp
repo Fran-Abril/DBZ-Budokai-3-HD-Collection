@@ -10,7 +10,11 @@
 #include <string>
 #include <vector>
 
+#include <filesystem>
+
 #include <rex/cvar.h>
+#include <rex/filesystem.h>
+#include <rex/hash.h>
 #include <rex/hook.h>
 #include <rex/logging.h>
 #include <rex/input/input_system.h>
@@ -72,26 +76,14 @@ rex::input::InputSystem* Input() {
 // Rotulo "(X) TEXTO" abajo a la derecha del area 4:3 del juego, con el marco naranja y el azul de
 // los menus de B3; solo se dibuja (no captura el raton ni el mando).
 void EntryBadge(ImGuiIO& io, const char* text) {
-  const float h = io.DisplaySize.y, w43 = h * 4.0f / 3.0f, x0 = (io.DisplaySize.x - w43) * 0.5f;
-  const ImVec2 p0(x0 + w43 * 0.66f, h * 0.70f), p1(x0 + w43 * 0.95f, h * 0.775f);
+  namespace S = dbz3::ingame::style;
+  const S::Area a = S::GameArea(io);
+  const ImVec2 p0 = a.At(792, 630), p1 = a.At(1140, 697.5f);
   auto* dl = ImGui::GetForegroundDrawList();
-  const float r = (p1.y - p0.y) * 0.35f;
-  dl->AddRectFilledMultiColor(p0, p1, IM_COL32(20, 70, 150, 235), IM_COL32(20, 70, 150, 235),
-                              IM_COL32(8, 30, 80, 235), IM_COL32(8, 30, 80, 235));
-  dl->AddRect(p0, p1, IM_COL32(250, 140, 20, 255), r, 0, h * 0.005f);
-  const float bh = p1.y - p0.y, cy = (p0.y + p1.y) * 0.5f, cx = p0.x + bh * 0.55f, cr = bh * 0.32f;
-  dl->AddCircleFilled(ImVec2(cx, cy), cr, IM_COL32(40, 110, 230, 255));
-  dl->AddCircle(ImVec2(cx, cy), cr, IM_COL32(255, 255, 255, 255), 0, h * 0.003f);
-  ImFont* font = ImGui::GetFont();
-  const float fs = bh * 0.5f;
-  const ImVec2 xs = font->CalcTextSizeA(fs, FLT_MAX, 0, "X");
-  dl->AddText(font, fs, ImVec2(cx - xs.x * 0.5f, cy - xs.y * 0.5f), IM_COL32(255, 255, 255, 255), "X");
-  const float ts = bh * 0.55f;
-  const ImVec2 sz = font->CalcTextSizeA(ts, FLT_MAX, 0, text);
-  const ImVec2 tp(cx + cr + bh * 0.3f, cy - sz.y * 0.5f);
-  for (int dx = -2; dx <= 2; dx += 2)
-    for (int dy = -2; dy <= 2; dy += 2) dl->AddText(font, ts, ImVec2(tp.x + dx, tp.y + dy), IM_COL32(0, 20, 50, 255), text);
-  dl->AddText(font, ts, tp, IM_COL32(120, 230, 255, 255), text);
+  S::Frame(dl, p0, p1, a.s);
+  dl->PushClipRect(p0, p1, true);
+  S::HelpLine(dl, a.At(966, 663.75f), 36*a.s, {{"X", text}});
+  dl->PopClipRect();
 }
 
 // Fundido de nuestras filas con el del juego (medido 2026-10-11 con capturas cada 0,5 s): al
@@ -455,6 +447,38 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
   const Link link = s.link();
   const bool idle = link == Link::kIdle || link == Link::kError || link == Link::kLost;
   const bool host = s.role() == dbz3::net::Role::kHost;
+  // Admision: los dos PCs tienen que llevar el mismo programa (exe + runtime + GPU); los mods se
+  // comparan aparte en el HELLO. 1 contra 1: Tag Team online sigue sin autorizar (falta el relevo guest).
+  std::string admission_reason;
+  auto admission_ready = [&admission_reason]() {
+    if (dbz3::g_guest_eu) {
+      admission_reason = T::T("Online: solo con la version US del juego.", "Online: US version of the game only.");
+      return false;
+    }
+    const std::filesystem::path exe = rex::filesystem::GetExecutablePath();
+    std::vector<std::filesystem::path> files = {exe};
+#ifdef _WIN32
+    files.push_back(exe.parent_path() / "rexruntime.dll");
+    files.push_back(exe.parent_path() / "rexgpu-xenos.dll");
+#endif
+    std::string acc;
+    for (const auto& p : files) {
+      const std::string h = rex::hash_file(p);
+      if (h.empty()) {
+        admission_reason = T::T("Online: no se pudo verificar el programa: ", "Online: could not verify the program: ") +
+                           rex::path_to_utf8(p.filename());
+        return false;
+      }
+      acc += h;
+    }
+    Session::Get().Close();   // tras un error/perdida la sesion vuelve a reposo antes de fijar identidad
+    if (!Session::Get().ConfigureIdentity(rex::hash_bytes(acc), true, false)) {
+      admission_reason = T::T("Online: cierra la sesion anterior y vuelve a intentarlo.",
+                              "Online: close the previous session and try again.");
+      return false;
+    }
+    return true;
+  };
 
   // filas segun el estado
   enum Row { kHostRow, kJoinRow, kIpRow, kPortRow, kDelayRow, kStartRow, kCancelRow };
@@ -482,10 +506,12 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
     last_err_.clear();   // una accion nueva borra el error anterior
     switch (cur) {
       case kHostRow:
+        if (!admission_ready()) { last_err_ = admission_reason; break; }
         s.Host(uint16_t(port_), uint8_t(delay_), &last_err_);
         row_ = 0;
         break;
       case kJoinRow:
+        if (!admission_ready()) { last_err_ = admission_reason; break; }
         if (ip_[0]) {
           if (s.Join(ip_, uint16_t(port_), &last_err_) && REXCVAR_GET(dbz3_net_last_ip) != ip_) {
             rex::cvar::SetFlagByName("dbz3_net_last_ip", ip_);
@@ -535,10 +561,10 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
     const char* label = "";
     bool disabled = false;
     switch (rows[size_t(i)]) {
-      case kHostRow: label = T::T("CREAR PARTIDA", "HOST A MATCH"); break;
+      case kHostRow: label = T::T("CREAR PARTIDA", "HOST A MATCH"); disabled = dbz3::g_guest_eu; break;
       case kJoinRow:
         label = T::T("UNIRSE", "JOIN");
-        disabled = !ip_[0];
+        disabled = !ip_[0] || dbz3::g_guest_eu;
         break;
       case kIpRow:
         std::snprintf(buf, sizeof(buf), T::T("CODIGO  %s", "CODE  %s"), ip_[0] ? ip_ : "- - -");
@@ -590,7 +616,8 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
   if (!last_err_.empty()) say = last_err_ + "\n";
   if (idle) {
     if (link != Link::kIdle) say += s.Status() + "\n";
-    switch (cur) {
+    if (dbz3::g_guest_eu) say += T::T("Online: solo con la version US del juego.", "Online: US version of the game only.");
+    else switch (cur) {
       case kHostRow:
         say += T::T("Crea la partida: te dara un codigo de sala para pasarselo al otro jugador. Necesitais la misma version y los mismos mods.",
                     "Host the match: you get a room code to give to the other player. You both need the same version and mods.");
@@ -601,8 +628,8 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
                     "Type the host's room code (press A and use the keyboard; their IP also works), then join.");
         break;
       case kPortRow:
-        say += T::T("Puerto UDP. No suele hacer falta tocarlo: el juego intenta abrirlo solo en el router.",
-                    "UDP port. Usually no need to change it: the game tries to open it on the router by itself.");
+        say += T::T("Puerto UDP de red local. Esta prueba no abre el router.",
+                    "Local network UDP port. This test does not open your router.");
         break;
       default:
         say += T::T("Mas retardo, mas suave con mala conexion: 2-3 en casa, 4-6 por internet.",
@@ -626,8 +653,8 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
         say += T::T("\nPor internet puede necesitar abrir el puerto UDP en el router.",
                     "\nOver the internet the UDP port may need to be forwarded on the router.");
       } else {
-        say += T::T("\nCodigo de tu red de casa (buscando el de internet...).",
-                    "\nHome network code (looking for the internet one...).");
+        say += T::T("\nCodigo de red local; sin apertura automatica del router.",
+                    "\nLocal network code; no automatic router port forwarding.");
       }
     }
     if (link == Link::kConnected || link == Link::kStarting) {

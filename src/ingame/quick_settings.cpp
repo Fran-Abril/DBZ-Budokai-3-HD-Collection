@@ -100,6 +100,10 @@ void ConfigureQuickMenu(rex::ui::QuickMenuConfig& menu, std::function<void()> op
   menu.subtitle = "DRAGON BALL Z  BUDOKAI 3  HD";
   menu.text_change = T::T("Cambiar", "Change");
   menu.text_close = T::T("Cerrar", "Close");
+  // Y (mando) enciende/apaga el pack HD y cierra el menu: lo mismo que Burst Limit hace con
+  // su camara libre. El cambio es en vivo (dbz3_texture_packs_on es kHotReload).
+  menu.quick_toggle_cvar = "dbz3_texture_packs_on";
+  menu.quick_toggle_label = T::T("Pack HD", "HD pack");
   menu.text_saved = T::T("Se guarda solo", "Saved automatically");
   menu.text_restart = T::T("REINICIO", "RESTART");
   menu.text_on = T::T("SI", "ON");
@@ -179,10 +183,10 @@ void ConfigureQuickMenu(rex::ui::QuickMenuConfig& menu, std::function<void()> op
            "Keeps the floor and anything seen at an angle sharp.")));
   image.items.push_back(Toggle(
       T::T("Pack HD de texturas", "HD texture pack"), "dbz3_texture_packs_on",
-      T::T("Usa los packs de texturas HD instalados en mods. NO vuelve a las texturas "
-           "originales al momento, sin reiniciar.",
+      T::T("Usa los packs de texturas HD instalados en mods. Apagado vuelve a las texturas "
+           "originales al momento, sin reiniciar. Atajo: Y en el mando con este menu abierto.",
            "Uses the HD texture packs installed in mods. OFF switches back to the original "
-           "textures right away, no restart.")));
+           "textures right away, no restart. Shortcut: Y on the pad while this menu is open.")));
   {
     Item& rim = image.items.emplace_back(Number(
         T::T("Brillo HD", "HD shine"), "dbz3_hd_rim_light", 0.0, 1.0, 0.25,

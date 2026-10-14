@@ -10,9 +10,16 @@
   python tools/novas_mods.py publicar [--mods DIR] [--solo id ...]
       Empaqueta los mods de tools/novas_mods.toml (carpeta mods/ del juego), escribe la
       version en su manifest.txt, genera catalogo.toml y lo sube al repo con git.
+
+      Mods grandes (`release = "<tag>"` en el toml, p. ej. el pack de texturas HD de 2,9 GB):
+      git no admite ficheros de mas de 100 MB, asi que el zip va FUERA del repo, partido en
+      trozos de 1900 MiB (GitHub: < 2 GiB por asset) y subido como assets de esa release del
+      mismo repo privado. El catalogo lleva `partes = [ids]` y el launcher los baja y une.
+      `autor` y `enlaces = ["https://..."]` salen en la ficha con botones clicables.
 """
 import argparse
 import getpass
+import json
 import os
 import shutil
 import subprocess
@@ -25,7 +32,10 @@ REPO = "novapowers0/DBZ3HD-Novas-Mods"
 LIST = os.path.join(ROOT, "tools", "novas_mods.toml")
 KEY = os.path.join(ROOT, "novas_mods.key")
 WORK = os.path.join(ROOT, "novas_mods_repo")
+BIG = os.path.join(ROOT, "novas_mods_grandes")    # zips de las releases (fuera del repo git)
 MODS = os.path.join(ROOT, "out", "build", "win-amd64-release", "mods")
+PART = 1900 * 1024 * 1024                           # GitHub: < 2 GiB por asset de release
+STORED = (".png", ".dds", ".zip", ".jpg", ".ogg")    # ya comprimidos: deflate solo gasta tiempo
 
 
 def obfuscate(token):
@@ -50,13 +60,16 @@ def cmd_clave(_a):
     print("Clave guardada en", KEY)
 
 
-def manifest_with_version(path, version, name):
+def manifest_with_version(path, version, name, author=None):
     lines = open(path, encoding="utf-8").read().splitlines() if os.path.isfile(path) else ["name=" + name]
-    lines = [ln for ln in lines if not ln.startswith("version=")] + ["version=" + version]
+    drop = ("version=", "author=") if author else ("version=",)
+    lines = [ln for ln in lines if not ln.startswith(drop)] + ["version=" + version]
+    if author:
+        lines.append("author=" + author)       # credito tambien en la pestana Mods
     return "\n".join(lines) + "\n"
 
 
-def pack(src, mod_id, version, name, out_zip):
+def pack(src, mod_id, version, name, out_zip, author=None):
     """Zip con la carpeta <id>/ (InstallModFromZip la desenvuelve); el manifest lleva la version."""
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as z:
         for d, _, fs in os.walk(src):
@@ -65,12 +78,44 @@ def pack(src, mod_id, version, name, out_zip):
                 rel = os.path.relpath(p, src).replace("\\", "/")
                 if rel == "manifest.txt" or rel == ".disabled" or f.endswith((".bak", ".log")):
                     continue
-                z.write(p, mod_id + "/" + rel)
-        z.writestr(mod_id + "/manifest.txt", manifest_with_version(os.path.join(src, "manifest.txt"), version, name))
+                kind = zipfile.ZIP_STORED if f.lower().endswith(STORED) else zipfile.ZIP_DEFLATED
+                z.write(p, mod_id + "/" + rel, compress_type=kind)
+        z.writestr(mod_id + "/manifest.txt", manifest_with_version(os.path.join(src, "manifest.txt"), version, name, author))
 
 
 def toml_str(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def split(path, size=PART):
+    """Trocea `path` en <path>.001, .002... (se unen en orden, byte a byte). Devuelve las rutas."""
+    parts = []
+    with open(path, "rb") as src:
+        while True:
+            b = src.read(min(size, 64 << 20))
+            if not b:
+                return parts
+            name = "%s.%03d" % (path, len(parts) + 1)
+            with open(name, "wb") as out:
+                left = size
+                while b:
+                    out.write(b)
+                    left -= len(b)
+                    b = src.read(min(left, 64 << 20)) if left else b""
+            parts.append(name)
+
+
+def upload_release(tag, title, parts):
+    """Sube los trozos como assets de la release `tag` del repo privado y devuelve sus ids en orden."""
+    gh = ["gh", "release"]
+    if subprocess.run(gh + ["view", tag, "-R", REPO], capture_output=True).returncode:
+        subprocess.run(gh + ["create", tag, "-R", REPO, "--title", title, "--notes",
+                             "Nova's Mods: zip partido, lo descarga y une el launcher."], check=True)
+    subprocess.run(gh + ["upload", tag, "-R", REPO, "--clobber"] + parts, check=True)
+    rel = json.loads(subprocess.run(["gh", "api", "repos/%s/releases/tags/%s" % (REPO, tag)],
+                                    check=True, capture_output=True, text=True).stdout)
+    ids = {a["name"]: a["id"] for a in rel["assets"]}
+    return [ids[os.path.basename(p)] for p in parts]
 
 
 def cmd_publicar(a):
@@ -84,18 +129,33 @@ def cmd_publicar(a):
         src = os.path.join(a.mods, mid)
         if not os.path.isdir(src) and os.path.isdir(src + ".disabled"):
             src += ".disabled"
+        big = "release" in m
         zrel = "mods/%s.zip" % mid
-        zpath = os.path.join(WORK, zrel)
+        zpath = os.path.join(BIG if big else WORK, zrel)
+        os.makedirs(os.path.dirname(zpath), exist_ok=True)
+        ids_file = zpath + ".ids.json"    # ids de los assets subidos (para regenerar el catalogo)
         if not a.solo or mid in a.solo:
             if not os.path.isdir(src):
                 sys.exit("No encuentro el mod %s en %s" % (mid, a.mods))
-            pack(src, mid, m["version"], m["nombre_es"], zpath)
+            pack(src, mid, m["version"], m["nombre_es"], zpath, m.get("autor"))
             print("empaquetado %s v%s (%.1f MB)" % (mid, m["version"], os.path.getsize(zpath) / 1048576))
+            if big:
+                parts = split(zpath)
+                ids = upload_release(m["release"], m["nombre_es"], parts)
+                json.dump(ids, open(ids_file, "w"))
+                print("subido como release %s: %d trozos" % (m["release"], len(ids)))
         out.append("[[mod]]")
         for k in ("id", "version", "tipo"):
             out.append("%s = %s" % (k, toml_str(m[k])))
-        out.append("zip = " + toml_str(zrel))
+        if big:
+            out.append("partes = [%s]" % ", ".join(str(i) for i in json.load(open(ids_file))))
+        else:
+            out.append("zip = " + toml_str(zrel))
         out.append("size = %d" % os.path.getsize(zpath))
+        if "autor" in m:
+            out.append("autor = " + toml_str(m["autor"]))
+        if "enlaces" in m:
+            out.append("enlaces = [%s]" % ", ".join(toml_str(u) for u in m["enlaces"] if u.startswith("https://")))
         for k, v in m.items():
             if k.startswith(("nombre_", "descripcion_")):
                 out.append("%s = %s" % (k, toml_str(v)))
@@ -113,8 +173,19 @@ def cmd_publicar(a):
 
 
 def prueba():
+    import tempfile
     assert reveal(obfuscate("github_pat_X1")) == "github_pat_X1"
     assert "version=2" in manifest_with_version("/no/existe", "2", "A")
+    assert "author=PV" in manifest_with_version("/no/existe", "2", "A", "PV")
+    with tempfile.TemporaryDirectory() as d:     # trocear y unir devuelve el mismo fichero
+        f = os.path.join(d, "x.zip")
+        data = os.urandom(2500)
+        open(f, "wb").write(data)
+        parts = split(f, 1000)
+        assert [os.path.getsize(p) for p in parts] == [1000, 1000, 500]
+        assert b"".join(open(p, "rb").read() for p in parts) == data
+        parts = split(f, 1250)                     # multiplo exacto: sin trozo vacio
+        assert [os.path.getsize(p) for p in parts] == [1250, 1250]
     print("novas_mods OK")
 
 

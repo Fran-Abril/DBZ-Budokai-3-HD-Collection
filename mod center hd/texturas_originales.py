@@ -7,7 +7,7 @@ escenarios, menus...). Cada PNG se llama como lo busca el juego:
 
     <hash>_<ancho>x<alto>_<formato>.png      (hash = XXH3-64 del bitmap original)
 
-El artista solo tiene que agrandar la imagen (x2, x3 o x4, sin cambiar el nombre ni la
+El artista solo tiene que agrandar la imagen (x2, x4, x8..., sin cambiar el nombre ni la
 proporcion) y devolver la carpeta: se instala tal cual en mods/ como pack de texturas.
 
 Uso:
@@ -226,11 +226,11 @@ sorted into folders: characters, stages, effects, menus, capsules, select_screen
 dragon_universe... {extra}
 
 HOW TO MAKE THE HD PACK
-1. Upscale the images you want: x2, x3 or x4 (x2 or x4 recommended).
+1. Upscale the images you want: x2, x4, x8... (x2 or x4 recommended; bigger costs VRAM).
    - Do NOT rename the files: the game finds each texture by its file name.
    - Keep the aspect ratio: 256x128 becomes 512x256 at x2, 1024x512 at x4.
    - Keep the transparency (alpha channel): save as 32-bit RGBA PNG.
-   - Colors are the real in-game colors. Max x4, exact multiples only.
+   - Colors are the real in-game colors. Exact whole multiples only, max 16384 px a side.
 2. Images you do not upscale can be deleted (the game then uses its own); keeping
    them also works, it just makes the pack bigger.
 3. Keep the folder layout and keep "manifest.txt" (it names the mod in the launcher;
@@ -256,10 +256,10 @@ ordenadas en carpetas (characters = personajes, stages = escenarios, effects = e
 menus, capsules = capsulas, select_screen = seleccion...). {extra_es}
 
 COMO HACER EL PACK HD
-1. Agranda las que quieras: x2, x3 o x4 (recomendado x2 o x4).
+1. Agranda las que quieras: x2, x4, x8... (recomendado x2 o x4; mas grande gasta mas VRAM).
    - NO cambies el nombre del archivo: el juego reconoce cada textura por su nombre.
    - Manten la proporcion (256x128 -> 512x256 a x2, 1024x512 a x4) y la transparencia
-     (PNG RGBA de 32 bits). Colores reales del juego. Maximo x4, multiplos exactos.
+     (PNG RGBA de 32 bits). Colores reales del juego. Multiplos exactos, maximo 16384 px por lado.
 2. Las que no agrandes se pueden borrar (el juego usa las suyas).
 3. Manten las carpetas y "manifest.txt" (es el nombre del mod en el launcher).
 

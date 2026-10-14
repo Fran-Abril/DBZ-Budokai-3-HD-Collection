@@ -17,6 +17,7 @@ set(DBZ3_SOURCES
     src/roster_trace.cpp
     src/roster_ext.cpp
     src/select_ext.cpp
+    src/stage_ext.cpp
     src/mods.cpp
     src/native_mods.cpp
     src/region.cpp
@@ -74,12 +75,13 @@ endif()
 if(DBZ3_GENERATED_DIR STREQUAL "generated_eu" AND NOT DBZ3_DUAL_REGION)
     list(REMOVE_ITEM DBZ3_SOURCES src/hooks.cpp)
     list(REMOVE_ITEM DBZ3_SOURCES src/roster_trace.cpp)
-    list(REMOVE_ITEM DBZ3_SOURCES src/roster_ext.cpp src/select_ext.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/roster_ext.cpp src/select_ext.cpp src/stage_ext.cpp)
     list(REMOVE_ITEM DBZ3_SOURCES src/net/netplay_hooks.cpp src/tagteam.cpp src/tagteam_slots.cpp src/campaigns.cpp)
 endif()
 
 if(WIN32)
-    add_executable(dbz3 WIN32 ${DBZ3_SOURCES} src/version.rc)
+    # dbz3.manifest: pagina de codigos UTF-8 (CMake lo funde con el manifiesto del enlazador)
+    add_executable(dbz3 WIN32 ${DBZ3_SOURCES} src/version.rc src/dbz3.manifest)
     # UCRT marks getenv/fopen as "deprecated" even though they are the portable
     # choice here (the game also builds on Linux where they are not). Silence
     # the -Wdeprecated-declarations noise project-wide on MSVC/clang-cl.

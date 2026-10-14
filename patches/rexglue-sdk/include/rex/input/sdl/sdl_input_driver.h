@@ -76,6 +76,16 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   void OnGotFocus(rex::ui::UISetupEvent& e) override;
 
   void HandleEvent(const SDL_Event& event);
+  // A5/B25: el hilo de init y el event watch de SDL no guardan `this`, sino este estado
+  // compartido. Se reserva una vez y no se libera nunca (SDL guarda el puntero del watch y el
+  // hilo puede seguir bloqueado tras destruir el driver): unos bytes por proceso.
+  struct InitShared {
+    std::mutex mu;                    // protege driver
+    SDLInputDriver* driver = nullptr; // nullptr al destruir el driver
+    std::atomic<bool> done{true};     // el hilo de init termino (o no se lanzo)
+  };
+  static bool EventWatch(void* userdata, SDL_Event* event);
+  InitShared* init_ = nullptr;
   std::unique_lock<std::mutex> DrainAndLock();
   void ProcessEventLocked(const SDL_Event& event);
   void OnControllerDeviceAddedLocked(const SDL_Event& event);
@@ -99,8 +109,8 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   // Runs SDL_InitSubSystem (events + gamepad) off the UI thread. SDL gamepad
   // initialization can block indefinitely with hooking software (RTSS/OBS) or
   // slow joystick enumeration, and it must never stall the launcher/game
-  // startup. Detached: the process hard-exits anyway, so joining a possibly
-  // blocked init thread would deadlock shutdown.
+  // startup. Joined when it already finished; detached only while blocked in SDL
+  // (then it touches nothing but init_).
   std::thread init_thread_;
   std::atomic<int> sdl_events_unflushed_;
   std::atomic<bool> sdl_pumpevents_queued_;

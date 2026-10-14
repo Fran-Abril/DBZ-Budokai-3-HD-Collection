@@ -136,7 +136,7 @@ if (Test-Path -LiteralPath $novaKey) {
 }
 
 # Partida al 100% (Mods nativos): sin mods_nativos/partida_100 el boton Aplicar sale en gris
-# (Save100Available); hasta la 1.4.4.2 no iba en el paquete (avisos de jugadores, 2026-10-12)
+# (Save100Available); hasta la 1.4.4.4 no iba en el paquete (avisos de jugadores, 2026-10-12)
 $save100 = Join-Path $root "out\build\win-amd64-release\mods_nativos\partida_100"
 if ((Test-Path -LiteralPath (Join-Path $save100 "data.bin")) -and (Test-Path -LiteralPath (Join-Path $save100 "DBZ3.header"))) {
     $dst100 = Join-Path $OutDir "mods_nativos\partida_100"

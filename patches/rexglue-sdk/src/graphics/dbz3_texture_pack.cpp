@@ -4,16 +4,31 @@
 #include "dbz3_texture_pack.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <deque>
 #include <list>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
@@ -195,7 +210,7 @@ bool ReadImageSize(const std::filesystem::path& path, uint32_t& width, uint32_t&
   } else {
     return false;
   }
-  return width != 0 && height != 0 && width <= 16384 && height <= 16384;
+  return width != 0 && height != 0 && width <= 8192 && height <= 8192;
 }
 
 // --- decodificacion DDS ---------------------------------------------------
@@ -461,11 +476,166 @@ Dbz3TexturePackIndex& Dbz3TexturePackIndex::Get() {
   return index;
 }
 
+namespace {
+// Texto UTF-8 de una ruta: path::string() lanza excepcion con nombres que no caben
+// en la pagina de codigos de Windows (acentos raros, japones...).
+std::string Utf8(const std::filesystem::path& p) { return rex::path_to_utf8(p); }
+
+// Ruta con prefijo \?\ en Windows: un pack HD dentro de una carpeta del juego ya
+// larga pasa de 260 caracteres en sus subcarpetas y el recorrido fallaba con
+// "The system cannot find the path specified" (log de un usuario, 2026-10-09).
+std::filesystem::path LongPath(const std::filesystem::path& p) {
+#ifdef _WIN32
+  std::error_code ec;
+  std::filesystem::path full = std::filesystem::weakly_canonical(p, ec);
+  if (ec) {
+    full = std::filesystem::absolute(p, ec);
+  }
+  std::wstring w = full.make_preferred().wstring();
+  if (ec || w.rfind(L"\\\\", 0) == 0) {
+    return p;  // ya lleva prefijo o es UNC
+  }
+  // "\\?\" (dos barras): con una sola ("\?\D:\...") Windows la toma como ruta relativa a la
+  // raiz de la unidad actual y ningun pack se abria ("no existe", 2026-10-13).
+  return std::filesystem::path(L"\\\\?\\" + w);
+#else
+  return p;
+#endif
+}
+
+// Cabeceras ya leidas en arranques anteriores: ruta -> {tamano, fecha, ancho, alto}. Abrir
+// 12000 PNG con el antivirus revisando cada uno tardaba ~60 s tras reiniciar el PC (y hasta
+// entonces todo eran texturas originales); listar la carpeta da tamano y fecha sin abrirlos.
+constexpr const char* kIndexFile = "shader_cache/dbz3_pack_indice.txt";
+using HeaderCache = std::unordered_map<std::string, std::array<uint64_t, 4>>;
+
+HeaderCache LoadHeaderCache() {
+  HeaderCache cache;
+  if (FILE* f = std::fopen(kIndexFile, "rb")) {
+    char line[2048];
+    while (std::fgets(line, sizeof(line), f)) {
+      unsigned long long size, time, width, height;
+      int used = 0;
+      if (std::sscanf(line, "%llu\t%llu\t%llu\t%llu\t%n", &size, &time, &width, &height, &used) == 4 &&
+          used > 0) {
+        std::string path(line + used);
+        while (!path.empty() && (path.back() == '\n' || path.back() == '\r')) {
+          path.pop_back();
+        }
+        cache[path] = {size, time, width, height};
+      }
+    }
+    std::fclose(f);
+  }
+  return cache;
+}
+
+void SaveHeaderCache(const HeaderCache& cache) {
+  std::error_code ec;
+  std::filesystem::create_directories("shader_cache", ec);
+  static std::atomic<uint32_t> index_tmp_counter{0};
+#ifdef _WIN32
+  const unsigned long index_pid = GetCurrentProcessId();
+#else
+  const unsigned long index_pid = static_cast<unsigned long>(getpid());
+#endif
+  const std::string tmp = std::string(kIndexFile) + "." + std::to_string(index_pid) + "." +
+                          std::to_string(index_tmp_counter.fetch_add(1)) + ".tmp";
+  if (FILE* f = std::fopen(tmp.c_str(), "wb")) {
+    for (const auto& [path, v] : cache) {
+      std::fprintf(f, "%llu\t%llu\t%llu\t%llu\t%s\n", static_cast<unsigned long long>(v[0]),
+                   static_cast<unsigned long long>(v[1]), static_cast<unsigned long long>(v[2]),
+                   static_cast<unsigned long long>(v[3]), path.c_str());
+    }
+    std::fclose(f);
+    std::filesystem::rename(tmp, kIndexFile, ec);
+    if (ec) {
+      std::filesystem::remove(tmp, ec);
+    }
+  }
+}
+
+// Lee un pack (carpeta, UTF-8): sus texturas <hash>_<W>x<H>_*.png/.dds, en todas las
+// subcarpetas. Nunca lanza excepcion: una subcarpeta ilegible corta el recorrido con
+// un aviso y se queda con lo leido. `misses` cuenta las cabeceras leidas del disco.
+bool ScanPack(const std::string& dir, std::string& name,
+              std::vector<Dbz3TexturePackEntry>& files, const HeaderCache& old_headers,
+              HeaderCache& new_headers, size_t& misses) {
+  const std::filesystem::path dir_path = rex::to_path(dir);
+  name = Utf8(dir_path.filename());
+  std::error_code ec;
+  const std::filesystem::path root = LongPath(dir_path);
+  if (!std::filesystem::is_directory(root, ec)) {
+    REXGPU_WARN("dbz3: pack de texturas '{}' no existe", dir);
+    return false;
+  }
+  std::filesystem::recursive_directory_iterator it(
+      root, std::filesystem::directory_options::skip_permission_denied, ec);
+  const std::filesystem::recursive_directory_iterator end;
+  for (; !ec && it != end; it.increment(ec)) {
+    const auto& entry = *it;
+    std::error_code fec;
+    if (!entry.is_regular_file(fec)) {
+      continue;
+    }
+    std::string ext = Utf8(entry.path().extension());
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    if (ext != ".dds" && ext != ".png") {
+      continue;
+    }
+    Dbz3TexturePackEntry e;
+    if (!ParsePackHash(Utf8(entry.path().stem()), e.hash)) {
+      continue;
+    }
+    const std::string key = Utf8(entry.path());
+    const uint64_t size = entry.file_size(fec);
+    const uint64_t time = uint64_t(entry.last_write_time(fec).time_since_epoch().count());
+    auto known = old_headers.find(key);
+    if (known != old_headers.end() && known->second[0] == size && known->second[1] == time &&
+        known->second[2] - 1 < 8192 && known->second[3] - 1 < 8192) {
+      e.width = uint32_t(known->second[2]);
+      e.height = uint32_t(known->second[3]);
+    } else {
+      ++misses;
+      if (!ReadImageSize(entry.path(), e.width, e.height)) {
+        continue;
+      }
+    }
+    new_headers[key] = {size, time, e.width, e.height};
+    e.path = entry.path();
+    e.pack_name = name;
+    files.push_back(std::move(e));
+  }
+  if (ec) {
+    REXGPU_WARN("dbz3: pack de texturas '{}': recorrido cortado ({}), {} texturas leidas", name,
+                ec.message(), files.size());
+  }
+  return true;
+}
+}  // namespace
+
 void Dbz3TexturePackIndex::EnsureInitialized() const {
-  if (initialized_) {
+  if (started_.exchange(true)) {
     return;
   }
-  initialized_ = true;
+  // El primer recorrido de un pack recien instalado lee la cabecera de miles de ficheros
+  // (con el antivirus revisando cada uno): 12345 PNG tardaron ~60 s y, en el hilo de la
+  // GPU, la ventana salia como "no responde" (2026-10-13). Se indexa en segundo plano.
+  // ponytail: hilo suelto como la precarga; salir del juego a mitad del indexado no espera.
+  std::thread([this] {
+    const auto t0 = std::chrono::steady_clock::now();
+    Build();
+    ready_.store(true, std::memory_order_release);
+    if (!entries_.empty()) {
+      REXGPU_INFO("dbz3: indice de packs listo en {} ms (hasta ahora, texturas originales)",
+                  std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - t0).count());
+    }
+  }).detach();
+}
+
+void Dbz3TexturePackIndex::Build() const {
   // Leer por el REGISTRO por nombre: el launcher (exe) registra esta misma cvar
   // antes que el plugin, asi que el registro del plugin se ignora y su storage
   // local se queda por defecto. La consulta por nombre devuelve el valor real.
@@ -473,9 +643,18 @@ void Dbz3TexturePackIndex::EnsureInitialized() const {
   if (list.empty()) {
     return;
   }
-  std::unordered_map<uint64_t, std::string> seen;  // hash -> pack (conflictos)
+  // Primero se lee cada pack; luego se indexan del MAS PEQUENO al mas grande: si dos
+  // packs traen la misma textura gana el pequeno (un pack de idioma o de retoques va
+  // encima del pack HD completo, sin depender del orden alfabetico de las carpetas).
+  struct Pack {
+    std::string name;
+    std::vector<Dbz3TexturePackEntry> files;
+  };
+  std::vector<Pack> packs;
+  const HeaderCache old_headers = LoadHeaderCache();
+  HeaderCache new_headers;
+  size_t misses = 0;
   size_t pos = 0;
-  uint32_t pack_count = 0;
   while (pos <= list.size()) {
     size_t sep = list.find(';', pos);
     if (sep == std::string::npos) {
@@ -486,58 +665,41 @@ void Dbz3TexturePackIndex::EnsureInitialized() const {
     while (!dir.empty() && (dir.back() == ' ' || dir.back() == '\r' || dir.back() == '\n')) {
       dir.pop_back();
     }
-    if (dir.empty()) {
-      if (sep == list.size()) {
-        break;
+    if (!dir.empty()) {
+      Pack pack;
+      if (ScanPack(dir, pack.name, pack.files, old_headers, new_headers, misses)) {
+        packs.push_back(std::move(pack));
       }
-      continue;
     }
-    std::error_code ec;
-    const std::filesystem::path dir_path(dir);
-    if (!std::filesystem::is_directory(dir_path, ec)) {
-      REXGPU_WARN("dbz3: pack de texturas '{}' no existe", dir);
-      if (sep == list.size()) {
-        break;
-      }
-      continue;
+    if (sep == list.size()) {
+      break;
     }
+  }
+  if (misses != 0 || new_headers.size() != old_headers.size()) {
+    SaveHeaderCache(new_headers);
+  }
+  REXGPU_INFO("dbz3: packs: {} cabeceras ya conocidas, {} leidas del disco",
+              new_headers.size() - std::min(new_headers.size(), misses), misses);
+  std::stable_sort(packs.begin(), packs.end(),
+                   [](const Pack& x, const Pack& y) { return x.files.size() < y.files.size(); });
+  std::unordered_map<uint64_t, std::string> seen;  // hash -> pack (conflictos)
+  uint32_t pack_count = 0;
+  for (Pack& pack : packs) {
     ++pack_count;
-    uint32_t found = 0;
-    // Recursivo: un pack puede ordenarse en subcarpetas (personajes/, escenarios/...).
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(
-             dir_path, std::filesystem::directory_options::skip_permission_denied, ec)) {
-      if (!entry.is_regular_file(ec)) {
+    uint32_t found = 0, shadowed = 0;
+    for (Dbz3TexturePackEntry& e : pack.files) {
+      if (!seen.emplace(e.hash, pack.name).second) {
+        ++shadowed;
         continue;
       }
-      std::string ext = entry.path().extension().string();
-      std::transform(ext.begin(), ext.end(), ext.begin(),
-                     [](unsigned char c) { return char(std::tolower(c)); });
-      if (ext != ".dds" && ext != ".png") {
-        continue;
-      }
-      uint64_t hash = 0;
-      uint32_t w = 0, h = 0;
-      if (!ParsePackHash(entry.path().stem().string(), hash) ||
-          !ReadImageSize(entry.path(), w, h)) {
-        continue;
-      }
-      auto existing = seen.find(hash);
-      if (existing != seen.end()) {
-        REXGPU_WARN("dbz3: textura {:016X} definida en '{}' y '{}' (gana el primero)",
-                    hash, existing->second, dir_path.filename().string());
-        continue;
-      }
-      seen.emplace(hash, dir_path.filename().string());
-      Dbz3TexturePackEntry e;
-      e.hash = hash;
-      e.path = entry.path();
-      e.width = w;
-      e.height = h;
-      e.pack_name = dir_path.filename().string();
-      entries_.emplace(hash, std::move(e));
+      entries_.emplace(e.hash, std::move(e));
       ++found;
     }
-    REXGPU_INFO("dbz3: pack de texturas '{}' -> {} texturas", dir_path.filename().string(), found);
+    REXGPU_INFO("dbz3: pack de texturas '{}' -> {} texturas", pack.name, found);
+    if (shadowed != 0) {
+      REXGPU_INFO("dbz3: pack '{}': {} texturas repetidas (ya las trae un pack mas pequeno o "
+                  "el mismo pack en otra carpeta; gana la primera)", pack.name, shadowed);
+    }
   }
   if (!entries_.empty()) {
     REXGPU_INFO("dbz3: {} pack(s) de texturas, {} texturas en total", pack_count, entries_.size());
@@ -545,30 +707,85 @@ void Dbz3TexturePackIndex::EnsureInitialized() const {
   }
 }
 
+bool Dbz3TexturePacksOn() { return rex::cvar::GetFlagByName("dbz3_texture_packs_on") != "false"; }
+
 bool Dbz3TexturePackIndex::active() const {
   EnsureInitialized();
-  return !entries_.empty();
+  return ready_.load(std::memory_order_acquire) && !entries_.empty();
 }
 
 size_t Dbz3TexturePackIndex::size() const {
   EnsureInitialized();
-  return entries_.size();
+  return ready_.load(std::memory_order_acquire) ? entries_.size() : 0;
 }
 
 const Dbz3TexturePackEntry* Dbz3TexturePackIndex::Find(uint64_t hash) const {
   EnsureInitialized();
+  if (!ready_.load(std::memory_order_acquire)) {
+    return nullptr;
+  }
   auto it = entries_.find(hash);
   return it != entries_.end() ? &it->second : nullptr;
 }
 
-// --- cache de imagenes decodificadas + precarga --------------------------------
-// Decodificar un PNG grande en el hilo de la GPU era un tiron cada vez que se
-// subia la textura (y se subia en cada recarga). Ahora se decodifica UNA vez,
-// queda en RAM (LRU con presupuesto) y, si el pack cabe en el presupuesto, se
-// precarga entero en segundo plano al arrancar (como Burst Limit).
-// ponytail: presupuesto fijo; cvar si alguien necesita packs de varios GB.
+// --- cache de imagenes decodificadas + hilos de fondo (como Burst Limit 4.2) ------
+// El hilo de la GPU no decodifica (D3D12): pide la imagen con TryDecoded, muestra la
+// original mientras tanto y la recarga cuando un hilo de fondo la deja lista, ya con su
+// cadena de mips. Lo decodificado queda en RAM (LRU con presupuesto segun la RAM LIBRE).
+// Precarga: el pack entero si cabe; si no, las texturas usadas en partidas anteriores
+// (shader_cache/dbz3_pack_uso.txt: menus, escenarios y personajes que mas se juegan).
 namespace {
-constexpr uint64_t kDbz3PackCacheBudget = uint64_t(2048) << 20;  // 2 GB de RGBA8
+
+struct Ram {
+  uint64_t total = 0;
+  uint64_t avail = 0;
+};
+
+Ram QueryRam() {
+  Ram r;
+#ifdef _WIN32
+  MEMORYSTATUSEX status = {};
+  status.dwLength = sizeof(status);
+  if (GlobalMemoryStatusEx(&status)) {
+    r.total = status.ullTotalPhys;
+    r.avail = status.ullAvailPhys;
+  }
+#else
+  const long pages = sysconf(_SC_PHYS_PAGES), page = sysconf(_SC_PAGE_SIZE);
+  const long avail = sysconf(_SC_AVPHYS_PAGES);
+  if (pages > 0 && page > 0) {
+    r.total = uint64_t(pages) * uint64_t(page);
+    r.avail = avail > 0 ? uint64_t(avail) * uint64_t(page) : r.total / 2;
+  }
+#endif
+  if (r.total == 0) {
+    r.total = uint64_t(8) << 30;
+    r.avail = r.total / 2;
+  }
+  return r;
+}
+
+// Un cuarto de la RAM, pero nunca mas de la mitad de la que esta LIBRE al arrancar (entre
+// 512 MB y 8 GB). Con 32 GB y el navegador abierto quedaban ~4 GB libres: llenar 8 GB hacia
+// que Windows mandara el juego al disco y se quedaba congelado 45 s (2026-10-14).
+uint64_t CacheBudget() {
+  static const uint64_t budget = [] {
+    const Ram r = QueryRam();
+    return std::clamp<uint64_t>(std::min(r.total / 4, r.avail / 2), uint64_t(512) << 20, uint64_t(8) << 30);
+  }();
+  return budget;
+}
+
+// Poca RAM libre en el sistema: la precarga se para y la cache suelta lo mas viejo.
+bool RamLow() {
+  const Ram r = QueryRam();
+  return r.avail < std::max<uint64_t>(uint64_t(1536) << 20, r.total / 12);
+}
+
+// Tamano en RAM de una entrada ya decodificada con todos sus mips (4/3 de la base).
+uint64_t DecodedBytes(const Dbz3TexturePackEntry& e) {
+  return uint64_t(e.width) * e.height * 4 * 4 / 3;
+}
 
 struct PackCache {
   std::mutex mutex;
@@ -577,10 +794,11 @@ struct PackCache {
       images;
   std::list<uint64_t> lru;  // frente = mas reciente
   uint64_t bytes = 0;
+  std::unordered_set<uint64_t> failed;  // ilegibles: no se reintentan (se usa la original)
 };
 
 PackCache& Cache() {
-  static PackCache* cache = new PackCache();  // nunca se destruye: la precarga puede seguir al salir
+  static PackCache* cache = new PackCache();  // nunca se destruye: los hilos pueden seguir al salir
   return *cache;
 }
 
@@ -595,36 +813,350 @@ std::shared_ptr<const Dbz3TexturePackIndex::Image> CacheGet(uint64_t hash) {
   return it->second.first;
 }
 
-void CachePut(uint64_t hash, std::shared_ptr<const Dbz3TexturePackIndex::Image> image) {
+bool CacheHas(uint64_t hash) {
   PackCache& c = Cache();
   std::lock_guard<std::mutex> lock(c.mutex);
-  if (c.images.count(hash)) {
-    return;
-  }
-  c.lru.push_front(hash);
-  c.bytes += image->rgba.size();
-  c.images.emplace(hash, std::make_pair(std::move(image), c.lru.begin()));
-  while (c.bytes > kDbz3PackCacheBudget && c.lru.size() > 1) {
-    auto victim = c.images.find(c.lru.back());
-    c.bytes -= victim->second.first->rgba.size();
-    c.images.erase(victim);
-    c.lru.pop_back();
+  return c.images.count(hash) != 0;
+}
+
+bool CacheFailed(uint64_t hash) {
+  PackCache& c = Cache();
+  std::lock_guard<std::mutex> lock(c.mutex);
+  return c.failed.count(hash) != 0;
+}
+
+void CachePut(uint64_t hash, std::shared_ptr<const Dbz3TexturePackIndex::Image> image) {
+  const bool low = RamLow();
+  // Las expulsadas se liberan FUERA del candado: soltar cientos de MB tarda y el hilo de la
+  // GPU espera ese mismo candado en IsDecoded/TryDecoded.
+  std::vector<std::shared_ptr<const Dbz3TexturePackIndex::Image>> victims;
+  {
+    PackCache& c = Cache();
+    std::lock_guard<std::mutex> lock(c.mutex);
+    if (c.images.count(hash)) {
+      return;
+    }
+    c.lru.push_front(hash);
+    c.bytes += image->rgba.size();
+    c.images.emplace(hash, std::make_pair(std::move(image), c.lru.begin()));
+    // Sin RAM libre se baja a la mitad del presupuesto (el resto ya lo pediran de nuevo).
+    const uint64_t limit = low ? CacheBudget() / 2 : CacheBudget();
+    while (c.bytes > limit && c.lru.size() > 1) {
+      auto victim = c.images.find(c.lru.back());
+      c.bytes -= victim->second.first->rgba.size();
+      victims.push_back(std::move(victim->second.first));
+      c.images.erase(victim);
+      c.lru.pop_back();
+    }
   }
 }
 
+void MarkFailed(uint64_t hash) {
+  PackCache& c = Cache();
+  std::lock_guard<std::mutex> lock(c.mutex);
+  c.failed.insert(hash);
+}
+
+// Cadena de mips completa hasta 1x1, escrita ya en la disposicion de la GPU (filas y niveles
+// alineados a 512 B) para que la subida sea una sola copia. Media 2x2 ponderada por alfa
+// (como Burst Limit): el color de los texels transparentes no oscurece los bordes del pelo,
+// las auras y los recortes al alejarse. `base` es la imagen decodificada (width*height*4).
+void BuildMipChain(Dbz3TexturePackIndex::Image& image, const std::vector<uint8_t>& base) {
+  constexpr uint64_t kAlign = 512;
+  uint32_t levels = 0;
+  for (uint32_t w = image.width, h = image.height;; w = std::max(w >> 1, 1u), h = std::max(h >> 1, 1u)) {
+    ++levels;
+    if (w == 1 && h == 1) {
+      break;
+    }
+  }
+  image.layout.assign(levels, Dbz3PackLevel{});
+  uint64_t total = 0;
+  for (uint32_t l = 0; l < levels; ++l) {
+    Dbz3PackLevel& level = image.layout[l];
+    level.width = std::max(image.width >> l, 1u);
+    level.height = std::max(image.height >> l, 1u);
+    level.row_pitch = uint32_t(rex::align(uint64_t(level.width) * 4, kAlign));
+    total = rex::align(total, kAlign);
+    level.offset = uint32_t(total);
+    total += uint64_t(level.row_pitch) * level.height;
+  }
+  image.rgba.assign(size_t(total), 0);
+  const Dbz3PackLevel& top = image.layout[0];
+  for (uint32_t y = 0; y < top.height; ++y) {
+    std::memcpy(image.rgba.data() + top.offset + size_t(y) * top.row_pitch,
+                base.data() + size_t(y) * top.width * 4, size_t(top.width) * 4);
+  }
+  for (uint32_t l = 1; l < levels; ++l) {
+    const Dbz3PackLevel& prev = image.layout[l - 1];
+    const Dbz3PackLevel& cur = image.layout[l];
+    const uint8_t* src = image.rgba.data() + prev.offset;
+    uint8_t* dst = image.rgba.data() + cur.offset;
+    const uint32_t pw = prev.width, ph = prev.height;
+    for (uint32_t y = 0; y < cur.height; ++y) {
+      const uint32_t sy = std::min(y * 2, ph - 1), sy1 = std::min(sy + 1, ph - 1);
+      const uint8_t* row0 = src + size_t(sy) * prev.row_pitch;
+      const uint8_t* row1 = src + size_t(sy1) * prev.row_pitch;
+      uint8_t* out = dst + size_t(y) * cur.row_pitch;
+      for (uint32_t x = 0; x < cur.width; ++x) {
+        const uint32_t sx = std::min(x * 2, pw - 1), sx1 = std::min(sx + 1, pw - 1);
+        const uint8_t* p[4] = {row0 + sx * 4, row0 + sx1 * 4, row1 + sx * 4, row1 + sx1 * 4};
+        const uint32_t alpha = uint32_t(p[0][3]) + p[1][3] + p[2][3] + p[3][3];
+        uint8_t* d = out + x * 4;
+        for (int c = 0; c < 3; ++c) {
+          d[c] = alpha != 0 ? uint8_t((uint32_t(p[0][c]) * p[0][3] + uint32_t(p[1][c]) * p[1][3] +
+                                       uint32_t(p[2][c]) * p[2][3] + uint32_t(p[3][c]) * p[3][3] +
+                                       alpha / 2) / alpha)
+                            : uint8_t((uint32_t(p[0][c]) + p[1][c] + p[2][c] + p[3][c] + 2) / 4);
+        }
+        d[3] = uint8_t((alpha + 2) / 4);
+      }
+    }
+  }
+}
+
+// Las imagenes grandes (>= 64 MB con mips, las 4096x4096 y 8192x8192 del pack) se preparan
+// de una en una: cuatro a la vez eran ~4 GB de RAM de golpe.
+std::mutex& BigDecodeMutex() {
+  static std::mutex* m = new std::mutex();
+  return *m;
+}
+
 std::shared_ptr<const Dbz3TexturePackIndex::Image> DecodeEntry(const Dbz3TexturePackEntry& e) {
+  std::unique_lock<std::mutex> big(BigDecodeMutex(), std::defer_lock);
+  if (DecodedBytes(e) >= (uint64_t(64) << 20)) {
+    big.lock();
+  }
   auto image = std::make_shared<Dbz3TexturePackIndex::Image>();
-  if (!Dbz3DecodePackImage(e.path, image->rgba, image->width, image->height)) {
+  bool ok = false;
+  try {  // sin esto, un bad_alloc (imagen enorme, poca RAM) en un hilo de fondo cerraba el juego
+    std::vector<uint8_t> base;
+    ok = Dbz3DecodePackImage(e.path, base, image->width, image->height) &&
+         image->width == e.width && image->height == e.height;
+    if (ok) {
+      BuildMipChain(*image, base);
+    }
+  } catch (const std::bad_alloc&) {
+    // sin memoria AHORA: no se marca como rota (se volvera a pedir cuando haga falta)
+    static std::atomic<int> logged{0};
+    if (logged.fetch_add(1) < 4) {
+      REXGPU_WARN("dbz3: pack '{}': sin memoria para '{}' (se reintentara)", e.pack_name, Utf8(e.path.filename()));
+    }
+    return nullptr;
+  } catch (const std::exception&) {
+    ok = false;
+  }
+  if (!ok) {
+    MarkFailed(e.hash);
+    static std::atomic<int> logged{0};
+    if (logged.fetch_add(1) < 8) {
+      REXGPU_WARN("dbz3: pack '{}': no se pudo leer '{}' (se usa la textura original)", e.pack_name,
+                  Utf8(e.path.filename()));
+    }
     return nullptr;
   }
   return image;
 }
+
+// Hilos de fondo: primero lo que el juego necesita ya (urgent), despues la precarga.
+struct Decoder {
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::deque<const Dbz3TexturePackEntry*> urgent;
+  std::deque<const Dbz3TexturePackEntry*> preload;
+  std::unordered_set<uint64_t> pending;      // en cola o decodificandose
+  std::unordered_set<uint64_t> in_urgent;    // ya en la cola urgente (sin repetir)
+  std::unordered_set<uint64_t> decoding;     // en manos de un hilo ahora mismo
+  bool started = false;
+  bool preload_logged = false;
+  uint64_t preload_done = 0, preload_skipped = 0;
+};
+
+Decoder& Dec() {
+  static Decoder* decoder = new Decoder();
+  return *decoder;
+}
+
+void DecoderLoop() {
+#ifdef _WIN32
+  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);  // el juego primero
+#endif
+  Decoder& d = Dec();
+  for (;;) {
+    const Dbz3TexturePackEntry* e;
+    bool from_preload;
+    {
+      std::unique_lock<std::mutex> lock(d.mutex);
+      d.cv.wait(lock, [&d] { return !d.urgent.empty() || !d.preload.empty(); });
+      from_preload = d.urgent.empty();
+      std::deque<const Dbz3TexturePackEntry*>& q = from_preload ? d.preload : d.urgent;
+      e = q.front();
+      q.pop_front();
+      if (!from_preload) {
+        d.in_urgent.erase(e->hash);
+      }
+      if (!d.decoding.insert(e->hash).second) {
+        continue;   // otro hilo ya la esta preparando (pedida otra vez como urgente)
+      }
+    }
+    bool skipped = false;
+    if (!CacheHas(e->hash) && !CacheFailed(e->hash)) {
+      if (from_preload && RamLow()) {
+        skipped = true;   // la precarga nunca empuja al sistema a usar el disco
+      } else if (auto image = DecodeEntry(*e)) {
+        CachePut(e->hash, std::move(image));
+      }
+    }
+    std::lock_guard<std::mutex> lock(d.mutex);
+    d.decoding.erase(e->hash);
+    if (!d.in_urgent.count(e->hash)) {
+      d.pending.erase(e->hash);
+    }
+    if (from_preload) {
+      ++(skipped ? d.preload_skipped : d.preload_done);
+      if (d.preload.empty() && !d.preload_logged) {
+        d.preload_logged = true;
+        REXGPU_INFO("dbz3: precarga terminada: {} texturas{}", d.preload_done,
+                    d.preload_skipped ? " (" + std::to_string(d.preload_skipped) +
+                                            " saltadas: poca RAM libre)" : std::string());
+      }
+    }
+  }
+}
+
+// Las entradas no cambian tras el indice (se hace una sola vez): punteros estables.
+void Enqueue(const Dbz3TexturePackEntry& e, bool urgent) {
+  Decoder& d = Dec();
+  {
+    std::lock_guard<std::mutex> lock(d.mutex);
+    if (!d.started) {
+      d.started = true;
+      const unsigned threads = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
+      for (unsigned t = 0; t < threads; ++t) {
+        std::thread(DecoderLoop).detach();
+      }
+    }
+    const bool fresh = d.pending.insert(e.hash).second;
+    if (urgent) {
+      // tambien si ya esta en la precarga: el hilo que llegue primero la hace, el otro la salta
+      if (!d.in_urgent.insert(e.hash).second) {
+        return;
+      }
+      d.urgent.push_back(&e);
+    } else if (fresh) {
+      d.preload.push_back(&e);
+    } else {
+      return;
+    }
+  }
+  d.cv.notify_one();
+}
+
+// --- texturas usadas en partidas anteriores (precarga aprendida) ---
+constexpr const char* kUsageFile = "shader_cache/dbz3_pack_uso.txt";
+constexpr size_t kUsageMax = 6000;
+
+struct Usage {
+  std::mutex mutex;
+  std::vector<uint64_t> session;  // usadas en esta partida, en orden
+  std::unordered_set<uint64_t> seen;
+  std::vector<uint64_t> previous;  // las del fichero al arrancar
+  std::atomic<bool> saving{false};
+};
+
+Usage& Use() {
+  static Usage* usage = new Usage();
+  return *usage;
+}
+
+// Nombre temporal propio (dos juegos o dos guardados a la vez no se pisan el .tmp).
+std::string UniqueTmp(const char* path) {
+  static std::atomic<uint32_t> counter{0};
+#ifdef _WIN32
+  const unsigned long pid = GetCurrentProcessId();
+#else
+  const unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
+  return std::string(path) + "." + std::to_string(pid) + "." + std::to_string(counter.fetch_add(1)) + ".tmp";
+}
+
+std::vector<uint64_t> LoadUsage() {
+  std::vector<uint64_t> out;
+  if (FILE* f = std::fopen(kUsageFile, "rb")) {
+    char line[64];
+    while (out.size() < kUsageMax && std::fgets(line, sizeof(line), f)) {
+      std::string text(line);
+      while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+        text.pop_back();
+      }
+      uint64_t hash;
+      if (ParsePackHash(text, hash)) {
+        out.push_back(hash);
+      }
+    }
+    std::fclose(f);
+  }
+  return out;
+}
+
+// Las de esta partida primero y despues las anteriores que no se repiten.
+void SaveUsage(std::vector<uint64_t> session, const std::vector<uint64_t>& previous) {
+  std::unordered_set<uint64_t> in(session.begin(), session.end());
+  for (uint64_t hash : previous) {
+    if (session.size() >= kUsageMax) {
+      break;
+    }
+    if (in.insert(hash).second) {
+      session.push_back(hash);
+    }
+  }
+  std::error_code ec;
+  std::filesystem::create_directories("shader_cache", ec);
+  const std::string tmp = UniqueTmp(kUsageFile);
+  if (FILE* f = std::fopen(tmp.c_str(), "wb")) {
+    for (uint64_t hash : session) {
+      std::fprintf(f, "%016llX\n", static_cast<unsigned long long>(hash));
+    }
+    std::fclose(f);
+    std::filesystem::rename(tmp, kUsageFile, ec);
+    if (ec) {
+      std::filesystem::remove(tmp, ec);   // otro juego lo acaba de escribir: vale el suyo
+    }
+  }
+  Use().saving = false;
+}
 }  // namespace
+
+void Dbz3PackNoteUsed(uint64_t hash) {
+  Usage& u = Use();
+  std::vector<uint64_t> session, previous;
+  {
+    std::lock_guard<std::mutex> lock(u.mutex);
+    if (!u.seen.insert(hash).second) {
+      return;
+    }
+    u.session.push_back(hash);
+    if (u.session.size() % 32 != 0) {
+      return;
+    }
+    session = u.session;
+    previous = u.previous;
+  }
+  // ponytail: se guarda cada 32 texturas nuevas (sin gancho de cierre en el plugin); lo de
+  // las ultimas <32 de una partida se pierde, da igual para una precarga.
+  if (u.saving.exchange(true)) {
+    return;   // ya hay uno escribiendo: el siguiente lote de 32 lo recoge
+  }
+  std::thread(SaveUsage, std::move(session), std::move(previous)).detach();  // sin E/S en la GPU
+}
 
 std::shared_ptr<const Dbz3TexturePackIndex::Image> Dbz3TexturePackIndex::Decoded(
     const Dbz3TexturePackEntry& entry) const {
   if (auto cached = CacheGet(entry.hash)) {
     return cached;
+  }
+  if (CacheFailed(entry.hash)) {
+    return nullptr;
   }
   auto image = DecodeEntry(entry);
   if (image) {
@@ -633,105 +1165,90 @@ std::shared_ptr<const Dbz3TexturePackIndex::Image> Dbz3TexturePackIndex::Decoded
   return image;
 }
 
+std::shared_ptr<const Dbz3TexturePackIndex::Image> Dbz3TexturePackIndex::TryDecoded(
+    const Dbz3TexturePackEntry& entry) const {
+  if (auto cached = CacheGet(entry.hash)) {
+    return cached;
+  }
+  if (!CacheFailed(entry.hash)) {
+    Enqueue(entry, true);
+  }
+  return nullptr;
+}
+
+bool Dbz3TexturePackIndex::IsDecoded(uint64_t hash) const { return CacheHas(hash); }
+
+bool Dbz3TexturePackIndex::IsBroken(uint64_t hash) const { return CacheFailed(hash); }
+
 void Dbz3TexturePackIndex::StartPreload() const {
-  uint64_t estimate = 0;
+  const uint64_t budget = CacheBudget();
+  uint64_t all = 0;
   for (const auto& [hash, e] : entries_) {
-    estimate += uint64_t(e.width) * e.height * 4;
+    all += DecodedBytes(e);
   }
-  if (estimate > kDbz3PackCacheBudget) {
-    REXGPU_INFO("dbz3: pack de texturas grande ({} MB decodificado): sin precarga, se carga al usarse",
-                estimate >> 20);
-    return;
+  std::vector<uint64_t> learned = LoadUsage();
+  {
+    std::lock_guard<std::mutex> lock(Use().mutex);
+    Use().previous = learned;
   }
-  // Las entradas no cambian tras el indice (se hace una sola vez), asi que los
-  // punteros son estables durante toda la ejecucion.
-  auto work = std::make_shared<std::vector<const Dbz3TexturePackEntry*>>();
-  for (const auto& [hash, e] : entries_) {
-    work->push_back(&e);
+  // Las aprendidas van primero; si el pack entero cabe, detras todas las demas. Si no
+  // cabe, solo las aprendidas hasta el 60 % del presupuesto (el resto queda para lo que
+  // pida la partida).
+  std::vector<const Dbz3TexturePackEntry*> work;
+  std::unordered_set<uint64_t> added;
+  uint64_t bytes = 0;
+  const uint64_t cap = all <= budget ? budget : budget * 6 / 10;
+  for (uint64_t hash : learned) {
+    auto it = entries_.find(hash);
+    if (it == entries_.end() || !added.insert(hash).second) {
+      continue;
+    }
+    if (bytes + DecodedBytes(it->second) > cap) {
+      break;
+    }
+    bytes += DecodedBytes(it->second);
+    work.push_back(&it->second);
   }
-  auto next = std::make_shared<std::atomic<size_t>>(0);
-  const unsigned threads = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
-  REXGPU_INFO("dbz3: precargando {} texturas del pack ({} MB) con {} hilo(s)", work->size(),
-              estimate >> 20, threads);
-  for (unsigned t = 0; t < threads; ++t) {
-    std::thread([work, next] {
-      for (size_t i = next->fetch_add(1); i < work->size(); i = next->fetch_add(1)) {
-        const Dbz3TexturePackEntry& e = *(*work)[i];
-        if (!CacheGet(e.hash)) {
-          if (auto image = DecodeEntry(e)) {
-            CachePut(e.hash, std::move(image));
-          }
-        }
+  const size_t learned_count = work.size();
+  if (all <= budget) {
+    for (const auto& [hash, e] : entries_) {
+      if (added.insert(hash).second) {
+        work.push_back(&e);
       }
-    }).detach();
+    }
+    bytes = all;
+  }
+  REXGPU_INFO(
+      "dbz3: precarga del pack: {} texturas ({} MB; {} de partidas anteriores; pack {} MB, "
+      "presupuesto {} MB)",
+      work.size(), bytes >> 20, learned_count, all >> 20, budget >> 20);
+  for (const Dbz3TexturePackEntry* e : work) {
+    Enqueue(*e, false);
   }
 }
 
-void Dbz3BuildPackMips(const std::vector<uint8_t>& base, uint32_t width, uint32_t height,
-                       uint32_t levels, uint32_t row_pitch_alignment, std::vector<uint8_t>& out,
-                       std::vector<Dbz3PackLevel>& layouts_out, bool swap_rb) {
-  if (levels == 0) {
-    levels = 1;
+uint64_t Dbz3PackLayout(const Dbz3TexturePackIndex::Image& image, uint32_t levels,
+                        std::vector<Dbz3PackLevel>& layouts_out) {
+  levels = std::clamp(levels, 1u, uint32_t(image.layout.size()));
+  layouts_out.assign(image.layout.begin(), image.layout.begin() + levels);
+  const Dbz3PackLevel& last = layouts_out.back();
+  return uint64_t(last.offset) + uint64_t(last.row_pitch) * last.height;
+}
+
+void Dbz3PackCopyLevels(const Dbz3TexturePackIndex::Image& image, uint64_t bytes, uint8_t* dst,
+                        bool swap_rb) {
+  bytes = std::min<uint64_t>(bytes, image.rgba.size());
+  if (!swap_rb) {
+    std::memcpy(dst, image.rgba.data(), size_t(bytes));
+    return;
   }
-  if (row_pitch_alignment == 0) {
-    row_pitch_alignment = 4;
-  }
-  // Generar la cadena completa (nivel 0 = imagen base; siguientes por box
-  // filter 2x2 con clamp en los bordes).
-  std::vector<std::vector<uint8_t>> mips(levels);
-  mips[0] = base;
-  for (uint32_t l = 1; l < levels; ++l) {
-    const uint32_t prev_width = std::max(width >> (l - 1), UINT32_C(1));
-    const uint32_t prev_height = std::max(height >> (l - 1), UINT32_C(1));
-    const uint32_t level_width = std::max(width >> l, UINT32_C(1));
-    const uint32_t level_height = std::max(height >> l, UINT32_C(1));
-    std::vector<uint8_t>& src = mips[l - 1];
-    std::vector<uint8_t>& dst = mips[l];
-    dst.assign(size_t(level_width) * level_height * 4, 0);
-    for (uint32_t y = 0; y < level_height; ++y) {
-      for (uint32_t x = 0; x < level_width; ++x) {
-        const uint32_t sx = std::min(x * 2, prev_width - 1);
-        const uint32_t sy = std::min(y * 2, prev_height - 1);
-        const uint32_t sx1 = std::min(sx + 1, prev_width - 1);
-        const uint32_t sy1 = std::min(sy + 1, prev_height - 1);
-        const uint8_t* p00 = src.data() + (size_t(sy) * prev_width + sx) * 4;
-        const uint8_t* p10 = src.data() + (size_t(sy) * prev_width + sx1) * 4;
-        const uint8_t* p01 = src.data() + (size_t(sy1) * prev_width + sx) * 4;
-        const uint8_t* p11 = src.data() + (size_t(sy1) * prev_width + sx1) * 4;
-        uint8_t* dst_px = dst.data() + (size_t(y) * level_width + x) * 4;
-        for (int c = 0; c < 4; ++c) {
-          dst_px[c] = uint8_t((uint32_t(p00[c]) + p10[c] + p01[c] + p11[c] + 2) / 4);
-        }
-      }
-    }
-  }
-  // Disponer los niveles con offsets y pitch alineados.
-  layouts_out.assign(levels, Dbz3PackLevel{});
-  uint64_t total = 0;
-  for (uint32_t l = 0; l < levels; ++l) {
-    const uint32_t level_width = std::max(width >> l, UINT32_C(1));
-    const uint32_t level_height = std::max(height >> l, UINT32_C(1));
-    const uint32_t pitch =
-        uint32_t(rex::align(uint64_t(level_width) * 4, uint64_t(row_pitch_alignment)));
-    total = rex::align(total, uint64_t(row_pitch_alignment));
-    layouts_out[l].offset = uint32_t(total);
-    layouts_out[l].width = level_width;
-    layouts_out[l].height = level_height;
-    layouts_out[l].row_pitch = pitch;
-    total += uint64_t(pitch) * level_height;
-  }
-  out.assign(size_t(total), 0);
-  for (uint32_t l = 0; l < levels; ++l) {
-    const Dbz3PackLevel& layout = layouts_out[l];
-    for (uint32_t y = 0; y < layout.height; ++y) {
-      uint8_t* row = out.data() + layout.offset + size_t(y) * layout.row_pitch;
-      std::memcpy(row, mips[l].data() + size_t(y) * layout.width * 4, size_t(layout.width) * 4);
-      if (swap_rb) {
-        for (uint32_t x = 0; x < layout.width; ++x) {
-          std::swap(row[x * 4], row[x * 4 + 2]);
-        }
-      }
-    }
+  // Por palabras de 32 bits (el compilador lo vectoriza): nunca se lee de `dst`.
+  const uint8_t* src = image.rgba.data();
+  for (size_t i = 0; i + 4 <= bytes; i += 4) {
+    uint32_t v;
+    std::memcpy(&v, src + i, 4);
+    v = (v & 0xFF00FF00u) | ((v >> 16) & 0xFFu) | ((v & 0xFFu) << 16);
+    std::memcpy(dst + i, &v, 4);
   }
 }
 

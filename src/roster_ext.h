@@ -9,6 +9,8 @@
 #include <string>
 
 #include <cstdint>
+#include <cstddef>
+#include "form_selection.h"
 
 namespace rex::memory {
 class Memory;
@@ -25,6 +27,11 @@ void GuardGeneratedMod();
 // Reads every enabled mod's roster.toml and patches the guest tables. Safe to
 // call once per launch; does nothing (and logs why) on an unknown image.
 void ApplyAtLaunch(rex::memory::Memory* memory);
+// Solo hilo guest. UI consume forms::Copy, nunca esta API.
+bool FormSelectionRange(uint32_t address, size_t size, bool write = false);
+forms::Snapshot ReadForms(int id, int suit);
+void InitializeForms();
+void ResetForms();
 
 // Character IDs the roster mods made playable (bit per ID), OR-ed into the
 // select screen's unlock mask.

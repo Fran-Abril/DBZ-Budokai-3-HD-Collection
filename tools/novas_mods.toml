@@ -1,10 +1,30 @@
 # Nova's Mods: lo que publica tools/novas_mods.py en el repo privado (y descarga el launcher).
 # Subir "version" vuelve a ofrecer "Actualizar" a quien lo tenga instalado.
 # Textos: nombre_<idioma> / descripcion_<idioma> (es, en, it, de, fr; si falta uno, el ingles).
+# autor / enlaces = ["https://..."]: credito con botones clicables en la ficha del launcher.
+# release = "<tag>": zip grande (> 100 MB) partido en assets de esa release (ver tools/novas_mods.py).
+
+[[mod]]
+id = "texturas_hd_pv"
+version = "2.0"
+tipo = "texturas"
+release = "texturas-hd-pv-2.0"
+autor = "SSGPrinceVegeta"
+enlaces = ["https://x.com/SSGPrinceVegeta", "https://linktr.ee/ssgprincevegeta"]
+nombre_es = "Pack de texturas HD (PV)"
+nombre_en = "HD Texture Pack (PV)"
+descripcion_es = "Pack HD de SSGPrinceVegeta: unas 5300 texturas del juego a x4 (algunas a x8). Ocupa unos 2,9 GB; se enciende y apaga con F1 > Pack HD de texturas."
+descripcion_en = "HD pack by SSGPrinceVegeta: about 5300 game textures at x4 (a few at x8). About 2.9 GB; turn it on and off with F1 > HD texture pack."
+nombre_it = "Pack di texture HD (PV)"
+nombre_de = "HD-Texturpaket (PV)"
+nombre_fr = "Pack de textures HD (PV)"
+descripcion_it = "Pack HD di SSGPrinceVegeta: circa 5300 texture del gioco a x4 (alcune a x8). Occupa circa 2,9 GB; si attiva e disattiva con F1 > Pack HD di texture."
+descripcion_de = "HD-Paket von SSGPrinceVegeta: rund 5300 Spieltexturen in x4 (einige in x8). Etwa 2,9 GB; mit F1 > HD-Texturpaket ein- und ausschalten."
+descripcion_fr = "Pack HD de SSGPrinceVegeta : environ 5300 textures du jeu en x4 (quelques-unes en x8). Environ 2,9 Go ; s'active et se désactive avec F1 > Pack de textures HD."
 
 [[mod]]
 id = "historia_freezer"
-version = "1.0"
+version = "1.2"
 tipo = "campana"
 nombre_es = "Historia de Freezer"
 nombre_en = "Frieza's Story"
@@ -79,3 +99,15 @@ nombre_es = "Burter"
 nombre_en = "Burter"
 descripcion_es = "Burter de las Fuerzas Especiales Ginyu. Modelo de @ArielPVB."
 descripcion_en = "Burter of the Ginyu Force. Model by @ArielPVB."
+
+[[mod]]
+id = "traje_goku_armadura"
+version = "1.0"
+tipo = "traje"
+nombre_es = "Goku - Armadura Saiyan"
+nombre_en = "Goku - Saiyan Armor"
+nombre_it = "Goku - Armatura Saiyan"
+nombre_de = "Goku - Saiyajin-Rustung"
+nombre_fr = "Goku - Armure Saiyan"
+descripcion_es = "Traje extra para Goku: armadura Saiyan en todas sus formas (base, Kaioken, SSJ, SSJ2, SSJ3 y SSJ4). Modelos de la comunidad convertidos a HD."
+descripcion_en = "Extra costume for Goku: Saiyan armor in every form (base, Kaioken, SSJ, SSJ2, SSJ3 and SSJ4). Community models converted to HD."

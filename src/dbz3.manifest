@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- dbz3: UTF-8 como pagina ANSI del proceso (Windows 10 1903+). Asi path::string(), getenv,
+     fopen y MessageBoxA tratan todo como UTF-8: un mod, ISO o carpeta con tildes, japones o
+     cirilico ya no lanza excepciones ni sale con caracteres rotos. CMake lo funde con el
+     manifiesto por defecto del enlazador (fuente .manifest en CMakeLists.txt). -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

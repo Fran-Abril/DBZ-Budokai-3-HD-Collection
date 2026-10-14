@@ -17,8 +17,9 @@
 > of it, uploads that one instead of the game's.
 >
 > Status: **Phase 1 (dump) + Phase 2 (loader) implemented and validated.**
-> The loader supports DDS (DXT1/3/5 and uncompressed 32bpp) and PNG, with a
-> x1..x4 factor and mip generation.
+> The loader supports DDS (DXT1/3/5 and uncompressed 32bpp) and PNG, with any
+> whole-number factor (x1, x2, x4, x8...; same in width and height, image ≤ 16384 px)
+> and mip generation. Until 2026-10-13 the runtime dropped anything above x4.
 >
 > **Easy way (1.4.2 EX):** in the launcher's Mods tab, "Easy textures": capture while
 > playing, press "Prepare PNGs", edit, save in "My texture pack". The steps below are
@@ -38,7 +39,7 @@
    texture's original bitmap (the same data stored in the `#AZT`).
 2. A pack is a folder in `mods/` with files named after that hash.
 3. When a texture loads, if its hash is in the pack, the pack image is used
-   (decoded to RGBA8) at the file's resolution (x1..x4) and mips are generated.
+   (decoded to RGBA8) at the file's resolution (whole-number factor) and mips are generated.
    Otherwise the game texture is used.
 
 No file override and no repacking: it is a host layer, like the experimental
@@ -128,7 +129,7 @@ python "mod center hd\texture_pack.py" validar "mods\MyPack" --dump "<dump folde
 ```
 
 Checks names, that the file size matches the name and, if you pass the dump, that the
-hash exists and the factor is valid (1..4).
+hash exists and the factor is valid (whole number, same in width and height, image ≤ 16384 px).
 
 ### 3.6 Enable
 

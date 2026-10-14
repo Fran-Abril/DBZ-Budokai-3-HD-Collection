@@ -4,6 +4,7 @@
 //     (piloto de menus) a esa opcion del Duelo; los miembros se eligen en la rueda nativa.
 // El combate lo lleva src/tagteam.cpp. El dibujo con aspecto del juego, game_style.cpp.
 #include "tagteam_panel.h"
+#include "../form_selection_state.h"
 
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,7 @@
 #include "../guest_region.h"
 #include "../launcher/i18n.h"
 #include "../launcher/launcher_state.h"
+#include "../launcher/ui_kit.h"
 #include "../roster_ext.h"
 #include "../tagteam.h"
 #include "../net/netplay.h"
@@ -48,6 +50,8 @@ bool GameDimmed();
 REXCVAR_DEFINE_BOOL(dbz3_form_select_enabled, true, "DBZ3/Mods", "LT/RT starting-form selector at character select (beta)");
 
 namespace dbz3::ingame {
+bool Online();
+bool FormSelectOn();
 namespace {
 
 namespace T = dbz3::i18n;
@@ -208,10 +212,12 @@ void TagTeamOpen() {
 }
 bool TagTeamWanted() { return g_wanted.load(); }
 bool TagTeamMode() { return g_team_mode.load(); }
+bool FormSelectorEnabled() { return FormSelectOn(); }
 
 // Personaje confirmado en la rueda por el lado `player`: mientras al equipo le falten miembros
 // se anade a su tira y el piloto vuelve a la rueda (Y); el ultimo es la confirmacion del juego.
 bool OnSelectPicked(int player, int id) {
+  forms::Confirm(player, id, Online());
   if (!g_team_mode.load() || player < 0 || player > 1) return false;
   std::lock_guard<std::mutex> lock(g_mu);
   if (g_done[size_t(player)]) return false;
@@ -241,7 +247,19 @@ bool OnSelectPicked(int player, int id) {
 
 // Menu de capsulas del juego tras confirmar (select_ext.cpp, sub_8217CB10): elegido o atras, con la
 // lista Custom de la casilla. La opcion es la que tenia resaltada al pulsar A (g_choice).
-void OnCapsuleChoice(int player, bool chosen, int /*option*/, const uint16_t* custom) {
+void OnCapsuleChoice(int player, bool chosen, int option, const uint16_t* custom) {
+  auto confirm_form = [&](int choice) {
+    if (player < 0 || player > 1 || Online()) return;
+    auto s = forms::Copy(player).snapshot;
+    if (choice == 1 && custom) {
+      s.capsules.clear();
+      for (int c = 0; c < 7; ++c) if (custom[c] != 0xFFFF) s.capsules.push_back(custom[c]);
+    } else { s = dbz3::roster::ReadForms(s.id, s.suit); }
+    forms::Publish(player, s);
+    forms::Confirm(player, s.id);
+    g_form_dirty[size_t(player)] = true;
+  };
+  if (!g_team_mode.load() && chosen) confirm_form(option);
   if (!g_team_mode.load() || player < 0 || player > 1) return;
   std::lock_guard<std::mutex> lock(g_mu);
   auto& picks = g_picks[size_t(player)];
@@ -250,13 +268,15 @@ void OnCapsuleChoice(int player, bool chosen, int /*option*/, const uint16_t* cu
   g_converted[size_t(player)] = false;
   if (!chosen && !converted) {   // atras de verdad en el menu de capsulas: ese miembro no entra
     if (await && !picks.empty()) {
+      forms::ForgetMember(player, picks.back());
       picks.pop_back();
       g_notice = {player, Event::kRemoved, Now()};
     }
     return;
   }
   if (picks.empty()) return;
-  const int option = g_choice[size_t(player)];
+  option = g_choice[size_t(player)];
+  confirm_form(option);
   if (option == 1) {   // Custom: las de la casilla, sin huecos (n + 7, como char96 +80)
     uint16_t caps[8] = {};
     for (int k = 0; k < 7; ++k) {
@@ -310,6 +330,7 @@ uint16_t TeamPickFilter(uint16_t real, int user) {
   // solo con la rueda eligiendo: en el menu de capsulas Y es su "atras" (OnCapsuleChoice)
   if (dbz3_select_now_ms() - dbz3_select_browse_ms(side) > 250) return real;
   if (pressed & kY) {
+    forms::ForgetMember(side, picks.back());
     picks.pop_back();
     g_notice = {side, Event::kRemoved, Now()};
   }
@@ -319,7 +340,7 @@ uint16_t TeamPickFilter(uint16_t real, int user) {
 bool Online() { return dbz3::net::Session::Get().link() != dbz3::net::Link::kIdle; }
 
 // Interruptor del launcher. Online se ignora: los dos PCs tienen que contar igual el mando.
-bool FormSelectOn() { return REXCVAR_GET(dbz3_form_select_enabled) || Online(); }
+bool FormSelectOn() { return REXCVAR_GET(dbz3_form_select_enabled) && !Online(); }
 
 // Lado que maneja este mando en la rueda. Online: el suyo siempre (los dos PCs leen el mismo mando
 // en el mismo tick: misma cuenta sin depender del reloj). Local: el que esta eligiendo (los dos a la
@@ -332,23 +353,16 @@ int FormSide(int user) {
 }
 
 // Forma inicial con LT/RT en la rueda (tambien en Tag Team, para el primer miembro, y online).
+// Sustituye FormPickPad; no lee ni escribe memoria del guest.
 void FormPickPad(int user, uint8_t lt, uint8_t rt) {
   if (user < 0 || user > 1) return;
   auto& prev = g_trig_prev[size_t(user)];
-  const bool l = lt > 64, r = rt > 64, lp = l && !prev[0], rp = r && !prev[1];
+  const bool l = lt > 64, r = rt > 64;
+  const int delta = int(r && !prev[1]) - int(l && !prev[0]);
   prev = {l, r};
   if (!dbz3_select_live() || dbz3::ingame::pilot::Busy() || !FormSelectOn()) return;
-  if (g_form_used.exchange(false)) {   // primera rueda tras un combate: todos en forma normal
-    g_start_form[0] = 0;
-    g_start_form[1] = 0;
-  }
   const int side = FormSide(user);
-  if (side < 0 || !(lp || rp)) return;
-  auto& f = g_start_form[size_t(side)];
-  const int was = f.load();
-  const int top = dbz3_select_preview_max_form(side);   // formas del personaje de la vista previa
-  f = std::clamp(was + (rp ? 1 : 0) - (lp ? 1 : 0), 0, top >= 0 ? top : 7);
-  if (f.load() != was) g_form_dirty[size_t(side)] = true;
+  if (side >= 0 && forms::Move(side, delta, Online())) g_form_dirty[size_t(side)] = true;
 }
 
 int ChosenForm(int side) {
@@ -357,7 +371,7 @@ int ChosenForm(int side) {
     const char* comma = std::strchr(env, ',');
     return std::atoi(side == 0 || !comma ? env : comma + 1);
   }
-  return g_start_form[size_t(side)].load();
+  return forms::Copy(side).requested;
 }
 
 bool TakeFormDirty(int side) { return side >= 0 && side < 2 && g_form_dirty[size_t(side)].exchange(false); }
@@ -370,28 +384,60 @@ int StartForm(int side) {
   }
   if (!FormSelectOn()) return 0;
   g_form_used = true;   // se gasta en este combate (y en sus revanchas); la rueda siguiente empieza de 0
-  return g_start_form[size_t(side)].load();
+  return forms::Copy(side).requested;
 }
 
 void DrawFormPick(ImGuiIO& io, bool team) {
+  if (Online()) return; // Private F2 selections never enter online presentation.
   const S::Area a = S::GameArea(io);
   auto* dl = ImGui::GetForegroundDrawList();
   for (int side = 0; side < 2; ++side) {
     if (dbz3_select_now_ms() - dbz3_select_browse_ms(side) > 300) continue;
-    const int top = dbz3_select_preview_max_form(side);
-    if (top == 0) continue;                       // no se transforma: no se ofrece
-    const int f = top > 0 ? std::min(g_start_form[size_t(side)].load(), top) : g_start_form[size_t(side)].load();
-    char text[96];
-    if (f > 0) {
-      std::snprintf(text, sizeof(text), "%s %d  (%s)",
-                    team ? T::T("El primero empieza transformado (beta):", "First member starts transformed (beta):")
-                         : T::T("Empieza transformado (beta):", "Starts transformed (beta):"), f,
-                    T::T("con su capsula", "needs its capsule"));
+    const auto state = forms::Copy(side); // copia coherente; UI nunca toca tablas
+    if (!forms::CountValid(state.snapshot) || state.snapshot.count == 1) continue;
+    const auto result = forms::Resolve(state.snapshot, state.requested);
+    char text[160];
+    if (state.requested == 0 && result.applied == 0) {
+      std::snprintf(text, sizeof(text), "%s", T::T("Forma normal", "Normal form"));
     } else {
-      std::snprintf(text, sizeof(text), "LT/RT: %s", T::T("forma inicial (beta)", "starting form (beta)"));
+      std::snprintf(text, sizeof(text), "%s %d -> %d",
+                    T::T("Forma inicial", "Starting form"), state.requested, result.applied);
     }
-    // bajo el nombre del juego; en Tag Team la tira del equipo ocupa ese sitio: debajo de sus avisos
-    S::MenuText(dl, a.At(side == 0 ? 190 : 1010, team ? 480 : 292), 28 * a.s, text, f > 0, false);
+    const float cx = side == 0 ? 210.0f : 990.0f, y = team ? 480.0f : 292.0f;
+    const auto pos = a.At(cx, y);
+    dl->PushClipRect(a.At(cx - 180, y - 20), a.At(cx + 180, y + 135), true);
+    const auto& fonts = dbz3::launcher::ui::GetFonts();
+    ImFont* font = fonts.menu ? fonts.menu : ImGui::GetFont();
+    const float measured = font->CalcTextSizeA(28 * a.s, 1.0e30f, 0, text).x;
+    const float size = 28 * a.s * std::min(1.0f, 220 * a.s / std::max(1.0f, measured));
+    S::MenuText(dl, pos, size, text, result.valid, false);
+    S::Arrows(dl, a.At(cx - 120, y - 16), a.At(cx + 120, y + 16),
+              24*a.s, float(ImGui::GetTime()));
+    S::HelpLine(dl, a.At(cx, y + 38), 24*a.s,
+                {{"LT", T::T("Anterior", "Previous")}, {"RT", T::T("Siguiente", "Next")}});
+    const char* reason = nullptr;
+    if (result.reason == forms::Reason::kCapsule) {
+      std::snprintf(text, sizeof(text), "%s %d", T::T("Falta la capsula", "Missing capsule"), result.capsule);
+      reason = text;
+    } else if (result.reason == forms::Reason::kSpecial) {
+      reason = T::T("Forma especial: no disponible al iniciar", "Special form: unavailable at start");
+    } else if (result.reason == forms::Reason::kCapsuleData) {
+      reason = T::T("Tabla de capsulas no disponible", "Capsule table unavailable");
+    } else if (result.reason != forms::Reason::kOk) {
+      reason = T::T("Modelo o traje no disponible: forma base", "Model or costume unavailable: base form");
+    }
+    if (reason) S::MenuText(dl, a.At(cx, y + 64), 18*a.s, reason, false, false);
+    if (state.requested > 0 && state.requested < state.snapshot.count &&
+        forms::Availability(state.snapshot, state.requested, false) == forms::Reason::kOk) {
+      const int ki = state.snapshot.forms[size_t(state.requested)].required_ki_tenths;
+      if (ki >= 0) {
+        std::snprintf(text, sizeof(text), "%s %.1f", T::T("Ki para transformar:", "Ki to transform:"), double(ki)/10.0);
+        S::MenuText(dl, a.At(cx, y + (reason ? 90 : 64)), 18*a.s, text, false, false);
+      }
+    }
+    if (team) S::MenuText(dl, a.At(cx, y + 115), 17*a.s,
+                          T::T("Primer luchador", "First fighter"), true, false);
+    dl->PopClipRect();
   }
 }
 
@@ -399,6 +445,7 @@ TagTeamPanel::TagTeamPanel(rex::ui::ImGuiDrawer* drawer)
     : ImGuiDialog(drawer) {}
 
 TagTeamPanel::~TagTeamPanel() {
+  forms::FlushPreferences();
   if (blocked_) {
     if (auto* in = Input()) in->RemoveUIInputBlocker();
   }
@@ -488,14 +535,15 @@ void TagTeamPanel::DrawMenu(ImGuiIO& io, uint16_t pressed) {
   for (int i = 0; i < kRows; ++i) {
     const ImVec2 r0(f0.x, f0.y + (10 + 82 * i) * a.s), r1(f1.x, r0.y + 80 * a.s);
     const ImVec2 c((r0.x + r1.x) * 0.5f, (r0.y + r1.y) * 0.5f);
-    if (i == row_) S::Highlight(dl, r0, r1, t);
+    const bool disabled = i == 1 && !Pad2Connected();
+    if (i == row_ && !disabled) S::Highlight(dl, r0, r1, t);
     if (native_rows) {
       const ImVec4 src = kRowSrc[i];
       const float h = 54 * a.s, w = (src.z - src.x) * h / (src.w - src.y);
       S::DrawPic(dl, native_rows, ImVec2(c.x - w * 0.5f, c.y - h * 0.5f), ImVec2(c.x + w * 0.5f, c.y + h * 0.5f), src,
-                 i == row_ ? IM_COL32_WHITE : IM_COL32(105, 135, 150, 255));
+                 disabled ? IM_COL32(70, 82, 120, 200) : i == row_ ? IM_COL32_WHITE : IM_COL32(105, 135, 150, 255));
     } else {
-      S::MenuText(dl, c, 56 * a.s, rows[i], i == row_, false);
+      S::MenuText(dl, c, 56 * a.s, rows[i], i == row_ && !disabled, disabled);
     }
   }
   // formato: izquierda/derecha, con las flechas del juego
@@ -604,6 +652,12 @@ void DrawTeamHud(ImGuiIO& io) {
 void TagTeamPanel::OnDraw(ImGuiIO& io) {
   if (dbz3::GameDimmed()) return;   // fuera de la ventana: solo la pantalla oscura del juego
   const bool battle = dbz3::tag::InBattle();
+  if (battle || !dbz3_select_live()) forms::FlushPreferences();
+  const auto preference_error = forms::PreferenceError();
+  if (!preference_error.empty() && !battle && dbz3_select_live()) {
+    S::MenuText(ImGui::GetForegroundDrawList(), S::GameArea(io).At(600, 810), 22*S::GameArea(io).s,
+                T::T("Preferencias de formas no guardadas", "Form preferences not saved"), false, false);
+  }
   if (battle) DrawTeamHud(io);
   if (g_team_mode.load()) {
     if (battle) {

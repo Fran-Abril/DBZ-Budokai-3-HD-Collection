@@ -22,7 +22,7 @@ Guía: `docs/02_mods/STUDIO_CAMARAS.md`. Formato: `docs/03_formatos/CAMARA_ACC.m
 ### Personajes de Shin Budokai (PSP) y Super Dragon Ball Heroes (PC)
 | Herramienta | Función | Comprobación |
 |---|---|---|
-| `mod center hd/importar.py` | Importador del launcher y del Mod Kit. Fuentes `b1`, `b2`, `b3`, `iw`, **`sb1`, `sb2`, `sdbh`** | `fuentes`, `lista FUENTE`, `importar …` |
+| `mod center hd/importar.py` | Importador del launcher y del Mod Kit. Fuentes `b1`, `b2`, `b3`, `iw`, **`sb1`, `sb2`, `sdbh`** | `fuentes`, `lista FUENTE`, `presets FUENTE`, `importar … [--preset P] [--opcion k=v]`, `rehacer MOD [--preset P] [--opcion k=v]` (vuelve a importar con la receta `origen_*`/`preset` de su `personaje.toml`; el mod anterior va a `mods_respaldo/`) |
 | `awo_tools/sbport.py` | Moveset de SB1/SB2 → B3 (AP 20→16 B, HR 160→128 B, daño × 0,85, códigos, almacén global, injertos del donante) | `--prueba`, `--oraculo` |
 | `awo_tools/sb_tablas.py` | Tablas medidas SB → B3 (almacén global, efectos AP7) | (módulo) |
 | `awo_tools/sb_amm.py` | Descompresor de animaciones de SB | (módulo) |

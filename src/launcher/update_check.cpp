@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -111,6 +112,8 @@ bool VersionNewer(const std::string& a, const std::string& b) {
 
 }  // namespace
 
+bool IsVersionNewer(const std::string& a, const std::string& b) { return VersionNewer(a, b); }
+
 #if REX_PLATFORM_WIN32
 
 // HTTPS GET with short timeouts, so a stalled network can never keep a thread
@@ -162,9 +165,95 @@ std::string HttpGet(const wchar_t* host, const wchar_t* path, const wchar_t* hea
   return body;
 }
 
+long long HttpDownload(const std::string& url, const std::wstring& headers,
+                       const std::filesystem::path& out, bool append,
+                       const std::function<void(long long)>& progress) {
+  std::wstring next(url.begin(), url.end());
+  std::wstring first_host;
+  long long written = -1;
+  HINTERNET session = WinHttpOpen(L"dbz3-novas-mods/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+  if (!session) return -1;
+  WinHttpSetTimeouts(session, 15000, 15000, 30000, 60000);
+  for (int hop = 0; hop < 5 && written < 0; ++hop) {
+    URL_COMPONENTS uc{};
+    uc.dwStructSize = sizeof(uc);
+    wchar_t host[256] = {};
+    std::vector<wchar_t> path(next.size() + 1), extra(next.size() + 1);
+    uc.lpszHostName = host;
+    uc.dwHostNameLength = 256;
+    uc.lpszUrlPath = path.data();
+    uc.dwUrlPathLength = DWORD(path.size());
+    uc.lpszExtraInfo = extra.data();   // la query (firma de los enlaces de assets) va aparte
+    uc.dwExtraInfoLength = DWORD(extra.size());
+    if (!WinHttpCrackUrl(next.c_str(), 0, 0, &uc) || uc.nScheme != INTERNET_SCHEME_HTTPS) break;
+    if (hop == 0) first_host = host;
+    const std::wstring object = std::wstring(path.data()) + extra.data();
+    HINTERNET connect = WinHttpConnect(session, host, uc.nPort, 0);
+    if (!connect) break;
+    HINTERNET request = WinHttpOpenRequest(connect, L"GET", object.c_str(), nullptr, WINHTTP_NO_REFERER,
+                                           WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    std::wstring location;
+    bool redirect = false;
+    if (request) {
+      DWORD no_redirect = WINHTTP_DISABLE_REDIRECTS;
+      WinHttpSetOption(request, WINHTTP_OPTION_DISABLE_FEATURE, &no_redirect, sizeof(no_redirect));
+      const bool same_host = first_host == host;
+      if (WinHttpSendRequest(request, same_host && !headers.empty() ? headers.c_str() : WINHTTP_NO_ADDITIONAL_HEADERS,
+                             same_host && !headers.empty() ? DWORD(-1) : 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+          WinHttpReceiveResponse(request, nullptr)) {
+        DWORD status = 0, len = sizeof(status);
+        WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &len, WINHTTP_NO_HEADER_INDEX);
+        if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+          DWORD size = 0;
+          WinHttpQueryHeaders(request, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX, nullptr, &size,
+                              WINHTTP_NO_HEADER_INDEX);
+          location.resize(size / sizeof(wchar_t));
+          if (size && WinHttpQueryHeaders(request, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
+                                          location.data(), &size, WINHTTP_NO_HEADER_INDEX)) {
+            location.resize(size / sizeof(wchar_t));
+            redirect = true;
+          }
+        } else if (status == 200) {
+          std::ofstream file(out, std::ios::binary | (append ? std::ios::app : std::ios::trunc));
+          long long total = 0;
+          std::vector<char> chunk(1 << 20);
+          bool ok = bool(file);
+          while (ok) {
+            DWORD read = 0;
+            if (!WinHttpReadData(request, chunk.data(), DWORD(chunk.size()), &read)) {
+              ok = false;
+              break;
+            }
+            if (read == 0) break;   // fin del cuerpo
+            file.write(chunk.data(), read);
+            ok = bool(file);
+            total += read;
+            if (progress) progress(total);
+          }
+          file.close();
+          if (ok && !file.fail()) written = total;
+        }
+      }
+      WinHttpCloseHandle(request);
+    }
+    WinHttpCloseHandle(connect);
+    if (!redirect) break;
+    next = location;
+  }
+  WinHttpCloseHandle(session);
+  return written;
+}
+
 #else
 
 std::string HttpGet(const wchar_t*, const wchar_t*, const wchar_t*) { return {}; }
+
+long long HttpDownload(const std::string&, const std::wstring&, const std::filesystem::path&, bool,
+                       const std::function<void(long long)>&) {
+  return -1;
+}
 
 #endif  // REX_PLATFORM_WIN32
 
@@ -223,7 +312,12 @@ void RequestUpdateCheck() {
     return;  // a request is already on its way; keep the current state
   }
   g_state.store(UpdateState::kChecking, std::memory_order_release);
+  try {
   std::thread([]() {
+    struct ReleaseInflight {
+      ~ReleaseInflight() { g_inflight.store(false, std::memory_order_release); }
+    } release;
+    try {
     const std::string body = HttpGet(kApiHost, kApiPath);
     const std::string tag = JsonStringField(body, "tag_name");
     const std::string url = JsonStringField(body, "html_url");
@@ -243,7 +337,14 @@ void RequestUpdateCheck() {
     g_state.store(newer ? UpdateState::kAvailable : UpdateState::kUpToDate,
                   std::memory_order_release);
     g_inflight.store(false, std::memory_order_release);
+    } catch (...) {
+      g_state.store(UpdateState::kFailed, std::memory_order_release);
+    }
   }).detach();
+  } catch (...) {
+    g_state.store(UpdateState::kFailed, std::memory_order_release);
+    g_inflight.store(false, std::memory_order_release);
+  }
 }
 
 UpdateState GetUpdateState() {
@@ -429,7 +530,7 @@ const std::vector<InstalledComponent>& InstalledComponents() {
       }
       const Version v = ParseVersion(component.version);
       if (v.parts[0] != ref.parts[0] || v.parts[1] != ref.parts[1] ||
-          v.parts[2] != ref.parts[2]) {
+          v.parts[2] != ref.parts[2] || v.parts[3] != ref.parts[3]) {
         g_component_mismatch = component.file_name;
         break;
       }
@@ -446,7 +547,9 @@ std::string InstalledVersionMismatch() {
 
 void OpenUrl(const std::string& url) {
 #if REX_PLATFORM_WIN32
-  if (url.empty()) {
+  // Solo https: los enlaces de autor vienen del catalogo de Nova's Mods y un texto como
+  // "C:\\algo.exe" no debe poder abrir un fichero local.
+  if (url.rfind("https://", 0) != 0) {
     return;
   }
   ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);

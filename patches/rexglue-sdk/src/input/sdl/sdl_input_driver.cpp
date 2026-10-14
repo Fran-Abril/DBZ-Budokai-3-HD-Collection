@@ -15,6 +15,7 @@
 #include <rex/assert.h>
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
+#include <rex/filesystem.h>
 #include <rex/input/flags.h>
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/logging.h>
@@ -39,15 +40,45 @@ SDLInputDriver::SDLInputDriver(rex::ui::Window* window, size_t window_z_order)
       sdl_events_unflushed_(0),
       sdl_pumpevents_queued_(false),
       controllers_(),
-      controllers_mutex_() {}
+      controllers_mutex_() {
+  init_ = new InitShared;   // ponytail: nunca se libera (ver InitShared); uno por driver
+  init_->driver = this;
+  pending_events_.reserve(64);
+}
 
 SDLInputDriver::~SDLInputDriver() {
-  // The SDL init thread is intentionally detached (never joined): it may be
-  // blocked inside SDL_InitSubSystem(SDL_INIT_GAMEPAD) forever when hooking
-  // software is present, and joining it would deadlock shutdown.
-  if (init_thread_.joinable()) {
-    init_thread_.detach();
+  {
+    // desde aqui ni el hilo de init ni el event watch tocan este objeto
+    std::lock_guard<std::mutex> lock(init_->mu);
+    init_->driver = nullptr;
   }
+  if (init_thread_.joinable()) {
+    // Terminado: join inmediato. Bloqueado dentro de SDL_InitSubSystem (RTSS/OBS): detach,
+    // y como solo usa init_, ya no puede escribir en memoria liberada.
+    if (init_->done) {
+      init_thread_.join();
+    } else {
+      init_thread_.detach();
+    }
+  }
+}
+
+bool SDLInputDriver::EventWatch(void* userdata, SDL_Event* event) {
+  if (!userdata || !event) {
+    return false;
+  }
+  const auto type = event->type;
+  if (type < SDL_EVENT_JOYSTICK_AXIS_MOTION || type >= SDL_EVENT_FINGER_DOWN) {
+    return false;
+  }
+  // If another part of rex uses another SDL subsystem that generates events, this may seem like
+  // a bad idea. They will however not subscribe to controller events so we get away with that.
+  auto* shared = static_cast<InitShared*>(userdata);
+  std::lock_guard<std::mutex> lock(shared->mu);
+  if (shared->driver) {
+    shared->driver->HandleEvent(*event);
+  }
+  return false;
 }
 
 X_STATUS SDLInputDriver::Setup() {
@@ -71,40 +102,34 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
     // gamepad devices simply appear via SDL events once the init thread
     // finishes, and EnumerateDevices returns nothing until then.
     if (init_thread_.joinable()) {
-      init_thread_.detach();
+      if (!init_->done) {
+        return;   // la init anterior sigue bloqueada en SDL: no se lanza otra encima
+      }
+      init_thread_.join();
     }
-    init_thread_ = std::thread([this]() {
+    init_->done = false;
+    InitShared* shared = init_;
+    init_thread_ = std::thread([shared]() {
+      struct Done {
+        InitShared* s;
+        ~Done() { s->done = true; }
+      } done{shared};
       // Initialize SDL events subsystem
       if (!SDL_InitSubSystem(SDL_INIT_EVENTS)) {
         REXLOG_ERROR("SDL: Failed to init events subsystem: {}", SDL_GetError());
         return;
       }
-      sdl_events_initialized_ = true;
-      pending_events_.reserve(64);
+      {
+        std::lock_guard<std::mutex> lock(shared->mu);
+        if (!shared->driver) {
+          return;   // el driver ya no existe; el proceso esta cerrando
+        }
+        shared->driver->sdl_events_initialized_ = true;
+      }
 
       // With an event watch we will always get notified, even if the event queue
       // is full, which can happen if another subsystem does not clear its events.
-      SDL_AddEventWatch(
-          [](void* userdata, SDL_Event* event) -> bool {
-            if (!userdata || !event) {
-              assert_always();
-              return false;
-            }
-
-            const auto type = event->type;
-            if (type < SDL_EVENT_JOYSTICK_AXIS_MOTION || type >= SDL_EVENT_FINGER_DOWN) {
-              return false;
-            }
-
-            // If another part of rex uses another SDL subsystem that generates
-            // events, this may seem like a bad idea. They will however not
-            // subscribe to controller events so we get away with that.
-            const auto driver = static_cast<SDLInputDriver*>(userdata);
-            driver->HandleEvent(*event);
-
-            return false;
-          },
-          this);
+      SDL_AddEventWatch(&SDLInputDriver::EventWatch, shared);
 
       // Initialize game controller subsystem (may block with hooks; we're off
       // the UI thread so the launcher/game keep running).
@@ -112,17 +137,26 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
         REXLOG_ERROR("SDL: Failed to init gamecontroller subsystem: {}", SDL_GetError());
         return;
       }
-      SDL_Gamepad_initialized_ = true;
+      {
+        std::lock_guard<std::mutex> lock(shared->mu);
+        if (!shared->driver) {
+          return;
+        }
+        shared->driver->SDL_Gamepad_initialized_ = true;
+      }
 
       // Load custom controller mappings if available
       if (!REXCVAR_GET(hid_mappings_file).empty()) {
         std::filesystem::path mappings_path(REXCVAR_GET(hid_mappings_file));
+        if (mappings_path.is_relative()) {
+          mappings_path = rex::filesystem::GetExecutableFolder() / mappings_path;
+        }
         if (!std::filesystem::exists(mappings_path)) {
           REXLOG_WARN("SDL GameControllerDB: file '{}' does not exist.",
                       REXCVAR_GET(hid_mappings_file));
         } else {
           auto mappings_result =
-              SDL_AddGamepadMappingsFromFile(REXCVAR_GET(hid_mappings_file).c_str());
+              SDL_AddGamepadMappingsFromFile(mappings_path.string().c_str());
           if (mappings_result < 0) {
             REXLOG_ERROR("SDL GameControllerDB: error loading file '{}': {}.",
                          REXCVAR_GET(hid_mappings_file), mappings_result);
@@ -143,10 +177,18 @@ void SDLInputDriver::OnClosing(rex::ui::UIEvent&) {
       attached_window_->app_context().CallInUIThreadSynchronous(
           [this]() { attached_window_->app_context().ExecutePendingFunctionsFromUIThread(); });
     }
-    for (auto& controller : controllers_) {
-      SDL_CloseGamepad(controller.sdl);
+    {
+      std::unique_lock<std::mutex> guard(controllers_mutex_);   // el hilo del juego aun lee
+      for (auto& controller : controllers_) {
+        SDL_CloseGamepad(controller.sdl);
+      }
+      controllers_.clear();
     }
-    controllers_.clear();
+    // con la init aun en marcha no se cierra SDL a la vez (QuitSubSystem concurrente con Init)
+    if (!init_->done) {
+      attached_window_ = nullptr;
+      return;
+    }
     if (SDL_Gamepad_initialized_) {
       SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
       SDL_Gamepad_initialized_ = false;
@@ -691,8 +733,13 @@ void SDLInputDriver::QueueControllerUpdate() {
   // Pump SDL events to ensure controller state is up to date.
   bool is_queued = false;
   sdl_pumpevents_queued_.compare_exchange_strong(is_queued, true);
+  rex::ui::Window* window = attached_window_;   // OnClosing lo pone a null al cerrar
+  if (!is_queued && !window) {
+    sdl_pumpevents_queued_ = false;
+    return;
+  }
   if (!is_queued) {
-    attached_window_->app_context().CallInUIThread([this]() {
+    window->app_context().CallInUIThread([this]() {
       SDL_PumpEvents();
       sdl_pumpevents_queued_ = false;
     });

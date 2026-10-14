@@ -3152,8 +3152,15 @@ class ImporterPage(Page):
             if self.alive and self.src == sid:
                 self.fill_entries()
                 if not lst:
-                    self.set_status(self.c2_status, "err", last_line(job.text) or T("No se encontró nada.",
-                                                                                    "Nothing found."))
+                    help_text = (T("B3 comunidad: el disco PS2 no alimenta esta lista. Pon modelos .amb/.amo en modding resources o elige su carpeta.",
+                                   "B3 community: this list does not read the PS2 disc. Place .amb/.amo models in modding resources or choose their folder.")
+                                 if sid == "b3" else
+                                 T("IW: comprueba la carpeta USR o ISO y que el Kit incluya iw_modelos.json. Mira el detalle del error abajo.",
+                                   "IW: check the USR folder or ISO and that the Kit includes iw_modelos.json. See the error details below.")
+                                 if sid == "iw" else T("No hay personajes en la fuente elegida; revisa la carpeta.",
+                                                                      "No characters in the selected source; check the folder."))
+                    detail = last_line(job.text) if job.rc != 0 else ""
+                    self.set_status(self.c2_status, "err", help_text + ("  " + detail if detail else ""))
         if not self.run(cmd_importer(self.env, args), T("Leyendo %s", "Reading %s") % s["name"], done, quiet=True):
             self.count.configure(text="")
 
@@ -3253,7 +3260,7 @@ class ImporterPage(Page):
         cmd = cmd_import_character(self.env, self.src, e["key"], mod, name, donor, extra)
 
         def done(job):
-            ok = "listo: " in job.text
+            ok = job.rc == 0 and "listo: " in job.text   # el texto solo no basta: un fallo tardio tambien lo imprime
             self.app.cache.pop("mods", None)
             if not self.alive:
                 return

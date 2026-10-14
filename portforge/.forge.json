@@ -1,5 +1,5 @@
 {
-  "defaultVersion": "1.4.4.2",
+  "defaultVersion": "1.4.4.5",
   "dependencies": [
     "unzip",
     "7z"
@@ -17,7 +17,7 @@
   "builds": [
     {
       "versions": [
-        "1.4.4.2"
+        "1.4.4.5"
       ],
       "targetPlatforms": [
         "Windows"
@@ -29,7 +29,7 @@
         },
         {
           "step": "fetch",
-          "url": "https://github.com/novapowers0/DBZ-Budokai-3-HD-Collection/releases/download/v1.4.4.2/DBZ-Budokai-3-HD-Collection-v1.4.4.2.zip",
+          "url": "https://github.com/novapowers0/DBZ-Budokai-3-HD-Collection/releases/download/v1.4.4.5/DBZ-Budokai-3-HD-Collection-v1.4.4.5.zip",
           "dest": ".build/port.zip"
         },
         {

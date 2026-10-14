@@ -185,12 +185,16 @@ personaje (`--opcion clave=valor`):
 
 Opciones: `golpes` (fuente/donante), `voces` (fuente/donante/ninguna), `fisica`
 (auto/donante/ninguna), `altura`, `pose_select`, `combos_tecnica`. El preset y las opciones usadas
-quedan apuntados en el `personaje.toml` del mod (`preset`, `preset_opciones`), así otra persona
-puede recrear el mismo port:
+quedan apuntados en el `personaje.toml` del mod (`preset`, `preset_opciones`, y de dónde sale:
+`origen_fuente`, `origen_clave`, `origen_donante`), así otra persona puede recrear el mismo port:
 ```powershell
 python "mod center hd/importar.py" presets iw                     # presets y sus opciones
 python "mod center hd/importar.py" importar iw <ID> --mod <mod> --nombre "<nombre>" --preset original --opcion voces=donante
+python "mod center hd/importar.py" rehacer <mod>                  # lo vuelve a crear igual
+python "mod center hd/importar.py" rehacer <mod> --preset solo_modelos   # o con otro preset
 ```
+`rehacer` nunca borra: el mod anterior se mueve a `mods_respaldo/<mod>_<fecha>` (junto a `mods/`) (y si falla, se
+devuelve tal cual).
 
 ### 5.2 Ajustar después (Mod Kit → Personajes)
 - **Formas, física y aspecto:** formas, ki base por forma, modelo por forma, física de pelo y

@@ -811,6 +811,8 @@ def iw_tables(elf, afs):
             bsp_like[v] = 0 < v < afs.n and b"#AME" in _kid_magics(afs, v)
         return bsp_like[v]
     best, best_n = None, 0
+    if not ids:
+        raise ValueError("tabla IW sin personajes validos: revisar ELF y AFS de la misma region")
     k0 = ids[0]
     for q in range(0, len(elf) - 4, 4):
         v = u32(q)
@@ -1028,7 +1030,8 @@ def presets(game):
     try:
         with open(PRESETS, "rb") as fh:
             return rb.tomllib.load(fh).get(game, {})
-    except OSError:
+    except (OSError, ValueError, TypeError) as exc:
+        rb.log("aviso: presets_importar.toml no legible (%s): usando valores por defecto" % exc)
         return {}
 
 
@@ -1086,6 +1089,8 @@ def do_import(a):
     if e is None:
         raise SystemExit("ERROR: no encuentro %r en %s" % (a.clave, game))
     donor = a.donante if a.donante is not None else (e.get("donante") if e.get("donante") is not None else 21)
+    if a.donante is None and e.get("donante") is None:
+        rb.log("aviso: sin donante para %s; se usa Recoome (21). Elige otro con --donante si se ve raro" % a.clave)
     models, keys, port = [], {}, None
     forms = 1
     b2_pairs = False                  # B2: trajes en parejas (peluca normal, peluca transformada)
@@ -1272,6 +1277,10 @@ def do_import(a):
     keys["preset"] = json.dumps("%s.%s" % (game, pname))
     if getattr(a, "opcion", None):
         keys["preset_opciones"] = json.dumps(";".join(a.opcion))
+    # receta completa: "importar.py rehacer <mod>" lo vuelve a crear igual (o con otro preset)
+    keys.update(origen_fuente=json.dumps(game), origen_clave=json.dumps(a.clave), origen_donante=str(donor))
+    if getattr(a, "golpes_donante", False) and opt.get("golpes") != "donante":   # --golpes-donante a mano
+        keys["origen_golpes_donante"] = "true"
     if keys:
         rb.set_toml_keys(toml, keys)
     sb_caps = False
@@ -1317,6 +1326,50 @@ def do_import(a):
     return 0
 
 
+def receta(toml_path):
+    """Lo que hace falta para rehacer un import desde su personaje.toml (None si no es importado)."""
+    import roster_build as rb  # noqa: PLC0415
+    with open(toml_path, "rb") as fh:
+        c = rb.tomllib.load(fh).get("personaje", {})
+    if "origen_fuente" not in c:
+        return None
+    pre = str(c.get("preset", "")).partition(".")[2]
+    ops = [o for o in str(c.get("preset_opciones", "")).split(";") if o]
+    return dict(fuente=c["origen_fuente"], clave=c["origen_clave"], donante=int(c["origen_donante"]),
+                id=c.get("id"), nombre=c.get("nombre", ""), preset=pre or None, opcion=ops,
+                golpes_donante=bool(c.get("origen_golpes_donante", False)))
+
+
+def rehacer(a):
+    import shutil  # noqa: PLC0415
+    import time  # noqa: PLC0415
+    import roster_build as rb  # noqa: PLC0415
+    mods = a.mods or rb.default_mods()
+    d = os.path.join(mods, a.mod)
+    rec = receta(os.path.join(d, "personaje.toml"))
+    if rec is None:
+        raise SystemExit("ERROR: %s no guarda su receta (importado con una version anterior)" % a.mod)
+    # nunca se borra: el mod anterior va a mods_respaldo/ junto a mods/ (como el launcher)
+    bak = os.path.join(os.path.dirname(os.path.abspath(mods)), "mods_respaldo",
+                       "%s_%s" % (a.mod, time.strftime("%Y%m%d_%H%M%S")))
+    os.makedirs(os.path.dirname(bak), exist_ok=True)
+    shutil.move(d, bak)
+    rb.log("respaldo: %s" % bak)
+    ns = argparse.Namespace(fuente=rec["fuente"], clave=rec["clave"], mod=a.mod, nombre=rec["nombre"] or a.mod,
+                            donante=rec["donante"], id=rec["id"], despues_de=None, carpeta=a.carpeta, mods=mods,
+                            us=a.us, golpes_donante=rec["golpes_donante"], preset=a.preset or rec["preset"],
+                            opcion=rec["opcion"] if a.opcion is None else a.opcion)
+    try:
+        return do_import(ns)
+    except BaseException:
+        # fallo: lo hecho a medias tambien va al respaldo y el mod vuelve como estaba
+        if os.path.exists(d):
+            shutil.move(d, bak + "_fallido")
+        shutil.move(bak, d)
+        rb.log("fallo al rehacer: restaurado el mod anterior")
+        raise
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1342,7 +1395,17 @@ def main():
                    help="cambia una opcion del preset (golpes, voces, fisica, altura, pose_select...)")
     p = sub.add_parser("presets")
     p.add_argument("fuente")
+    r = sub.add_parser("rehacer", help="vuelve a importar un personaje con su receta (personaje.toml)")
+    r.add_argument("mod")
+    r.add_argument("--mods")
+    r.add_argument("--us")
+    r.add_argument("--carpeta")
+    r.add_argument("--preset", help="otro preset (por defecto, el que uso)")
+    r.add_argument("--opcion", action="append", default=None, metavar="CLAVE=VALOR",
+                   help="sustituye las opciones guardadas")
     a = ap.parse_args()
+    if a.cmd == "rehacer":
+        return rehacer(a)
     if a.cmd == "presets":
         for nm, pre in presets(a.fuente).items():
             o = preset_options(a.fuente, nm)

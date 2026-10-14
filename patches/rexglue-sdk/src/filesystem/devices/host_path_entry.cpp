@@ -108,7 +108,7 @@ X_STATUS HostPathEntry::Open(uint32_t desired_access, File** out_file) {
     if (fn == "adx_us.afs" || fn == "adx_usa.afs") {
       // Redirect to the Japanese pack. US uses adx_jp, EUR uses adx_jp too
       // (the only audio file); try adx_jp first.
-      auto jp_candidate = open_path.parent_path() / "adx_jp.afs";
+      auto jp_candidate = open_path.parent_path() / "adx_jpn.afs";
       if (std::filesystem::is_regular_file(jp_candidate)) {
         open_path = jp_candidate;
       }

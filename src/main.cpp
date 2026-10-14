@@ -45,8 +45,10 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #endif
 #ifndef DBZ3_EU_VARIANT
 #include "roster_ext.h"
+#include "stage_ext.h"
 #endif
 #include "region.h"
+#include "mods.h"
 #include "launcher/settings.h"
 #if REX_PLATFORM_WIN32
 #include <commdlg.h>
@@ -228,7 +230,8 @@ public:
           // el launcher aun no existe aqui: se ofrece elegir la imagen de disco ya (un jugador se quedo
           // sin forma de llegar al boton del launcher, 2026-10-12) y se reinicia con ella
           const std::string ask = msg + "\n\nQuieres elegir ahora la imagen de disco del juego (.iso)?";
-          if (MessageBoxA(nullptr, ask.c_str(), "DBZ Budokai 3 - Datos del juego",
+          if (!std::getenv("DBZ3_NO_DIALOGS") &&   // pruebas automaticas: solo el log
+              MessageBoxA(nullptr, ask.c_str(), "DBZ Budokai 3 - Datos del juego",
                           MB_YESNO | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST) == IDYES) {
             wchar_t file[MAX_PATH] = {};
             OPENFILENAMEW ofn = {};
@@ -454,6 +457,7 @@ public:
         // ya esta cargada y su hilo aun no ha ejecutado nada.
         if (auto* rt = runtime()) {
             dbz3::roster::ApplyAtLaunch(rt->memory());
+            dbz3::stages::ApplyAtLaunch(rt->memory());
         }
 #endif
         if (auto* rt = runtime()) {
@@ -749,6 +753,7 @@ public:
     // Called before cleanup begins
     void OnShutdown() override {
         REXLOG_INFO("OnShutdown called");
+        dbz3::SessionEnd(true);   // partida cerrada bien: sus mods pasan a "ultima partida buena"
         if (drop_listener_added_ && window()) {
             window()->RemoveListener(&drop_listener_);
             drop_listener_added_ = false;
@@ -782,7 +787,7 @@ protected:
                 REXLOG_ERROR(
                     "dbz3: skip_launcher without a recognized default.xex "
                     "(expected US/NA yae3_xenon.xex or EU/PAL yae3_xenon_eu.xex)");
-                rex::ShowSimpleMessageBox(
+                if (!std::getenv("DBZ3_NO_DIALOGS")) rex::ShowSimpleMessageBox(
                     rex::SimpleMessageBoxType::Error,
                     "default.xex is missing or unrecognized. The dual-region core "
                     "boots either the US/NA (yae3_xenon.xex) or EU/PAL "
@@ -791,7 +796,7 @@ protected:
                 REXLOG_ERROR(
                     "dbz3: skip_launcher with US/NA default.xex - this EU/PAL core "
                     "only supports the EU/PAL executable");
-                rex::ShowSimpleMessageBox(
+                if (!std::getenv("DBZ3_NO_DIALOGS")) rex::ShowSimpleMessageBox(
                     rex::SimpleMessageBoxType::Error,
                     "default.xex is the US/NA executable but this is the EU/PAL "
                     "core. Replace default.xex with your EU/PAL one "
@@ -800,7 +805,7 @@ protected:
                 REXLOG_ERROR(
                     "dbz3: skip_launcher with EU/PAL default.xex - the recompiled "
                     "port only supports the US/NA executable");
-                rex::ShowSimpleMessageBox(
+                if (!std::getenv("DBZ3_NO_DIALOGS")) rex::ShowSimpleMessageBox(
                     rex::SimpleMessageBoxType::Error,
                     "default.xex is the EU/PAL executable. This core is recompiled "
                     "only from the US/NA one (yae3_xenon.xex) and cannot boot it. "
@@ -846,6 +851,8 @@ protected:
     bool OnWindowCloseRequested() override {
         REXLOG_INFO("Window close requested - exiting dbz3");
         shutting_down_.store(true, std::memory_order_release);
+        // salida normal del jugador (OnShutdown no llega: _Exit): sus mods pasan a "ultima partida buena"
+        try { dbz3::SessionEnd(true); } catch (...) {}
         rex::FlushLogging();
         std::_Exit(0);
     }
@@ -903,6 +910,7 @@ private:
             const uint32_t code = ep->ExceptionRecord->ExceptionCode;
             const void* addr = ep->ExceptionRecord->ExceptionAddress;
             REXLOG_CRITICAL("UNHANDLED EXCEPTION: Code=0x{:08X} Addr={:p}", code, addr);
+            try { dbz3::SessionEnd(false); } catch (...) {}   // el launcher lo vera al abrir
             // Diagnostic: dump the faulting x64 context and, if RCX points at a
             // PPCContext (recompiled code keeps the guest context in RCX), dump
             // the guest register state that matters for indirect dispatches.
@@ -916,22 +924,38 @@ private:
                 // r2@0x18 r4@0x20 r5@0x28 ... r10@0x50 r11@0x58 ... r31@0xF8
                 // lr@0x100 ctr@0x108 xer@0x110 cr0@0x124 ... cr6@0x13C
                 rex::FlushLogging();   // lo esencial queda escrito aunque lo de abajo fallara
-                // RCX solo es el contexto del guest dentro del codigo recompilado; en un fallo de
-                // lectura del guest es la direccion que fallo (0x20000001A) y leerla volvia a caer
-                // dentro de este manejador (sin aviso ni registro; auditoria 2026-10-12)
-                const uint8_t* g = reinterpret_cast<const uint8_t*>(c->Rcx);
-                MEMORY_BASIC_INFORMATION mbi = {};
-                const bool readable =
-                    VirtualQuery(g, &mbi, sizeof(mbi)) == sizeof(mbi) && mbi.State == MEM_COMMIT &&
-                    !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) &&
-                    reinterpret_cast<uintptr_t>(g) + 0x140 <= reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-                if (readable) {
+                // En un fallo de lectura del guest, RCX suele ser la direccion que fallo, NO el
+                // PPCContext. Escaneamos todos los registros buscando el que apunte a un bloque
+                // legible cuyo LR (@+0x100) sea una direccion de codigo del guest, para recuperar
+                // el estado del guest (LR + registros) en el punto exacto del fallo.
+                const auto readable_ctx = [](const uint8_t* g) {
+                  if (reinterpret_cast<uintptr_t>(g) < 0x10000) return false;
+                  MEMORY_BASIC_INFORMATION mbi = {};
+                  return VirtualQuery(g, &mbi, sizeof(mbi)) == sizeof(mbi) && mbi.State == MEM_COMMIT &&
+                         !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) &&
+                         reinterpret_cast<uintptr_t>(g) + 0x140 <=
+                             reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+                };
+                const struct { const char* n; uint64_t v; } cands[] = {
+                    {"RCX", c->Rcx}, {"RDI", c->Rdi}, {"RSI", c->Rsi}, {"RDX", c->Rdx},
+                    {"R8", c->R8},   {"R9", c->R9},   {"R10", c->R10}, {"R11", c->R11},
+                    {"RAX", c->Rax}, {"RBX", c->Rbx}, {"RBP", c->Rbp},
+                };
+                for (const auto& cd : cands) {
+                  const uint8_t* g = reinterpret_cast<const uint8_t*>(cd.v);
+                  if (!readable_ctx(g)) continue;
+                  uint64_t lr = 0;
+                  std::memcpy(&lr, g + 0x100, 8);
+                  if (lr < 0x82000000ull || lr >= 0x83000000ull) continue;   // LR = codigo del guest
                   const auto rd32 = [&](size_t o) { uint32_t v; std::memcpy(&v, g + o, 4); return v; };
-                  const auto rd64 = [&](size_t o) { uint64_t v; std::memcpy(&v, g + o, 8); return v; };
-                  REXLOG_CRITICAL("guest(ctx=0x{:016X}): r3=0x{:08X} r4=0x{:08X} r11=0x{:08X}", c->Rcx, rd32(0x00), rd32(0x20), rd32(0x58));
-                  REXLOG_CRITICAL("guest: r28=0x{:08X} r29=0x{:08X} r30=0x{:08X} r31=0x{:08X}", rd32(0xE0), rd32(0xE8), rd32(0xF0), rd32(0xF8));
+                  REXLOG_CRITICAL("guest ctx via {} = 0x{:016X}", cd.n, cd.v);
+                  REXLOG_CRITICAL("guest: r3=0x{:08X} r4=0x{:08X} r5=0x{:08X} r6=0x{:08X}", rd32(0x00), rd32(0x20), rd32(0x28), rd32(0x30));
+                  REXLOG_CRITICAL("guest: r7=0x{:08X} r8=0x{:08X} r9=0x{:08X} r10=0x{:08X}", rd32(0x38), rd32(0x40), rd32(0x48), rd32(0x50));
+                  REXLOG_CRITICAL("guest: r11=0x{:08X} r28=0x{:08X} r29=0x{:08X} r30=0x{:08X} r31=0x{:08X}",
+                                  rd32(0x58), rd32(0xE0), rd32(0xE8), rd32(0xF0), rd32(0xF8));
                   REXLOG_CRITICAL("guest: lr=0x{:08X} ctr=0x{:08X} xer=0x{:08X} cr6=0x{:02X}",
-                                  rd64(0x100), rd32(0x108), rd32(0x110), g[0x13C]);
+                                  uint32_t(lr), rd32(0x108), rd32(0x110), g[0x13C]);
+                  break;
                 }
             }
             // Flush the log so the message box below points at a complete file.
@@ -957,8 +981,10 @@ private:
             size_t end = strnlen(msg, sizeof(msg));
             snprintf(msg + end, sizeof(msg) - end,
                      "\nSi el problema persiste, comparte el registro para diagnostico.");
-            MessageBoxA(nullptr, msg, "DBZ Budokai 3 - Error",
-                        MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+            // pruebas automaticas (DBZ3_NO_DIALOGS): sin ventana encima del escritorio del usuario
+            if (!std::getenv("DBZ3_NO_DIALOGS"))
+                MessageBoxA(nullptr, msg, "DBZ Budokai 3 - Error",
+                            MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
             return EXCEPTION_EXECUTE_HANDLER;
         });
         std::set_terminate([]() {
@@ -973,6 +999,7 @@ private:
                 REXLOG_CRITICAL("terminate stack[{:02d}]: {:p}", i, frames[i]);
             }
             rex::FlushLogging();
+            if (!std::getenv("DBZ3_NO_DIALOGS"))
             MessageBoxA(nullptr,
                         "DBZ Budokai 3 HD Collection se cerró inesperadamente "
                         "(terminación del runtime). Consulta el registro en "

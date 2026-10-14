@@ -1565,8 +1565,11 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
   // half size as dbz3_shot_000.bmp, dbz3_shot_001.bmp... (beams and hits last a few frames).
   Microsoft::WRL::ComPtr<ID3D12Resource> dbz3_shot_buffer;
   D3D12_PLACED_SUBRESOURCE_FOOTPRINT dbz3_shot_footprint = {};
+  // "guest" in the request file saves the game image at its internal resolution instead
+  // (before the upscaler and the window size): texture comparisons at 2x/3x.
   static int dbz3_burst_left = 0, dbz3_burst_every = 1, dbz3_burst_tick = 0, dbz3_burst_index = 0;
   int dbz3_burst_shot = -1;
+  bool dbz3_guest_shot = false;
   {
     static uint32_t dbz3_shot_poll = 0;
     std::error_code ec;
@@ -1580,11 +1583,14 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
     } else if (++dbz3_shot_poll % 30 == 0 && std::filesystem::exists("dbz3_shot.req", ec)) {
       int n = 0, every = 1;
       if (FILE* req = std::fopen("dbz3_shot.req", "rb")) {
+        char word[8] = {};
+        dbz3_guest_shot = std::fscanf(req, "%7s", word) == 1 && std::strcmp(word, "guest") == 0;
+        std::rewind(req);
         if (std::fscanf(req, "%d %d", &n, &every) < 2) n = 0;
         std::fclose(req);
       }
       std::filesystem::remove("dbz3_shot.req", ec);
-      want = true;
+      want = !dbz3_guest_shot;
       if (n > 1) {
         dbz3_burst_left = std::min(n, 240) - 1;
         dbz3_burst_every = std::clamp(every, 1, 60);
@@ -1690,6 +1696,34 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
     }
   } else {
     paint_context_.paint_submission_tracker.NextSubmission();
+  }
+  RawImage dbz3_guest_image;
+  if (dbz3_guest_shot && CaptureGuestOutput(dbz3_guest_image)) {
+    const uint32_t w = dbz3_guest_image.width, h = dbz3_guest_image.height;
+    uint8_t header[54] = {'B', 'M'};
+    auto put32 = [&header](size_t offset, uint32_t value) {
+      std::memcpy(header + offset, &value, sizeof(value));
+    };
+    put32(2, 54 + w * h * 4);
+    put32(10, 54);
+    put32(14, 40);
+    put32(18, w);
+    put32(22, uint32_t(-int32_t(h)));
+    header[26] = 1;
+    header[28] = 32;
+    put32(34, w * h * 4);
+    uint8_t* p = dbz3_guest_image.data.data();
+    for (size_t i = 0; i < size_t(w) * h; ++i, p += 4) {   // R8G8B8X8 -> BMP B8G8R8A8
+      std::swap(p[0], p[2]);
+      p[3] = 0xFF;
+    }
+    if (FILE* file = std::fopen("dbz3_shot.bmp.tmp", "wb")) {
+      std::fwrite(header, 1, sizeof(header), file);
+      std::fwrite(dbz3_guest_image.data.data(), 4, size_t(w) * h, file);
+      std::fclose(file);
+      std::error_code ec;
+      std::filesystem::rename("dbz3_shot.bmp.tmp", "dbz3_shot.bmp", ec);
+    }
   }
   // Present as soon as possible, without waiting for vsync (the host refresh
   // rate may be something like 144 Hz, which is not a multiple of the common

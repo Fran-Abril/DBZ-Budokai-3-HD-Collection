@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,9 @@ enum class UpdateState {
 // this executable's VERSIONINFO, so src/version.rc stays the single source of
 // truth (no duplicated constant).
 std::string CurrentVersion();
+
+// true si `a` es una version estrictamente mas nueva que `b` ("1.2.10" > "1.2.9").
+bool IsVersionNewer(const std::string& a, const std::string& b);
 
 // Same version, in the form the release tags use: "1.2.3", "1.2.4 EX" (a local
 // build number above zero means this is a repack of that release). For display.
@@ -48,6 +53,14 @@ std::string LatestReleaseUrl();
 // HTTPS GET (short timeouts, background threads only). `headers` = extra request
 // headers, each ending in CRLF. Returns the body of a 200 response, or "".
 std::string HttpGet(const wchar_t* host, const wchar_t* path, const wchar_t* headers = nullptr);
+
+// HTTPS download straight to a file (streamed: zips of several GB never sit in RAM).
+// Redirects are followed by hand and `headers` are only sent to the first host (GitHub's
+// signed asset links reject the API token). `append` adds to the end of `out` (split zips).
+// `progress(bytes)` reports what this call wrote so far. Returns the bytes written, or -1.
+long long HttpDownload(const std::string& url, const std::wstring& headers,
+                       const std::filesystem::path& out, bool append,
+                       const std::function<void(long long)>& progress);
 
 // Opens a URL in the user's default browser (no-op off Windows).
 void OpenUrl(const std::string& url);

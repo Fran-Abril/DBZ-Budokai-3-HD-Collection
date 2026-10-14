@@ -144,7 +144,7 @@ class VulkanTextureCache final : public TextureCache {
 
   // DBZ3 HD Collection: "packs" de texturas al estilo PCSX2 (ver
   // dbz3_texture_pack.h). Un pack reemplaza la textura host por la imagen del
-  // pack (RGBA8, a la resolucion del pack). El factor (0 = sin pack, 1..4 =
+  // pack (RGBA8, a la resolucion del pack). El factor (0 = sin pack, >=1 =
   // reemplazo) se deduce de W_pack / W_guest. Cacheado por textura.
   uint32_t GetTexturePackFactor(const TextureKey& key) const;
   bool IsTexturePackReplaced(const TextureKey& key) const {
@@ -360,7 +360,9 @@ class VulkanTextureCache final : public TextureCache {
   // Cache del factor/entrada del pack por textura. El resultado (incluido "no
   // hay pack") se memoriza para que la respuesta sea estable entre la creacion
   // del recurso y las subidas posteriores.
-  mutable std::unordered_map<TextureKey, uint8_t, TextureKey::Hasher> pack_factor_cache_;
+  mutable std::unordered_map<TextureKey, uint32_t, TextureKey::Hasher> pack_factor_cache_;
+  bool packs_on_seen_ = true;  // ultimo estado del interruptor F1 del pack HD
+  bool pack_index_seen_ = false;  // el indice de packs (en segundo plano) ya estaba listo
   mutable std::unordered_map<TextureKey, const Dbz3TexturePackEntry*, TextureKey::Hasher>
       pack_entry_cache_;
   // Buffers de subida del pack en vuelo (se liberan al completarse su

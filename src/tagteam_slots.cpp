@@ -14,6 +14,8 @@
 #include "generated/dbz3_init.h"
 #include "guest_region.h"
 #include "roster_ext.h"
+#include "form_selection_state.h"
+#include <cstring>
 #include "tagteam.h"
 #include "ingame/tagteam_panel.h"
 #include "net/netplay.h"
@@ -40,6 +42,28 @@ void SetMemberCapsules(int side, int id, const uint16_t* caps) {
   }
   auto& c = g_caps[size_t(side)][id];
   std::copy(caps, caps + 8, c.begin());
+}
+
+// TAG_F3_RECIPE_V1
+// Copia coherente del mismo proveedor de PutCapsules; ninguna escritura guest.
+bool ReadMemberCapsules(uint8_t* base, int side, int id, std::array<uint16_t, 8>& c) {
+  if (id < 0 || id >= dbz3::forms::kIds || side < 0 || side > 1) return false;
+  bool custom = false;
+  if (dbz3::net::Session::Get().link() == dbz3::net::Link::kIdle) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    const auto it = g_caps[size_t(side)].find(id);
+    if (it != g_caps[size_t(side)].end()) { c = it->second; custom = true; }
+  }
+  if (!custom) {
+    const uint32_t address = 0x8234ABB8u + 96u * uint32_t(id) + 80u;
+    if (!dbz3::roster::FormSelectionRange(address, 16, false)) return false;
+    for (uint32_t i = 0; i < 8; ++i) c[i] = REX_LOAD_U16(address + 2*i);
+  }
+  if (c[0] > 7) return false;
+  const uint32_t count = dbz3::roster::CapsuleCount();
+  if (!count || count > 2048) return false;
+  for (uint32_t i = 1; i <= c[0]; ++i) if (c[i] >= count) return false;
+  return true;
 }
 
 void PutCapsules(uint8_t* base, uint32_t rec, int side, int id) {
@@ -86,6 +110,7 @@ std::vector<int> MyLastTeam() {
 }
 
 void ClearDynamicTeams() {
+  dbz3::forms::ClearMembers();
   std::lock_guard<std::mutex> lock(g_mu);
   for (auto& d : g_dyn) d.clear();
   for (auto& c : g_caps) c.clear();
@@ -99,7 +124,8 @@ std::vector<int> DynamicTeam(int side) {
 // Inicio del combate (sub_820FE668, r3 = seleccion; ID del jugador k en +32 + 80k): cada lado
 // con equipo empieza con su primer miembro.
 void BeforeBattleSetup(uint8_t* base, uint32_t sel) {
-  if (!sel) return;
+  if (!sel || uint64_t(sel) + 176 > 0x100000000ull ||
+      !dbz3::roster::FormSelectionRange(sel, 176, true)) return;
   // historias de mod: tu personaje empieza transformado (forma minima y maxima de la seleccion,
   // rec+20/+22: el juego solo carga esa forma y empieza en ella)
   if (const int f = dbz3::campaigns::PlayerStartForm(); f > 0) {
@@ -137,32 +163,39 @@ void BeforeBattleSetup(uint8_t* base, uint32_t sel) {
     dbz3::roster::SetPickedCell(int(k), -1, -1);
     REXLOG_INFO("dbz3 tag: lado {} empieza con el id {} ({} miembros)", k + 1, team[0], team.size());
   }
-  // forma inicial elegida con LT/RT en la rueda (en Tag Team, el primer miembro; online, la misma en los dos PCs): forma minima = la
-  // elegida (empieza en ella), la maxima no baja de ahi; tope = formas del personaje (char96 +7)
+  // Resolver común: forma lógica de char372; modelo independiente en char96.
+  // Online y forma impuesta por campaña conservan el flujo original.
   for (uint32_t k = 0; k < 2; ++k) {
-    const uint32_t rec = sel + 16 + 80 * k;
+    const uint32_t rec = sel + 16 + 80*k;
+    if (!dbz3::roster::FormSelectionRange(rec, 80, true)) continue;
     const int id = int(REX_LOAD_U16(rec + 16));
-    if (k == 0 && dbz3::campaigns::PlayerStartForm() > 0) continue;
-    const int want = dbz3::ingame::StartForm(int(k));
-    if (want <= 0 || id < 0 || id >= 105) continue;   // ponytail: IDs del char96 nativo/ampliado (<105)
-    const int forms = REX_LOAD_U8(0x8234ABB8u + uint32_t(id) * 96 + 7);
-    // como en el juego: cada forma pide su capsula (char372 +212 + 20*forma); sin ella equipada (las
-    // del lado: rec+52 = n y 7 IDs) se empieza en la mas alta que si tenga
-    const uint32_t c372 = 0x82329CF0u + 372u * uint32_t(id);
-    const uint32_t n = std::min<uint32_t>(REX_LOAD_U16(rec + 52), 7);
-    auto equipped = [&](uint32_t cap) {
-      for (uint32_t i = 0; i < n; ++i) {
-        if (REX_LOAD_U16(rec + 54 + 2 * i) == cap) return true;
-      }
-      return false;
-    };
-    int f = std::min(want, forms - 1);
-    // medido 2026-10-12: Goku forma g pide la capsula g; con las Normales solo lleva el Kaioken (1)
-    while (f > 0 && !equipped(REX_LOAD_U16(c372 + 212 + 20 * uint32_t(f)))) --f;
-    if (f <= 0) continue;
-    REX_STORE_U16(rec + 20, uint16_t(f));
-    if (REX_LOAD_U16(rec + 22) < f) REX_STORE_U16(rec + 22, uint16_t(f));
-    REXLOG_INFO("dbz3 forma: lado {} (id {}) empieza en la forma {} de {}", k + 1, id, f, forms);
+    const int suit = dbz3::ingame::TagTeamMode()
+        ? dbz3::forms::MemberSuit(int(k), id, int(REX_LOAD_U16(rec + 18)))
+        : int(REX_LOAD_U16(rec + 18));
+    auto snapshot = dbz3::roster::ReadForms(id, suit);
+    const uint32_t n = REX_LOAD_U16(rec + 52);
+    if (n > 7) continue;
+    snapshot.capsules.clear();
+    for (uint32_t c = 0; c < n; ++c) snapshot.capsules.push_back(REX_LOAD_U16(rec + 54 + 2*c));
+    const bool online = dbz3::net::Session::Get().link() != dbz3::net::Link::kIdle;
+    int want = dbz3::forms::MemberRequest(int(k), id);
+    if (const char* env = std::getenv("DBZ3_START_FORM")) {
+      const char* comma = std::strchr(env, ',');
+      want = std::atoi(k == 0 || !comma ? env : comma + 1);
+    }
+    const auto result = dbz3::forms::Resolve(snapshot, want,
+        dbz3::ingame::FormSelectorEnabled(),
+        dbz3::forms::ImposedStart(int(REX_LOAD_U16(rec + 20)),
+            k == 0 ? dbz3::campaigns::PlayerStartForm() : -1), online);
+    dbz3::forms::Notice(int(k), snapshot, result);
+    if (!result.valid || result.reason == dbz3::forms::Reason::kDisabled) continue;
+    REX_STORE_U16(rec + 18, uint16_t(suit));
+    REX_STORE_U16(rec + 20, uint16_t(result.applied));
+    const uint16_t maximum = uint16_t(snapshot.count - 1);
+    REX_STORE_U16(rec + 22, uint16_t(std::clamp<int>(REX_LOAD_U16(rec + 22), result.applied, maximum)));
+    if (result.reason != dbz3::forms::Reason::kOk)
+      REXLOG_WARN("dbz3 forma: lado {} id {} pedida {} aplicada {} motivo {} capsula {}",
+          k + 1, id, want, result.applied, int(result.reason), result.capsule);
   }
 }
 

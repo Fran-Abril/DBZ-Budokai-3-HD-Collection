@@ -316,6 +316,15 @@ void TextureCache::ClearCache() {
 }
 
 void TextureCache::CompletedSubmissionUpdated(uint64_t completed_submission_index) {
+  // DBZ3: las retiradas se destruyen cuando la GPU ya no las usa.
+  if (!retired_textures_.empty()) {
+    retired_textures_.erase(
+        std::remove_if(retired_textures_.begin(), retired_textures_.end(),
+                       [completed_submission_index](const auto& retired) {
+                         return retired.first <= completed_submission_index;
+                       }),
+        retired_textures_.end());
+  }
   // If memory usage is too high, destroy unused textures.
   uint64_t current_time = rex::chrono::Clock::QueryHostUptimeMillis();
   // texture_cache_memory_limit_render_to_texture is assumed to be included in
@@ -324,10 +333,12 @@ void TextureCache::CompletedSubmissionUpdated(uint64_t completed_submission_inde
   uint32_t limit_scaled_resolve_add_mb =
       REXCVAR_GET(texture_cache_memory_limit_render_to_texture) *
       (draw_resolution_scale_x() * draw_resolution_scale_y() - 1);
-  uint32_t limit_soft_mb =
-      REXCVAR_GET(texture_cache_memory_limit_soft) + limit_scaled_resolve_add_mb;
-  uint32_t limit_hard_mb =
-      REXCVAR_GET(texture_cache_memory_limit_hard) + limit_scaled_resolve_add_mb;
+  uint32_t limit_soft_mb = std::max(
+      REXCVAR_GET(texture_cache_memory_limit_soft) + limit_scaled_resolve_add_mb,
+      pack_memory_limit_soft_mb_);
+  uint32_t limit_hard_mb = std::max(
+      REXCVAR_GET(texture_cache_memory_limit_hard) + limit_scaled_resolve_add_mb,
+      pack_memory_limit_hard_mb_);
   uint32_t limit_soft_lifetime = REXCVAR_GET(texture_cache_memory_limit_soft_lifetime) * 1000;
   bool destroyed_any = false;
   while (texture_used_first_ != nullptr) {
@@ -794,6 +805,39 @@ void TextureCache::Texture::MarkAsUsed() {
   texture_cache_.texture_used_last_ = this;
 }
 
+void TextureCache::Texture::RemoveFromUsageList() {
+  if (!in_usage_list_) {
+    return;
+  }
+  if (used_previous_) {
+    used_previous_->used_next_ = used_next_;
+  } else {
+    texture_cache_.texture_used_first_ = used_next_;
+  }
+  if (used_next_) {
+    used_next_->used_previous_ = used_previous_;
+  } else {
+    texture_cache_.texture_used_last_ = used_previous_;
+  }
+  used_previous_ = used_next_ = nullptr;
+  in_usage_list_ = false;
+}
+
+bool TextureCache::RetireTexture(const TextureKey& key) {
+  auto it = textures_.find(key);
+  if (it == textures_.end()) {
+    return false;
+  }
+  std::unique_ptr<Texture> texture = std::move(it->second);
+  textures_.erase(it);
+  // Fuera del LRU: CompletedSubmissionUpdated busca por key y encontraria la nueva.
+  texture->RemoveFromUsageList();
+  const uint64_t last_use = texture->last_usage_submission_index();
+  retired_textures_.emplace_back(last_use, std::move(texture));
+  ResetTextureBindings();  // los bindings guardan punteros: que vuelvan a buscar
+  return true;
+}
+
 void TextureCache::Texture::WatchCallback(
     [[maybe_unused]] const std::unique_lock<std::recursive_mutex>& global_lock, bool is_mip) {
   if (is_mip) {
@@ -820,6 +864,7 @@ void TextureCache::WatchCallback(const std::unique_lock<std::recursive_mutex>& g
 void TextureCache::DestroyAllTextures(bool from_destructor) {
   ResetTextureBindings(from_destructor);
   textures_.clear();
+  retired_textures_.clear();
   COUNT_profile_set("gpu/texture_cache/textures", 0);
 }
 

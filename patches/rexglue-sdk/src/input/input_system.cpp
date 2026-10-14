@@ -450,16 +450,25 @@ std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
   auto input = std::make_unique<InputSystem>(nullptr);
 
   if (!tool_mode) {
+    bool use_sdl = REXCVAR_GET(input_backend) == "sdl";
 #if REX_PLATFORM_WIN32
     if (REXCVAR_GET(input_backend) == "xinput") {
+      // A5/B30: XInput solo ve mandos de Xbox. Sin ninguno conectado (DualSense, Switch, o
+      // xinput1_4 que no carga) se usa SDL en su lugar; nunca los dos para el mismo mando.
       auto xinput_driver = std::make_unique<xinput::XinputInputDriver>(nullptr, 0);
-      if (xinput_driver->Setup() == X_STATUS_SUCCESS) {
+      std::vector<DeviceInfo> pads;
+      if (xinput_driver->Setup() == X_STATUS_SUCCESS) xinput_driver->EnumerateDevices(pads);
+      if (pads.empty()) {
+        REXLOG_INFO("input: no hay mandos XInput; se usa SDL (DualSense y otros)");
+        use_sdl = true;
+      } else {
+        REXLOG_INFO("input: {} mando(s) XInput; se usa XInput", pads.size());
         input->AddDriver(std::move(xinput_driver));
       }
     }
 #endif
 
-    if (REXCVAR_GET(input_backend) == "sdl") {
+    if (use_sdl) {
       auto sdl_driver = std::make_unique<sdl::SDLInputDriver>(nullptr, 0);
       if (sdl_driver->Setup() == X_STATUS_SUCCESS) {
         input->AddDriver(std::move(sdl_driver));

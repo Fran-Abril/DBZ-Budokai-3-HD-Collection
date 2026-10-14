@@ -47,7 +47,10 @@ struct ModInfo {
 bool FixNestedMod(const std::string& mod_name);
 
 // List mod folders under the mods root. Enabled mods first, then disabled.
-std::vector<ModInfo> ListMods();
+// `check_problems` = false skips ModInfo::problems: the game side (roster, stages, campaigns)
+// never shows them, and the texture size check opens every image of a pack (12345 PNG of an
+// HD pack just installed = ~70 s with the antivirus checking each one).
+std::vector<ModInfo> ListMods(bool check_problems = true);
 
 // Enable/disable a mod (creates/removes the ".disabled" marker).
 void SetModEnabled(const std::string& mod_name, bool enable);
@@ -88,5 +91,25 @@ bool SaveProfile(const std::string& name,
 bool DeleteProfile(const std::string& name);
 // Enables exactly the mods in the profile (and disables the rest).
 void ApplyProfile(const std::string& name);
+
+// --- Choques entre mods (A9) ------------------------------------------------
+// Dos mods activos que sustituyen lo mismo del juego (la misma entrada us/<afs>/<n> o el mismo
+// archivo entero). Gana el primero en orden alfabetico de carpeta, igual que el runtime
+// (ScanModDirs); el launcher lo ensena para que el jugador sepa cual se ve.
+struct ModConflict {
+  std::string winner, loser;
+  int resources = 0;
+};
+std::vector<ModConflict> FindConflicts();
+
+// --- Memoria de la ultima partida (launcher que se cura solo) ---------------
+// Al JUGAR se apunta "en_marcha" y los mods activos; al cerrar bien, "ok" y el perfil
+// kGoodProfile; el gestor de cierres apunta "cerrado_de_golpe". Si la anterior no acabo
+// bien, SessionSuspects() da los mods activos que no estaban en la ultima partida buena.
+inline constexpr const char* kGoodProfile = "ultima partida buena";
+void SessionStart();
+void SessionEnd(bool ok);   // ok=false: cierre inesperado (seguro llamarla desde el gestor)
+std::vector<std::string> SessionSuspects();
+void SessionForget();       // el jugador eligio seguir igual: no volver a preguntar
 
 }  // namespace dbz3

@@ -67,6 +67,8 @@
 //   u32 = [1, 2]            # o u16 = [...] / u8 = [...]
 
 #include "roster_ext.h"
+#include "form_selection_state.h"
+#include "launcher/settings.h"
 #include "tagteam.h"
 #include "ingame/tagteam_panel.h"
 
@@ -378,11 +380,16 @@ void ApplyCharacter(Guest& g, const toml::table& t, const std::string& mod) {
     REXLOG_WARN("dbz3 roster [{}]: donante {} no valido para id {}", mod, donor, id);
     return;
   }
+  if (id >= kSelectPosIds && donor < 0 && Floats(t["select"]).size() != 14 &&
+      !t["traje_formas"].as_array()) {
+    REXLOG_WARN("dbz3 roster [{}]: id {} sin donante ni encuadre: omitido", mod, id);
+    return;
+  }
   // Entradas de data_cmn ANADIDAS (indice >= 3990): solo las sirve el runtime con el
   // parche AfsVirtualSize (publica la cvar dbz3_afs_append). Con otro runtime el
   // guest pediria entradas inexistentes: mejor no aplicar el personaje.
   if (!rex::cvar::Query<bool>("dbz3_afs_append")) {
-    for (const char* key : {"modelos", "bocas", "retrato", "anm", "hud_cara"}) {
+    for (const char* key : {"modelos", "bocas", "retrato", "anm", "hud_cara", "traje_formas", "cam"}) {
       auto vals = Ints(t[key]);
       if (auto one = t[key].value<int64_t>()) vals.push_back(*one);
       for (auto v : vals) {
@@ -671,8 +678,13 @@ void ApplyCharacter(Guest& g, const toml::table& t, const std::string& mod) {
     for (uint32_t list : {kSlotToId, kSlotToIdB, kSlotToIdC}) {
       g.W16(list + uint32_t(slot) * 2, uint16_t(id));
     }
-    if (ValidId(old_id)) g.W16(kIdToSlot + old_id * 2, 0xFFFF);
-    g.W16(kIdToSlot + uint32_t(id) * 2, uint16_t(slot));
+    // ValidId admite 64 IDs host; la tabla retail solo tiene 44.
+    if (old_id < 44) g.W16(kIdToSlot + old_id * 2, 0xFFFF);
+    if (id < 44) {
+      g.W16(kIdToSlot + uint32_t(id) * 2, uint16_t(slot));
+    } else {
+      g_host_slot[uint32_t(id)] = uint32_t(slot);
+    }
   }
   // 5) casilla NUEVA en la rueda del select (no sustituye a nadie)
   if (auto c = t["celda"].value<bool>(); c && *c) {
@@ -878,6 +890,7 @@ void EnsureCapsules() {
 }
 
 void ApplyAtLaunch(rex::memory::Memory* memory) {
+  ResetForms();
   for (auto& d : g_donor) d.store(-1);
   for (auto& c : g_extra_costumes) c.store(0);
   for (auto& c : g_costume_count) c.store(0);
@@ -909,8 +922,9 @@ void ApplyAtLaunch(rex::memory::Memory* memory) {
   kSlotToIdC = dbz3::GuestAddr(0x82024760, 0x82024778);
   kIdToSlot = dbz3::GuestAddr(0x82020668, 0x82020670);
   REXLOG_INFO("dbz3 roster: imagen {}", eu ? "EU/PAL" : "US/NA");
+  InitializeForms();
   std::error_code ec;
-  for (const auto& info : ListMods()) {
+  for (const auto& info : ListMods(false)) {
     if (!info.enabled) continue;
     const auto file = ModsRoot() / info.name / "roster.toml";
     if (!std::filesystem::is_regular_file(file, ec)) continue;
@@ -1103,7 +1117,7 @@ thread_local bool t_in_setup = false;
 
 DBZ3_HOOK(sub_820FE668, dbz3eu_sub_820FE768) {
   const uint32_t sel = ctx.r3.u32;
-  dbz3::tag::BeforeBattleSetup(base, sel);   // Tag Team al vuelo: ranuras de equipo
+  // Fase 2: BeforeBattleSetup se ejecuta tras recuperar PickedCell.
   for (uint32_t k = 0; sel && k < 2; ++k) {     // casilla nueva que la lista del rival deshizo
     const int now = int(REX_LOAD_U16(sel + 32 + 80 * k));
     if (const int id = dbz3::roster::PickedCellFor(int(k), now); id >= 0 && id != now) {
@@ -1111,6 +1125,7 @@ DBZ3_HOOK(sub_820FE668, dbz3eu_sub_820FE768) {
       REXLOG_INFO("dbz3 roster: jugador {}: casilla nueva -> id {} (la seleccion decia {})", k + 1, id, now);
     }
   }
+  dbz3::tag::BeforeBattleSetup(base, sel);   // despues de restaurar la casilla, antes de copiar a combate
   for (uint32_t k = 0; k < 4; ++k) {
     const int id = sel ? int(REX_LOAD_U16(sel + 32 + 80 * k)) : -1;
     t_sel_ids[k] = (id >= 0 && id < 64 && dbz3::roster::DonorOf(uint32_t(id)) >= 0) ? id : -1;
@@ -1162,6 +1177,73 @@ DBZ3_HOOK(sub_82136328, dbz3eu_sub_82136430) {
   orig(ctx, base);
 }
 
+// Insertado por fases12_recipes en roster_ext.cpp; solo lo llama el hilo guest.
+namespace dbz3::roster {
+namespace {
+std::atomic<bool> g_forms_verified{false};
+std::string g_forms_scope;
+}
+bool FormSelectionRange(uint32_t address, size_t size, bool write) {
+  if (!g_forms_verified.load() || !g_memory || !forms::GuestRange(address, size)) return false;
+  uint64_t cursor = address, end = cursor + size;
+  while (cursor < end) {
+    auto* heap = g_memory->LookupHeap(uint32_t(cursor));
+    rex::memory::HeapAllocationInfo info{};
+    if (!heap || !heap->QueryRegionInfo(uint32_t(cursor), &info) ||
+        !(info.state & rex::memory::kMemoryAllocationCommit) ||
+        !(info.protect & rex::memory::kMemoryProtectRead) ||
+        (write && !(info.protect & rex::memory::kMemoryProtectWrite))) return false;
+    const uint64_t next = uint64_t(info.base_address) + info.region_size;
+    if (info.base_address > cursor || next <= cursor) return false;
+    cursor = std::min(next, end);
+  }
+  return true;
+}
+bool ReadFormBytes(uint32_t address, void* out, size_t size) {
+  if (!out || !FormSelectionRange(address, size, false)) return false;
+  std::memcpy(out, g_memory->TranslateVirtual<uint8_t*>(address), size);
+  return true;
+}
+forms::Snapshot ReadForms(int id, int suit) {
+  auto snapshot = forms::Decode(ReadFormBytes, id, suit, g_forms_scope);
+  if (!forms::CountValid(snapshot)) return snapshot;
+  std::array<uint8_t, 4> pointer{};
+  const uint32_t count = CapsuleCount();
+  const bool catalogue = count >= 1 && count <= 2048 &&
+      ReadFormBytes(0x8237560Cu, pointer.data(), pointer.size());
+  const uint32_t records = catalogue ? forms::Be32(pointer.data()) : 0;
+  for (int f = 1; f < snapshot.count; ++f) {
+    auto& form = snapshot.forms[size_t(f)];
+    if (!form.capsule) continue;
+    form.capsule_record_valid = false;
+    const uint64_t address = uint64_t(records) + 40ull * uint32_t(form.capsule);
+    std::array<uint8_t, 40> record{};
+    if (!records || id < 0 || id >= 64 || uint32_t(form.capsule) >= count ||
+        address + record.size() > 0x100000000ull ||
+        !ReadFormBytes(uint32_t(address), record.data(), record.size())) continue;
+    const uint64_t owners = (uint64_t(forms::Be32(record.data())) << 32) | forms::Be32(record.data() + 4);
+    if (!(owners & (uint64_t(1) << id)) || record[8] != 0x11 || record[15] > 70) continue;
+    form.prerequisites = {int(forms::Be16(record.data() + 16)), int(forms::Be16(record.data() + 18))};
+    if (uint32_t(form.prerequisites[0]) >= count || uint32_t(form.prerequisites[1]) >= count) continue;
+    form.required_ki_tenths = record[15];
+    form.capsule_record_valid = true;
+  }
+  return snapshot;
+}
+void ResetForms() { g_forms_verified.store(false); }
+void InitializeForms() {
+  std::string stamp;
+  std::ifstream file(ModsRoot() / "_roster" / "build.hash", std::ios::binary);
+  for (char c; stamp.size() < 256 && file.get(c);) {
+    if (c != '\r' && c != '\n') stamp += c;
+  }
+  g_forms_scope = std::string(dbz3::g_guest_eu ? "eu:" : "us:") +
+      dbz3::settings::ModProfile() + ":" + stamp;
+  forms::Initialize(dbz3::settings::UserDataRoot() / "forma_inicial.txt");
+  g_forms_verified.store(true);
+}
+} // namespace dbz3::roster
+
 // Select preview model (r3 = task, +48 = model object: +178 player, +180 character
 // ID, +196..+220 position/scale/rotation read from 0x82372950[ID][player]). That
 // table ends at ID 44: IDs >= 44 get their framing from roster.toml.
@@ -1169,33 +1251,25 @@ DBZ3_HOOK(sub_82136328, dbz3eu_sub_82136430) {
 // sub_82135B00(ID, forma 0, traje, jugador + 1, poses 3881-3883); se le pasa la forma elegida (la
 // valida mas alta hasta ella: del mismo ID y con modelo en el traje). Solo cambia el modelo 3D.
 namespace {
-thread_local int t_preview_form = 0;
+thread_local dbz3::forms::Result t_preview_result;
+thread_local int t_preview_id = -1;
 std::atomic<uint32_t> g_preview_task[2] = {0, 0};
 
-int PreviewForm(int id, int want) {
-  if (want <= 0 || id < 0 || id >= 105 || !dbz3::roster::g_memory) return 0;
-  dbz3::roster::Guest g(dbz3::roster::g_memory);
-  const uint32_t c96 = dbz3::roster::kChar96 + uint32_t(id) * 96;
-  for (int f = std::min(want, int(g.U8(c96 + 7)) - 1); f > 0; --f) {
-    if (g.U16(c96 + 16 + 8 * f) == uint32_t(id) && g.U8(c96 + 18 + 8 * f) != 0xFF) return f;
-  }
-  return 0;
-}
+// Fase 2: PreviewForm se sustituye por forms::Resolve/ReadForms.
 }  // namespace
 
 // Forma mas alta que puede enseñar la vista previa del lado (0 = el personaje no se transforma; -1 =
 // aun no hay vista previa): LT/RT no pasa de ahi y sin formas no se ofrece.
 int dbz3_select_preview_max_form(int side) {
-  if (side < 0 || side > 1 || !dbz3::roster::g_memory) return -1;
-  dbz3::roster::Guest g(dbz3::roster::g_memory);
-  const uint32_t task = g_preview_task[size_t(side)].load();
-  const uint32_t obj = task ? g.U32(task + 48) : 0;
-  if (!obj || g.U16(obj + 178) != uint32_t(side)) return -1;
-  return PreviewForm(int16_t(g.U16(obj + 180)), 7);
+  const auto s = dbz3::forms::Copy(side).snapshot;
+  return dbz3::forms::CountValid(s) ? s.count - 1 : -1;
 }
 
 DBZ3_HOOK(sub_82135B00, dbz3eu_sub_82135C08) {
-  if (t_preview_form > 0 && ctx.r4.u32 == 0) ctx.r4.u64 = uint64_t(t_preview_form);
+  if (t_preview_result.valid && t_preview_result.applied > 0 && ctx.r4.u32 == 0 && ctx.r3.u32 == uint32_t(t_preview_id)) {
+    ctx.r3.u64 = uint64_t(t_preview_result.model_id);
+    ctx.r4.u64 = uint64_t(t_preview_result.model_index);
+  }
   orig(ctx, base);
 }
 
@@ -1204,10 +1278,23 @@ DBZ3_HOOK(sub_8217FF20, dbz3eu_sub_8217FED8) {
   const int side = obj ? int(REX_LOAD_U16(obj + 178)) : -1;
   if (side == 0 || side == 1) {
     g_preview_task[size_t(side)] = ctx.r3.u32;
-    t_preview_form = PreviewForm(int16_t(REX_LOAD_U16(obj + 180)), dbz3::ingame::ChosenForm(side));
+    if (dbz3::roster::FormSelectionRange(obj + 178, 6)) {
+      const int id = int16_t(REX_LOAD_U16(obj + 180));
+      const int suit = int16_t(REX_LOAD_U16(obj + 182));
+      auto snapshot = dbz3::roster::ReadForms(id, suit);
+      const auto previous = dbz3::forms::Copy(side);
+      if (previous.snapshot.identity == snapshot.identity) snapshot.capsules = previous.snapshot.capsules;
+      dbz3::forms::Publish(side, snapshot, !dbz3::ingame::FormSelectorEnabled());
+      t_preview_id = id;
+      t_preview_result = dbz3::forms::Resolve(snapshot, dbz3::ingame::ChosenForm(side), dbz3::ingame::FormSelectorEnabled());
+    }
+    else {  // sin lectura valida: no dejar las formas del personaje anterior en la vista previa
+      dbz3::forms::Publish(side, dbz3::forms::Snapshot{}, !dbz3::ingame::FormSelectorEnabled());
+    }
   }
   orig(ctx, base);
-  t_preview_form = 0;
+  t_preview_result = {};
+  t_preview_id = -1;
   if (!obj) return;
   const int16_t id = int16_t(REX_LOAD_U16(obj + 180));
   uint32_t v[7];

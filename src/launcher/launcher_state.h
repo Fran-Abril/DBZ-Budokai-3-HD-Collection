@@ -127,6 +127,8 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   struct CharacterSource {
     std::string folder;
     std::string name;
+    bool costume = false;  // traje.toml: traje extra de un personaje existente (sin plaza propia)
+    int target_id = -1;    // traje: [traje] personaje = N
     int donor = -1;
     int req_id = -1;      // plaza pedida (id = ...), -1 = automatica
     int after = -1;       // despues_de, -1 = el donante
@@ -204,6 +206,7 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   int tab_request_ = -1;           // tab to select next frame (LB/RB, Ctrl+Tab)
   bool pad_play_ = false;          // START pressed
   bool launching_ = false;         // JUGAR pulsado: montando los personajes nuevos
+  bool roster_queued_ = false;     // el montaje espera a que acabe otra tarea (instalar un zip)
   bool in_game_ = false;
   bool input_blocked_ = false;
 
@@ -229,6 +232,7 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   bool imp_physics_ = false;         // fisica = "donante"
   bool imp_ground_ = true;           // altura (pies al suelo)
   bool imp_loaded_ = false;
+  bool imp_query_failed_ = false;    // la ultima consulta salio con error (no es "lista vacia")
   char imp_search_[64] = {};
   char imp_name_[64] = {};
 
@@ -254,6 +258,9 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   std::vector<dbz3::ModInfo> mods_cache_;
   bool mods_loaded_ = false;
   char mods_search_buf_[128] = {};
+  char profiles_search_[128] = {};
+  char novas_search_[128] = {};
+  char characters_search_[128] = {};
   // Last ModPipeline generation seen: when the async swap/texture build finishes
   // (counter bumps) the cached mod list is rebuilt so the new mod shows up.
   int last_pipeline_gen_ = 0;
@@ -271,6 +278,12 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   // consumed once per session and the report is shown in a modal popup.
   bool repair_checked_ = false;
   bool repair_popup_ = false;
+  bool session_checked_ = false;                 // ultima partida cerrada de golpe (una vez)
+  bool kit_missing_ = false;                     // personajes nuevos sin kit: aviso junto a JUGAR
+  bool roster_failed_ = false;                   // montaje fallido: el popup ofrece jugar con el anterior
+  std::vector<dbz3::ModConflict> mods_conflicts_;  // A9: mods activos que se pisan (con mods_cache_)
+  bool play_previous_roster_ = false;
+  std::vector<std::string> session_suspects_;
   std::string repair_report_;
 };
 

@@ -498,6 +498,32 @@ VulkanTextureCache::~VulkanTextureCache() {
 void VulkanTextureCache::BeginSubmission(uint64_t new_submission_index) {
   TextureCache::BeginSubmission(new_submission_index);
 
+  // DBZ3: el indice de packs se construye en segundo plano; cuando acaba, lo cargado
+  // con las originales se rehace para que entren las HD.
+  const bool pack_index_ready = Dbz3TexturePackIndex::Get().active();
+  bool pack_state_changed = false;
+  if (pack_index_ready != pack_index_seen_) {
+    pack_index_seen_ = pack_index_ready;
+    pack_state_changed = true;
+  }
+  // DBZ3: pack HD encendido/apagado en vivo (F1): se rehacen todas las texturas.
+  if (pack_index_ready) {
+    const bool packs_on = Dbz3TexturePacksOn();
+    if (packs_on != packs_on_seen_) {
+      packs_on_seen_ = packs_on;
+      pack_state_changed = true;
+    }
+  }
+  if (pack_state_changed) {
+    pack_factor_cache_.clear();
+    pack_entry_cache_.clear();
+    command_processor_.ClearCaches();
+    // Limites de la cache con pack (como Burst Limit; sin presupuesto de VRAM a mano aqui).
+    const bool pack_on = pack_index_ready && packs_on_seen_;
+    pack_memory_limit_soft_mb_ = pack_on ? 1024 : 0;
+    pack_memory_limit_hard_mb_ = pack_on ? 2048 : 0;
+  }
+
   // DBZ3: liberar los buffers de subida de packs cuya submission ya termino.
   if (!pending_pack_uploads_.empty()) {
     const uint64_t completed_submission = command_processor_.GetCompletedSubmission();
@@ -1891,10 +1917,13 @@ uint32_t VulkanTextureCache::GetTexturePackFactor(const TextureKey& key) const {
   if (cached != pack_factor_cache_.end()) {
     return cached->second;
   }
-  uint8_t factor = 0;
+  uint32_t factor = 0;
   const Dbz3TexturePackEntry* entry = nullptr;
   do {
     if (!Dbz3TexturePackIndex::Get().active()) {
+      break;
+    }
+    if (!Dbz3TexturePacksOn()) {
       break;
     }
     // Mismas restricciones estructurales que en D3D12: solo 2D simples con
@@ -1947,19 +1976,27 @@ uint32_t VulkanTextureCache::GetTexturePackFactor(const TextureKey& key) const {
       entry = nullptr;
       break;
     }
+    // Cualquier factor entero (x5, x8...): la imagen se crea al tamano del pack,
+    // que el cargador ya limita a 16384 (maximo 2D).
     const uint32_t fx = entry->width / width;
     const uint32_t fy = entry->height / height;
-    if (fx != fy || fx < 1 || fx > 4) {
+    if (fx != fy || fx < 1) {
       static int factor_logged = 0;
       if (factor_logged < 12) {
         ++factor_logged;
-        REXGPU_WARN("dbz3: pack '{}' factor invalido ({}x{} vs {}x{}; max x4)", entry->pack_name,
-                    entry->width, entry->height, width, height);
+        REXGPU_WARN("dbz3: pack '{}' proporcion distinta ({}x{} vs {}x{}; mismo factor en ancho y alto)",
+                    entry->pack_name, entry->width, entry->height, width, height);
       }
       entry = nullptr;
       break;
     }
-    factor = uint8_t(fx);
+    // Vulkan no puede mostrar la original en el recurso Nx: la imagen se prepara aqui (bloquea,
+    // como antes) y, si no se puede leer, la textura se crea normal en vez de quedar a medias.
+    if (!Dbz3TexturePackIndex::Get().Decoded(*entry)) {
+      entry = nullptr;
+      break;
+    }
+    factor = fx;
   } while (false);
   pack_factor_cache_.emplace(key, factor);
   pack_entry_cache_.emplace(key, entry);
@@ -2012,19 +2049,18 @@ bool VulkanTextureCache::UploadPackTextureData(VulkanTexture& texture, const Tex
     }
     return false;
   }
-  const uint32_t levels = key.mip_max_level + 1;
-  // Cadena de mips (box filter) en un buffer host-visible que sirve de staging.
-  std::vector<uint8_t> buffer;
+  // Mips ya hechos al decodificar (dbz3_texture_pack.cpp); aqui solo se disponen en el
+  // buffer host-visible que sirve de staging.
   std::vector<Dbz3PackLevel> layouts;
   const uint32_t pack_width = image->width, pack_height = image->height;
-  Dbz3BuildPackMips(image->rgba, pack_width, pack_height, levels, 256, buffer, layouts,
-                    Dbz3PackSwapsRedBlue(key.format));
+  const uint64_t buffer_size = Dbz3PackLayout(*image, key.mip_max_level + 1, layouts);
+  const uint32_t levels = uint32_t(layouts.size());
 
   VkBufferCreateInfo buffer_create_info;
   buffer_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   buffer_create_info.pNext = nullptr;
   buffer_create_info.flags = 0;
-  buffer_create_info.size = buffer.size();
+  buffer_create_info.size = buffer_size;
   buffer_create_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
   buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   buffer_create_info.queueFamilyIndexCount = 0;
@@ -2041,8 +2077,9 @@ bool VulkanTextureCache::UploadPackTextureData(VulkanTexture& texture, const Tex
     REXGPU_WARN("dbz3: pack '{}': no se pudo crear el buffer de subida", entry->pack_name);
     return false;
   }
-  std::memcpy(staging_allocation_info.pMappedData, buffer.data(), buffer.size());
-  vmaFlushAllocation(vma_allocator_, staging_allocation, 0, buffer.size());
+  Dbz3PackCopyLevels(*image, buffer_size, static_cast<uint8_t*>(staging_allocation_info.pMappedData),
+                     Dbz3PackSwapsRedBlue(key.format));
+  vmaFlushAllocation(vma_allocator_, staging_allocation, 0, buffer_size);
 
   DeferredCommandBuffer& command_buffer = command_processor_.deferred_command_buffer();
 
@@ -2092,11 +2129,12 @@ bool VulkanTextureCache::UploadPackTextureData(VulkanTexture& texture, const Tex
   pending_pack_uploads_.push_back(PendingPackUpload{
       command_processor_.GetCurrentSubmission(), staging_buffer, staging_allocation});
   g_dbz3_pack_uploads.fetch_add(1, std::memory_order_relaxed);
+  Dbz3PackNoteUsed(entry->hash);
   static int upload_logged = 0;
   if (upload_logged < 48) {
     ++upload_logged;
     REXGPU_INFO("dbz3: pack '{}' subido {}x{} ({} niveles, {} B)", entry->pack_name, pack_width,
-                pack_height, levels, buffer.size());
+                pack_height, levels, buffer_size);
   }
   return true;
 }

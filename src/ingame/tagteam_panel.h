@@ -36,6 +36,7 @@ bool TagTeamWanted();
 bool TagTeamGate();
 // Modo Tag Team activo (de la pantalla TAG TEAM al menu principal).
 bool TagTeamMode();
+bool FormSelectorEnabled();
 // Mando `user` (0/1) en la rueda con el modo Tag Team: Y quita el ultimo miembro.
 uint16_t TeamPickFilter(uint16_t real, int user);
 // Personaje confirmado en la rueda (select_ext.cpp): true si era un miembro del equipo.

@@ -32,6 +32,7 @@ namespace fs = std::filesystem;
 
 constexpr const wchar_t* kHost = L"api.github.com";
 constexpr const char* kRepoPath = "/repos/novapowers0/DBZ3HD-Novas-Mods/contents/";
+constexpr const char* kAssetUrl = "https://api.github.com/repos/novapowers0/DBZ3HD-Novas-Mods/releases/assets/";
 
 struct Entry {
   NovaMod mod;
@@ -103,6 +104,18 @@ void Fetch() {
           e.mod.zip = (*t)["zip"].value_or(std::string());
           e.mod.tipo = (*t)["tipo"].value_or(std::string());
           e.mod.size = (*t)["size"].value_or(0LL);
+          e.mod.autor = (*t)["autor"].value_or(std::string());
+          if (const toml::array* a = (*t)["enlaces"].as_array()) {
+            for (const toml::node& u : *a) {
+              const std::string url = u.value_or(std::string());
+              if (url.rfind("https://", 0) == 0) e.mod.enlaces.push_back(url);   // nada de rutas locales
+            }
+          }
+          if (const toml::array* a = (*t)["partes"].as_array()) {
+            for (const toml::node& p : *a) {
+              if (const long long id = p.value_or(0LL); id > 0) e.mod.partes.push_back(id);
+            }
+          }
           for (const auto& [k, v] : *t) {
             const std::string key(k.str());
             if (key.rfind("nombre_", 0) == 0) e.names[key.substr(7)] = v.value_or(std::string());
@@ -112,7 +125,7 @@ void Fetch() {
           const auto plain = [](const std::string& s) {
             return std::all_of(s.begin(), s.end(), [](char c) { return std::isalnum(uint8_t(c)) || c == '_' || c == '-'; });
           };
-          if (!e.mod.id.empty() && !e.mod.zip.empty() && plain(e.mod.id) &&
+          if (!e.mod.id.empty() && (!e.mod.zip.empty() || !e.mod.partes.empty()) && plain(e.mod.id) &&
               e.mod.zip.find_first_of("?#\\") == std::string::npos && e.mod.zip.find("..") == std::string::npos) {
             list.push_back(std::move(e));
           }
@@ -146,6 +159,48 @@ std::string Stamp() {
 void SetStatus(const std::string& s) {
   std::lock_guard<std::mutex> lock(g_mu);
   g_status = s;
+}
+
+bool StartsWithPK(const fs::path& zip) {
+  std::ifstream in(zip, std::ios::binary);
+  char pk[2] = {};
+  return in.read(pk, 2) && pk[0] == 'P' && pk[1] == 'K';
+}
+
+// Zip pequeno del repositorio (Contents API).
+long long DownloadWhole(const NovaMod& mod, const fs::path& zip) {
+  const std::string data = Get(mod.zip);
+  if (data.empty()) return -1;
+  std::ofstream out(zip, std::ios::binary | std::ios::trunc);
+  out.write(data.data(), std::streamsize(data.size()));
+  out.close();
+  return out.fail() ? -1 : (long long)data.size();
+}
+
+// Zip grande partido en assets de una release (GitHub: <2 GiB por asset, la Contents API no
+// sirve mas de ~100 MB): se bajan en orden a disco, uno detras de otro, con el % en el estado.
+long long DownloadParts(const NovaMod& mod, const fs::path& zip) {
+  const std::string token = Token();
+  if (token.empty()) return -1;
+  const std::string h = "Authorization: Bearer " + token +
+                        "\r\nAccept: application/octet-stream\r\nX-GitHub-Api-Version: 2022-11-28\r\n";
+  const std::wstring wh(h.begin(), h.end());
+  long long done = 0;
+  int last_pct = -1;
+  for (size_t i = 0; i < mod.partes.size(); ++i) {
+    const long long base = done;
+    const long long n = HttpDownload(kAssetUrl + std::to_string(mod.partes[i]), wh, zip, i > 0, [&](long long b) {
+      const int pct = mod.size > 0 ? int((base + b) * 100 / mod.size) : -1;
+      if (pct == last_pct) return;
+      last_pct = pct;
+      SetStatus(std::string(i18n::T("Descargando ", "Downloading ")) + mod.name + "... " +
+                (pct >= 0 ? std::to_string(pct) + "%" : std::to_string((base + b) >> 20) + " MB"));
+    });
+    if (n < 0) return -1;
+    done += n;
+  }
+  SetStatus(std::string(i18n::T("Instalando ", "Installing ")) + mod.name + "...");
+  return done;
 }
 
 }  // namespace
@@ -199,20 +254,23 @@ void InstallNovaMod(const NovaMod& mod) {
     g_status = std::string(i18n::T("Descargando ", "Downloading ")) + mod.name + "...";
   }
   std::thread([mod] {
-    const std::string data = Get(mod.zip);
     std::error_code ec;
     std::string error;
+    const fs::path tmp_dir = ExeDir() / "novas_tmp";
+    fs::create_directories(tmp_dir, ec);
+    const fs::path zip = tmp_dir / (mod.id + ".zip");
+    long long got = -1;
+    try {
+      got = mod.partes.empty() ? DownloadWhole(mod, zip) : DownloadParts(mod, zip);
+    } catch (const std::exception& ex) {   // un bad_alloc en este hilo cerraba el launcher entero
+      REXLOG_WARN("dbz3: Nova's Mods: descarga de {} cortada ({})", mod.id, ex.what());
+      got = -1;
+    }
     // un zip empieza por "PK": una respuesta de error de GitHub no se instala
-    if (data.size() < 4 || data.compare(0, 2, "PK") != 0 || (mod.size > 0 && (long long)data.size() != mod.size)) {
-      error = i18n::T("no se pudo descargar (revisa tu conexion)", "download failed (check your connection)");
+    if (got < 4 || !StartsWithPK(zip) || (mod.size > 0 && got != mod.size)) {
+      error = i18n::T("no se pudo descargar (revisa tu conexion y el espacio libre)",
+                      "download failed (check your connection and free disk space)");
     } else {
-      const fs::path tmp_dir = ExeDir() / "novas_tmp";
-      fs::create_directories(tmp_dir, ec);
-      const fs::path zip = tmp_dir / (mod.id + ".zip");
-      {
-        std::ofstream out(zip, std::ios::binary);
-        out.write(data.data(), std::streamsize(data.size()));
-      }
       // la copia instalada pasa a mods_respaldo (nunca se borra) y se respeta si estaba desactivada
       bool was_disabled = false;
       std::vector<std::pair<fs::path, fs::path>> moved;   // (copia apartada, sitio original)
@@ -237,9 +295,9 @@ void InstallNovaMod(const NovaMod& mod) {
           if (ec) REXLOG_WARN("dbz3: Nova's Mods: no se pudo devolver {} (sigue en mods_respaldo)", rex::path_to_utf8(old));
         }
       }
-      fs::remove(zip, ec);
       if (error.empty() && was_disabled) SetModEnabled(name, false);
     }
+    fs::remove(zip, ec);   // el zip descargado es temporal (lo instalado queda en mods/)
     REXLOG_INFO("dbz3: Nova's Mods: {} {} -> {}", mod.id, mod.version, error.empty() ? "instalado" : error);
     std::lock_guard<std::mutex> lock(g_mu);
     g_busy.erase(mod.id);

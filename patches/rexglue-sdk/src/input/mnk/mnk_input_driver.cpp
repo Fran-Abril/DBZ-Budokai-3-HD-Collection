@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <vector>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -150,19 +151,22 @@ std::atomic<bool> mouse_look_active{true};
 // the focused window, so automated tests write key names (ParseVirtualKey
 // names, one per line) to "dbz3_input.req" in the working directory. Each key
 // is held for 150 ms with a 150 ms gap, in order; the file is consumed.
-// "Name 2000" holds it for 2000 ms instead (charging ki, guarding).
+// "Name 2000" holds it for 2000 ms instead (charging ki, guarding); "A+B+C"
+// presses several keys together (P+K+G, direction + button).
 void PumpInjectedKeys(bool (&key_down)[256]) {
   using clock = std::chrono::steady_clock;
-  static std::deque<std::pair<uint16_t, int>> queue;
-  static uint16_t held = 0;
+  static std::deque<std::pair<std::vector<uint16_t>, int>> queue;
+  static std::vector<uint16_t> held;
   static clock::time_point until, next_poll;
   const clock::time_point now = clock::now();
   if (now < until) {
     return;
   }
-  if (held) {
-    key_down[held] = false;
-    held = 0;
+  if (!held.empty()) {
+    for (uint16_t k : held) {
+      key_down[k] = false;
+    }
+    held.clear();
     until = now + std::chrono::milliseconds(150);
     return;
   }
@@ -193,9 +197,17 @@ void PumpInjectedKeys(bool (&key_down)[256]) {
           hold_ms = std::clamp(std::atoi(std::string(name.substr(space + 1)).c_str()), 50, 20000);
           name = name.substr(0, space);
         }
-        rex::ui::VirtualKey vk = rex::ui::ParseVirtualKey(name);
-        if (vk != rex::ui::VirtualKey::kNone && static_cast<uint16_t>(vk) < 256) {
-          queue.emplace_back(static_cast<uint16_t>(vk), hold_ms);
+        std::vector<uint16_t> keys;
+        while (!name.empty()) {
+          size_t plus = name.find('+');
+          rex::ui::VirtualKey vk = rex::ui::ParseVirtualKey(name.substr(0, plus));
+          if (vk != rex::ui::VirtualKey::kNone && static_cast<uint16_t>(vk) < 256) {
+            keys.push_back(static_cast<uint16_t>(vk));
+          }
+          name = plus == std::string_view::npos ? std::string_view() : name.substr(plus + 1);
+        }
+        if (!keys.empty()) {
+          queue.emplace_back(std::move(keys), hold_ms);
         }
       }
       file.close();
@@ -204,10 +216,12 @@ void PumpInjectedKeys(bool (&key_down)[256]) {
     }
   }
   if (!queue.empty()) {
-    held = queue.front().first;
+    held = std::move(queue.front().first);
     until = now + std::chrono::milliseconds(queue.front().second);
     queue.pop_front();
-    key_down[held] = true;
+    for (uint16_t k : held) {
+      key_down[k] = true;
+    }
   }
 }
 

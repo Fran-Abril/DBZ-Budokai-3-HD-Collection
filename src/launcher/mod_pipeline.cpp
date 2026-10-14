@@ -1,6 +1,8 @@
 // dbz3 - Model swap pipeline integration (project-side).
 
 #include "mod_pipeline.h"
+#include "settings.h"
+#include "../region.h"
 
 #include <rex/filesystem.h>
 #include <rex/logging.h>
@@ -9,6 +11,8 @@
 #include <windows.h>
 #endif
 
+#include <cerrno>
+#include <exception>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -65,22 +69,32 @@ std::filesystem::path CatalogFile() {
 }
 
 std::filesystem::path ModsOutDir() {
-  // The mods the runtime reads live next to the game data. In the release the
-  // exe and mods/ share the same folder, but walk up from the executable
-  // looking for a "mods" directory just in case.
-  std::filesystem::path probe = rex::filesystem::GetExecutableFolder();
-  std::error_code ec;
-  for (int depth = 0; depth < 4; ++depth) {
-    const std::filesystem::path candidate = probe / "mods";
-    if (std::filesystem::is_directory(candidate, ec)) {
-      return candidate;
-    }
-    probe = probe.parent_path();
-  }
   return rex::filesystem::GetExecutableFolder() / "mods";
 }
 
-std::string Quote(const std::string& s) { return "\"" + s + "\""; }
+         std::string Quote(const std::string& s) {
+         #if REX_PLATFORM_WIN32
+           std::string out = "\"";
+           size_t slashes = 0;
+           for (char c : s) {
+             if (c == '\\') { ++slashes; continue; }
+             if (c == '"') {
+               out.append(slashes * 2 + 1, '\\');
+             } else {
+               out.append(slashes, '\\');
+             }
+             slashes = 0;
+             out += c;
+           }
+           out.append(slashes * 2, '\\');
+           out += '"';
+           return out;
+         #else
+           std::string out = "'";
+           for (char c : s) out += c == '\'' ? "'\\''" : std::string(1, c);
+           return out + "'";
+         #endif
+         }
 
 // Candidate command prefixes for a Python 3 interpreter. The order matters:
 // on Windows a bare "python" can resolve to the Microsoft Store *alias stub*
@@ -216,8 +230,9 @@ bool ProbeCommandLine(const std::string& cmd) {
     return false;
   }
   int status = 0;
-  waitpid(pid, &status, 0);
-  return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  pid_t waited;
+  do { waited = waitpid(pid, &status, 0); } while (waited < 0 && errno == EINTR);
+  return waited == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 #endif
 
@@ -337,6 +352,9 @@ void ModPipeline::RunAsync(const std::filesystem::path& script,
   if (running_.exchange(true)) {
     return;
   }
+  exit_code_.store(-1);
+  state_.store(JobState::kRunning);   // antes del hilo: nadie ve el resultado del trabajo anterior
+  try {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     output_.clear();
@@ -354,22 +372,32 @@ void ModPipeline::RunAsync(const std::filesystem::path& script,
     // Escapar cada argumento: si contiene espacios, envolverlo en comillas
     // para que cmd.exe lo trate como un solo token (las rutas del proyecto
     // tienen espacios, p.ej. "...DBZ Budokai 3 HD Collection\...").
-    if (a.find(' ') != std::string::npos || a.find('\t') != std::string::npos) {
-      tail += " " + Quote(a);
-    } else {
-      tail += " " + a;
-    }
+    tail += " " + Quote(a);
   }
 
   REXLOG_INFO("dbz3: mod pipeline: {}", tail);
   worker_ = std::thread([this, tail]() {
+    // todos los caminos de salida (return temprano, excepcion) pasan por aqui: sin exit 0
+    // explicito el trabajo queda kFailed
+    struct Completion {
+      std::atomic<int>& generation;
+      std::atomic<bool>& running;
+      std::atomic<int>& exit_code;
+      std::atomic<JobState>& state;
+      ~Completion() {
+        state.store(exit_code.load() == 0 ? JobState::kOk : JobState::kFailed);
+        generation.fetch_add(1);
+        running.store(false);
+      }
+    } completion{generation_, running_, exit_code_, state_};
+    try {
     const std::string python = ResolvePython();
     if (python.empty()) {
       AppendOutput(PythonMissingMessage());
-      running_.store(false);
       return;
     }
-    const std::string cmd = python + " " + tail;
+    // -X utf8: la salida de las herramientas llega en UTF-8 (tildes del informe sin romper)
+    const std::string cmd = python + " -X utf8 " + tail;
 #if REX_PLATFORM_WIN32
     // Usamos CreateProcess en vez de _popen: _popen pasa el comando a
     // "cmd.exe /c", que falla al parsear comillas cuando el comando empieza
@@ -382,7 +410,6 @@ void ModPipeline::RunAsync(const std::filesystem::path& script,
     sa.bInheritHandle = TRUE;
     if (!CreatePipe(&hOutRead, &hOutWrite, &sa, 0)) {
       AppendOutput("ERROR: no se pudo crear el pipe para python.\n");
-      running_.store(false);
       return;
     }
     SetHandleInformation(hOutRead, HANDLE_FLAG_INHERIT, 0);
@@ -409,7 +436,6 @@ void ModPipeline::RunAsync(const std::filesystem::path& script,
       AppendOutput("ERROR: CreateProcess fallo (WinError " +
                    std::to_string(GetLastError()) + ").\n");
       CloseHandle(hOutRead);
-      running_.store(false);
       return;
     }
 
@@ -423,9 +449,11 @@ void ModPipeline::RunAsync(const std::filesystem::path& script,
     }
     CloseHandle(hOutRead);
 
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD rc = 0;
-    GetExitCodeProcess(pi.hProcess, &rc);
+    const DWORD wait_result = WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD rc = DWORD(-1);
+    if (wait_result != WAIT_OBJECT_0 || !GetExitCodeProcess(pi.hProcess, &rc) ||
+        rc == STILL_ACTIVE) rc = DWORD(-1);
+    exit_code_.store(rc == DWORD(-1) ? -1 : static_cast<int>(rc));
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     if (rc != 0) {
@@ -439,13 +467,11 @@ void ModPipeline::RunAsync(const std::filesystem::path& script,
       AppendOutput(DependencyHintMessage());
     }
     REXLOG_INFO("dbz3: mod pipeline: done (exit {})", rc);
-    generation_.fetch_add(1);
-    running_.store(false);
+
 #else  // !REX_PLATFORM_WIN32
     int pipe_fds[2] = {-1, -1};
     if (pipe(pipe_fds) != 0) {
       AppendOutput("ERROR: no se pudo crear el pipe para python.\n");
-      running_.store(false);
       return;
     }
     posix_spawn_file_actions_t actions;
@@ -468,32 +494,48 @@ void ModPipeline::RunAsync(const std::filesystem::path& script,
       close(pipe_fds[0]);
       AppendOutput("ERROR: no se pudo ejecutar python (errno " +
                    std::to_string(spawn_rc) + ").\n");
-      running_.store(false);
       return;
     }
 
     char buf[4096];
     ssize_t n = 0;
-    while ((n = read(pipe_fds[0], buf, sizeof(buf))) > 0) {
+    bool output_ok = true;
+    for (;;) {
+      n = read(pipe_fds[0], buf, sizeof(buf));
+      if (n < 0 && errno == EINTR) continue;
+      if (n <= 0) { output_ok = n == 0; break; }
       AppendOutput(std::string(buf, static_cast<size_t>(n)));
     }
     close(pipe_fds[0]);
     int status = 0;
-    waitpid(pid, &status, 0);
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    pid_t waited;
+    do { waited = waitpid(pid, &status, 0); } while (waited < 0 && errno == EINTR);
+    const bool exited = waited == pid && WIFEXITED(status);
+    exit_code_.store(exited && output_ok ? WEXITSTATUS(status) : -1);
+    if (!exited || !output_ok || WEXITSTATUS(status) != 0) {
       AppendOutput("\n[exit code " +
-                   std::to_string(WIFEXITED(status) ? WEXITSTATUS(status) : -1) +
+                   std::to_string(ExitCode()) +
                    "]\n");
     }
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 127) {
+    if (exited && WEXITSTATUS(status) == 127) {
       AppendOutput(PythonMissingMessage());
     } else if (Output().find("No module named") != std::string::npos) {
       AppendOutput(DependencyHintMessage());
     }
+
+#endif  // REX_PLATFORM_WIN32
+    } catch (const std::exception&) {
+      exit_code_.store(-1);
+      try { AppendOutput("ERROR: excepcion del trabajo; revisa el registro.\n"); } catch (...) {}
+    } catch (...) { exit_code_.store(-1); }
+  });
+  } catch (...) {
+    exit_code_.store(-1);
+    state_.store(JobState::kFailed);
     generation_.fetch_add(1);
     running_.store(false);
-#endif  // REX_PLATFORM_WIN32
-  });
+    try { AppendOutput("ERROR: no se pudo iniciar el trabajo.\n"); } catch (...) {}
+  }
 }
 
 void ModPipeline::SwapB3ToB3(const B3Char& src, const B3Char& dst) {
@@ -655,8 +697,18 @@ void ModPipeline::PreviewCharacter(const std::string& mod, const std::vector<std
 }
 
 std::string ModPipeline::UsDir() const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return afs_path_.empty() ? std::string() : std::filesystem::path(afs_path_).parent_path().string();
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!afs_path_.empty()) return rex::path_to_utf8(std::filesystem::u8path(afs_path_).parent_path());
+  }
+  // automatico: la carpeta de datos que monta el juego (la elegida en el launcher y su region).
+  // Antes no se pasaba --us y roster_build buscaba junto al exe: con los datos del juego en otra
+  // carpeta el montaje de personajes fallaba siempre.
+  const std::filesystem::path root = dbz3::EffectiveGameRoot();
+  if (root.empty()) return {};
+  const std::filesystem::path dir = root / (dbz3::settings::Region() == "eu" ? "eu" : "us");
+  std::error_code ec;
+  return std::filesystem::exists(dir / "data_cmn.afs", ec) ? rex::path_to_utf8(dir) : std::string();
 }
 
 void ModPipeline::EditCapsules(const std::string& mod, const std::vector<std::string>& extra) {
@@ -712,6 +764,16 @@ bool ModPipeline::RosterToolAvailable() {
   return std::filesystem::exists(RosterScript(), ec);
 }
 
+bool ModPipeline::RosterArtifactsOk() {
+  if (!HasCharacterSources()) return true;   // roster_build retira _roster y sale 0
+  std::error_code ec;
+  const auto r = ModsOutDir() / "_roster";
+  for (const char* f : {"roster.toml", "manifest.txt", "build.hash"}) {   // = validate_roster
+    if (!std::filesystem::is_regular_file(r / f, ec)) return false;
+  }
+  return std::filesystem::file_size(r / "build.hash", ec) > 0 && !ec;
+}
+
 bool ModPipeline::ToolsInstalled() {
   std::error_code ec;
   return std::filesystem::exists(ImporterScript(), ec) && std::filesystem::exists(RosterScript(), ec);
@@ -745,7 +807,9 @@ bool ModPipeline::HasCharacterSources() {
   if (!std::filesystem::is_directory(dir, ec)) return false;
   for (auto [it_1, iec_1] = std::pair{std::filesystem::directory_iterator(dir, ec), std::error_code{}}; !iec_1 && it_1 != std::filesystem::directory_iterator(); it_1.increment(iec_1)) {
     const auto& e = *it_1;
-    if (e.is_directory(ec) && std::filesystem::exists(e.path() / "personaje.toml", ec) &&
+    if (e.is_directory(ec) &&
+        (std::filesystem::exists(e.path() / "personaje.toml", ec) ||
+         std::filesystem::exists(e.path() / "traje.toml", ec)) &&
         !std::filesystem::exists(e.path() / ".disabled", ec)) {
       return true;
     }

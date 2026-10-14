@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -449,9 +450,9 @@ class D3D12TextureCache final : public TextureCache {
   // carpeta en `mods/` con ficheros `<hash>_<W>x<H>_<FOURCC>.dds` (el hash es
   // el mismo del volcado). Si la textura guest casa por hash, se sube la imagen
   // del pack (decodificada a RGBA8) en lugar de los datos del juego. El factor
-  // (x1..x4) se deduce de W_pack / W_guest. Cvar: `dbz3_texture_packs`.
+  // (entero, x1, x4, x8...) se deduce de W_pack / W_guest. Cvar: `dbz3_texture_packs`.
   //
-  // Factor del pack para una textura (0 = sin pack, 1..4 = reemplazo). Cacheado
+  // Factor del pack para una textura (0 = sin pack, >=1 = reemplazo). Cacheado
   // por key; la primera consulta linealiza la textura guest para calcular el
   // hash (mismo coste que el volcado, una vez por textura unica).
   uint32_t GetTexturePackFactor(const TextureKey& key) const;
@@ -654,13 +655,27 @@ class D3D12TextureCache final : public TextureCache {
   // DBZ3 HD Collection: cache del factor/entrada del pack por textura. El
   // resultado (incluido "no hay pack") se memoriza para que la respuesta sea
   // estable entre la creacion del recurso y las recargas.
-  mutable std::unordered_map<TextureKey, uint8_t, TextureKey::Hasher> pack_factor_cache_;
+  mutable std::unordered_map<TextureKey, uint32_t, TextureKey::Hasher> pack_factor_cache_;
+  bool packs_on_seen_ = true;  // ultimo estado del interruptor F1 del pack HD
+  bool pack_index_seen_ = false;  // el indice de packs (en segundo plano) ya estaba listo
   mutable std::unordered_map<TextureKey, const Dbz3TexturePackEntry*, TextureKey::Hasher>
       pack_entry_cache_;
   // Buffers de subida del pack en vuelo (se liberan al completarse su
   // submission).
   mutable std::vector<std::pair<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>>>
       pending_pack_uploads_;
+  // Buffers de subida del pack ya libres, para reutilizar (hasta kPackUploadPoolBytes).
+  std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> pack_upload_pool_;
+  uint64_t pack_upload_pool_bytes_ = 0;
+  // Como Burst Limit: una textura del pack se crea a su tamano HD solo con la imagen ya
+  // en RAM; hasta entonces es la original normal (key -> hash en pack_waiting_) y se
+  // recrea al llegar. Las HD nuevas se reparten por submission (pack_grant_bytes_);
+  // pack_retired_keys_ = recreadas con el hueco ya reservado.
+  mutable std::unordered_map<TextureKey, uint64_t, TextureKey::Hasher> pack_waiting_;
+  mutable std::unordered_set<TextureKey, TextureKey::Hasher> pack_retired_keys_;
+  mutable uint64_t pack_grant_bytes_ = 0;
+  // La memoria guest de una textura HD paso a ser otra textura sin pack: se recrea.
+  std::vector<TextureKey> pack_retire_now_;
 
   std::vector<SRVDescriptorCachePage> srv_descriptor_cache_;
   uint32_t srv_descriptor_cache_allocated_;

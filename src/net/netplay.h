@@ -45,6 +45,11 @@ class Session {
   // ---- hilo del launcher
   bool Host(uint16_t port, uint8_t delay, std::string* error);
   bool Join(const std::string& ip, uint16_t port, std::string* error);
+  // Must be called while idle by the isolated build's admission adapter.
+  // digest: 40 lowercase hex, freshly measured executable/SDK/guest/content/rules.
+  // safe_selection: adapter proves F2 disabled, Normal capsules and no private
+  // form/costume reinjection. False or missing proof rejects Host/Join.
+  bool ConfigureIdentity(const std::string& digest, bool safe_selection, bool safe_tagteam = false);
   void Poll();             // avanza el emparejamiento; llamar en cada fotograma del launcher
   void RequestStart();     // anfitrion: empezar (el invitado arranca al recibirlo)
   // Hilo del guest, una vez por tick: true una vez al empezar (los dos de acuerdo). Aplica la
@@ -95,6 +100,20 @@ class Session {
 
  private:
   Session() = default;
+  // All nonblocking socket operations and the UI->guest handoff share this lock.
+  // RunTick NEVER holds it while sleeping/waiting for the peer.
+  mutable std::recursive_mutex io_mu_;
+  bool guest_owner_ = false;
+  uint64_t generation_ = 0;
+  uint32_t local_nonce_ = 0, peer_nonce_ = 0;
+  std::string identity_;
+  bool identity_ready_ = false;
+  bool identity_admission_ = false; // one fresh measurement per Host/Join
+  bool safe_tagteam_ = false; // separate proof for operation ids, finite abort, resource lifetime
+  std::vector<int> local_team_;
+  bool team_ready_ = false;
+  void ResetTransport();
+  bool ValidPacket(const std::vector<uint8_t>& pkt) const;
   bool OpenSocket(uint16_t port, std::string* error);
   void Send(const std::vector<uint8_t>& pkt);
   bool Recv(std::vector<uint8_t>& pkt);
@@ -106,7 +125,7 @@ class Session {
 
   std::atomic<Link> link_{Link::kIdle};
   std::atomic<Role> role_{Role::kNone};   // lo leen el hilo de la interfaz y el del juego
-  uint8_t delay_ = 3;
+  std::atomic<uint8_t> delay_{3};
   intptr_t sock_ = -1;
   uint8_t peer_addr_[32] = {};   // sockaddr_in del rival
   int peer_len_ = 0;
@@ -146,8 +165,8 @@ class Session {
   std::array<uint32_t, kRing> my_rng_{}, their_rng_{};
   std::array<uint32_t, kRing> my_rng_tick_{}, their_rng_tick_{};
   Pad applied_[2]{};
-  uint32_t tick_ = 0;
-  bool armed_ = false;
+  std::atomic<uint32_t> tick_{0};
+  std::atomic<bool> armed_{false};
   std::atomic<bool> desync_{false};
 };
 

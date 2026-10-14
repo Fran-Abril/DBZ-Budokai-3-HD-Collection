@@ -34,6 +34,10 @@
 #include "guest_region.h"
 #include "roster_ext.h"
 #include "tagteam.h"
+#include "tagteam_round.h"
+#include "form_selection_state.h"
+#include "ingame/tagteam_panel.h"
+namespace dbz3::campaigns { int PlayerStartForm(); int RivalSuit(); }
 #include "net/netplay.h"
 
 DBZ3_EXTERN_EU(dbz3eu_sub_820FB6D0);
@@ -51,6 +55,8 @@ DBZ3_EXTERN_EU(dbz3eu_sub_82112360);
 DBZ3_EXTERN_EU(dbz3eu_sub_82115430);
 
 namespace dbz3::tag {
+// TAG_F3_RECIPE_V1
+bool ReadMemberCapsules(uint8_t*, int, int, std::array<uint16_t, 8>&);
 namespace {
 
 constexpr uint32_t kHp = 6080, kHpMax = 6084, kId = 7420, kRec372 = 7416, kSel = 7412;
@@ -80,6 +86,14 @@ enum class Phase { kIdle, kLoading };
 
 struct Team {
   std::vector<int> ids;            // personajes del equipo
+  bool round_owned = false, round_blocked = false;
+  uint32_t generation = 0, round_form = 0;
+  int round_suit = 0;
+  std::string round_identity;
+  std::array<uint16_t, 8> round_caps{};
+  std::array<bool, 5> visited{};
+  round::RestoreTicket restore_ticket;
+  round::PositionCache position;
   int active = 0;                  // miembro en combate
   std::array<float, 5> hp{};       // vida guardada de cada miembro
   std::array<bool, 5> down{};      // caido
@@ -394,17 +408,109 @@ void StepSlide(uint8_t* base, uint32_t x, Team& t, uint32_t now) {
   if (f >= 1.0f && t.slide == 2) t.slide = 0;   // la salida se queda arriba hasta el cambio
 }
 
+// Insertar tras Team: el propietario guest prepara y fija una sola carga.
+// US/offline opt-in. EU/online conservan la ruta anterior, sin preferencias F2.
+bool RoundEnabled() {
+  const char* flag = std::getenv("DBZ3_TAG_F3");
+  return flag && std::strcmp(flag, "1") == 0 && !dbz3::g_guest_eu &&
+      dbz3::net::Session::Get().link() == dbz3::net::Link::kIdle &&
+      dbz3::campaigns::PlayerStartForm() < 0 && dbz3::campaigns::RivalSuit() < 0 &&
+      dbz3::ingame::TagTeamMode() && dbz3::ingame::FormSelectorEnabled();
+}
+bool PlanMember(uint8_t* base, uint32_t x, Team& t, int k) {
+  const int side = SideOf(base, x), id = t.ids[size_t(k)];
+  // El relevo solo sustituye la tecnica A: rechazar una variacion B no resuelta.
+  const int old_id = t.ids[size_t(t.active)];
+  if (!dbz3::roster::FormSelectionRange(0x82333404u + 4u * uint32_t(id), 4, false) ||
+      !dbz3::roster::FormSelectionRange(0x82333404u + 4u * uint32_t(old_id), 4, false)) return false;
+  if (REX_LOAD_U32(0x82333404u + 4u * uint32_t(id)) !=
+      REX_LOAD_U32(0x82333404u + 4u * uint32_t(old_id))) {
+    REXLOG_WARN("dbz3 tag F3: tecnica B distinta, relevo bloqueado id {}", id);
+    return false;
+  }
+  const int suit = dbz3::forms::MemberSuit(side, id, 0); // nunca el traje del saliente
+  auto snapshot = dbz3::roster::ReadForms(id, suit);
+  if (!ReadMemberCapsules(base, side, id, t.round_caps)) return false;
+  snapshot.capsules.assign(t.round_caps.begin() + 1, t.round_caps.begin() + 1 + t.round_caps[0]);
+  const int want = round::OwnRequest(t.visited[size_t(k)], t.form[size_t(k)],
+                                   dbz3::forms::MemberRequest(side, id));
+  const auto result = dbz3::forms::Resolve(snapshot, want);
+  dbz3::forms::Notice(side, snapshot, result); // UI F2 nativa ya existente
+  if (!result.valid) return false;
+  t.round_suit = suit;
+  t.round_identity = snapshot.identity;
+  t.round_form = uint32_t(result.applied); // NO result.model_index
+  if (result.reason != dbz3::forms::Reason::kOk)
+    REXLOG_WARN("dbz3 tag F3: id {} pedida {} base aplicada; motivo {} capsula {}", id, want,
+                int(result.reason), result.capsule);
+  return true;
+}
+
+// Validar los rangos ANTES de Loaded, incluyendo datos de nodos +192.
+bool RoundNodesReady(uint8_t* base, uint32_t x, const Team& t) {
+  if (!dbz3::roster::FormSelectionRange(x, 8240, true)) return false;
+  auto node = [&](uint32_t n) {
+    if (!n || !dbz3::roster::FormSelectionRange(n, 196, false)) return false;
+    const uint32_t data = REX_LOAD_U32(n + 192);
+    return !REX_LOAD_U8(n + 1) && data && data != 0xFFFFFFFFu &&
+           dbz3::roster::FormSelectionRange(data, 4, false);
+  };
+  auto model = [&](uint32_t m) {
+    return m && dbz3::roster::FormSelectionRange(m, 40, false) && !REX_LOAD_U32(m + 36);
+  };
+  if (!node(t.new_cam)) return false;
+  for (uint32_t n : {t.new_lang, t.new_tech, t.new_face, t.new_aura}) if (n && !node(n)) return false;
+  for (uint32_t slot : {kLoad, kSpare}) {
+    if (slot == kSpare && !t.spare) continue;
+    if (!model(REX_LOAD_U32(x + kModel0 + 4*slot))) return false;
+    const uint32_t a = REX_LOAD_U32(x + kAnm0 + 28*slot + 20);
+    if (a && !node(a)) return false;
+  }
+  if (t.new_portrait) {
+    if (!dbz3::roster::FormSelectionRange(t.new_portrait, 16, false)) return false;
+    for (uint32_t offset : {8u, 12u}) {
+      const uint32_t part = REX_LOAD_U32(t.new_portrait + offset);
+      if (!part) continue;
+      if (!dbz3::roster::FormSelectionRange(part, 20, false)) return false;
+      const uint32_t n = REX_LOAD_U32(part + 16);
+      if (n && !node(n)) return false;
+    }
+  }
+  return true;
+}
+
 void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
-  if (k < 0 || k == t.active || t.phase != Phase::kIdle) return;
+  if (k < 0 || k >= int(t.ids.size()) || k == t.active || t.phase != Phase::kIdle ||
+      t.down[size_t(k)]) return;
+  if (t.round_owned && (t.round_blocked || t.restore || !Fighting(base))) return;
   const uint32_t id = uint32_t(t.ids[size_t(k)]);
   const uint32_t sel = REX_LOAD_U32(x + kSel);
   if (!sel) return;
+  if (t.round_owned) {
+    if (!dbz3::roster::FormSelectionRange(x, 8240, true) ||
+        !dbz3::roster::FormSelectionRange(sel, 80, true)) return;
+    auto occupied = [&](uint32_t slot) {
+      return REX_LOAD_U32(x + kModel0 + 4*slot) || REX_LOAD_U32(x + kAnm0 + 28*slot) ||
+          REX_LOAD_U32(x + kAnm0 + 28*slot + 20) || REX_LOAD_U32(x + kAnm0 + 28*slot + 24);
+    };
+    if (!round::ScratchFree(REX_LOAD_U32(x + kForm), occupied(kSpare), occupied(kLoad)) ||
+        !PlanMember(base, x, t, k)) {
+      t.refused_at = g_frame.load();
+      REXLOG_WARN("dbz3 tag F3: carga rechazada antes de tocar recursos id {}", id);
+      return;
+    }
+  }
   if (!t.rec) t.rec = dbz3::roster::GuestAlloc(372);
   if (!t.rec) return;
+  if (t.round_owned && !dbz3::roster::FormSelectionRange(t.rec, 372, true)) return;
   t.hp[size_t(t.active)] = t.down[size_t(t.active)] ? 0.0f : LoadF(base, x + kHp);
   // (si aun no se habia transformado de vuelta, sale con la forma que tenia pendiente)
   t.form[size_t(t.active)] = t.down[size_t(t.active)] ? 0
                              : uint8_t(std::min<uint32_t>(t.restore ? t.restore : REX_LOAD_U32(x + kForm), 7));
+  if (t.round_owned) {
+    t.form[size_t(t.active)] = t.down[size_t(t.active)] ? 0 : uint8_t(REX_LOAD_U32(x + kForm));
+    t.visited[size_t(t.active)] = true;
+  }
   t.restore = 0;
   if (t.spare) {   // la forma pedida en un intento anterior (carga que no llego) se suelta
     TAG_CALL(sub_82100D60, dbz3eu_sub_82100E60, x, kSpare);
@@ -420,10 +526,10 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   // vuelve con la forma con la que salio: su modelo y animaciones de esa forma f en el hueco kSpare
   // (sub_82109148 pide sel+22 y luego sel+20; hueco libre: el que esta en pantalla no lo usa). En
   // FinishSwap pasan al hueco f y se transforma con la rutina del juego (sub_82115330), como con P+K+G
-  const uint32_t f = t.form[size_t(k)];
+  const uint32_t f = t.round_owned ? t.round_form : t.form[size_t(k)];
   const bool spare_free = !REX_LOAD_U32(x + kModel0 + 4 * kSpare) && !REX_LOAD_U32(x + kAnm0 + 28 * kSpare) &&
                           !REX_LOAD_U32(x + kAnm0 + 28 * kSpare + 20) && !REX_LOAD_U32(x + kAnm0 + 28 * kSpare + 24);
-  t.spare = (f > 0 && f <= kSpare && spare_free) ? f : 0;
+  t.spare = (f > 0 && f <= (t.round_owned ? 7u : kSpare) && spare_free) ? f : 0;
   if (t.spare) {
     std::memcpy(base + t.rec + 4 * kSpare, base + src + 4 * f, 4);
     std::memcpy(base + t.rec + 212 + 20 * kSpare, base + src + 212 + 20 * f, 20);
@@ -431,8 +537,11 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   }
   const uint32_t keep[] = {REX_LOAD_U32(x + kRec372), REX_LOAD_U32(x + kId), REX_LOAD_U32(x + kCam),
                            REX_LOAD_U32(x + kLang), REX_LOAD_U32(x + 7928)};
+  const uint8_t suit6 = REX_LOAD_U8(x + 7436 + kSpare), suit7 = REX_LOAD_U8(x + 7436 + kLoad);
+  if (t.round_owned) REX_STORE_U8(x + 7436 + kSpare, uint8_t(t.round_suit));
   const uint16_t sel20 = REX_LOAD_U16(sel + 20), sel22 = REX_LOAD_U16(sel + 22);
   REX_STORE_U8(x + 7436 + kLoad, REX_LOAD_U8(x + 7436));      // mismo traje
+  if (t.round_owned) REX_STORE_U8(x + 7436 + kLoad, uint8_t(t.round_suit));
   REX_STORE_U32(x + kRec372, t.rec);
   REX_STORE_U32(x + kId, id);
   REX_STORE_U32(x + kCam, 0);
@@ -454,7 +563,7 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
     const uint32_t hud = REX_LOAD_U32(kHudBase);
     auto& faces = g_face[size_t(side)];
     if (hud && !faces.count(int(keep[1]))) faces[int(keep[1])] = REX_LOAD_U32(hud + kHudFaces + 4 * uint32_t(side));
-    const uint32_t row = FaceRow(base, id, REX_LOAD_U16(sel + 18));
+    const uint32_t row = FaceRow(base, id, t.round_owned ? uint32_t(t.round_suit) : REX_LOAD_U16(sel + 18));
     t.new_face = 0;
     if (row && !faces.count(int(id))) {
       const uint32_t h = Call(ctx, base, sub_82083968, REX_LOAD_U32(row + 8), 0, 1);
@@ -477,6 +586,10 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   REX_STORE_U32(x + 7928, keep[4]);
   REX_STORE_U16(sel + 20, sel20);
   REX_STORE_U16(sel + 22, sel22);
+  if (t.round_owned) {
+    REX_STORE_U8(x + 7436 + kSpare, suit6);
+    REX_STORE_U8(x + 7436 + kLoad, suit7);
+  }
   t.phase = Phase::kLoading;
   t.target = k;
   t.since = g_frame.load();
@@ -531,7 +644,11 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
     REX_STORE_U16(sel + 16, uint16_t(id));
     REX_STORE_U16(sel + 20, 0);
     REX_STORE_U16(sel + 22, 0);
-    PutCapsules(base, sel, SideOf(base, x), int(id));   // sus capsulas (Normal / Custom)
+    if (t.round_owned) {
+      REX_STORE_U16(sel + 18, uint16_t(t.round_suit));
+      for (uint32_t c = 0; c < 8; ++c) REX_STORE_U16(sel + 52 + 2*c, t.round_caps[c]);
+      // sub_82113870 resuelve 7436 por modelo/traje; no sobrescribir sus clamps.
+    } else PutCapsules(base, sel, SideOf(base, x), int(id));
   }
   // lo que sub_82109BA0 prepara por luchador al fijar su ID (capsulas y tecnicas)
   TAG_CALL(sub_82113818, dbz3eu_sub_82113918, x, 0);
@@ -624,6 +741,10 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   if (ko && !spare) TAG_CALL(sub_820FB5D0, dbz3eu_sub_820FB6D0, x + kBody, 0);   // destello (forma 0)
   t.restore = spare;                    // se transforma al aterrizar (Tick)
   t.restore_at = g_frame.load() + SlideTicks(2) + 6;
+  if (t.round_owned) {
+    t.visited[size_t(k)] = true;
+    t.restore_ticket.Begin(t.generation, int(id), int(spare), g_frame.load());
+  }
   t.active = k;
   t.phase = Phase::kIdle;
   t.retries = 0;
@@ -662,12 +783,19 @@ void NetApplied(uint32_t user, uint16_t buttons) {
   if (user < 2) g_net_applied[user] = uint16_t(buttons & 0x0C00);
 }
 
+// sub_82103908 (cambiar la accion del luchador) lee X+6048: sin ese contexto (luchador a medio
+// cargar o recien relevado) el juego se cerraba. Todas las llamadas pasan por aqui.
+static bool ActionCtxOk(uint8_t* base, uint32_t x) {
+  const uint32_t action_ctx = REX_LOAD_U32(x + 6048);
+  return action_ctx != 0 && dbz3::roster::FormSelectionRange(action_ctx, 4, false);
+}
+
 // Cada tick del juego: termina los relevos cuyos ficheros ya estan y copia el marcador.
 void Tick(PPCContext& ctx, uint8_t* base) {
   const uint32_t now = ++g_frame;
   if (const uint32_t fx = g_fall_x.exchange(0)) {
     static const int act = std::getenv("DBZ3_KO_ACTION") ? std::atoi(std::getenv("DBZ3_KO_ACTION")) : 25;
-    if (act >= 0 && !dbz3::g_guest_eu && REX_LOAD_U16(fx + 3244) != uint16_t(act)) {   // accion medida en la US
+    if (act >= 0 && !dbz3::g_guest_eu && REX_LOAD_U16(fx + 3244) != uint16_t(act) && ActionCtxOk(base, fx)) {   // accion medida en la US
       REXLOG_INFO("dbz3 tag: KO de {:08X}: sale despedido (accion {})", fx, act);
       Call(ctx, base, sub_82103908, fx, uint32_t(act));
     }
@@ -748,7 +876,18 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     {
       static std::array<std::array<float, 3>, 2> good{};
       const float px = LoadF(base, x + 64), py = LoadF(base, x + 68), pz = LoadF(base, x + 72);
-      if (std::isfinite(px) && std::isfinite(py) && std::isfinite(pz)) {
+      if (t.round_owned) {
+        if (!t.position.Remember({px, py, pz})) {
+          if (!t.position.valid) {
+            if (!t.round_blocked) REXLOG_WARN("dbz3 tag F3: posicion invalida sin muestra de esta ronda; bloqueo");
+            t.round_blocked = true;
+            continue; // no teletransportar al origen ni al escenario anterior
+          }
+          for (const uint32_t o : {48u, 64u, 80u})
+            for (uint32_t i = 0; i < 3; ++i) StoreF(base, x + o + 4*i, t.position.value[i]);
+          REXLOG_WARN("dbz3 tag F3: posicion restaurada desde esta ronda");
+        }
+      } else if (std::isfinite(px) && std::isfinite(py) && std::isfinite(pz)) {
         good[size_t(p)] = {px, py, pz};
       } else {
         for (const uint32_t o : {48u, 64u, 80u})
@@ -765,10 +904,44 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       if (REX_LOAD_U16(x + 3244) == 25) t.seen25 = true;               // ha empezado la caida
       if (LoadF(base, x + kHp) < 1.0f) StoreF(base, x + kHp, 1.0f);    // caido: vida 1, no termina el combate
     }
+    {
+      const uint32_t form = REX_LOAD_U32(x + kForm);
+      if (form != t.last_form || REX_LOAD_U32(x + kNextForm) != form) t.form_at = now;
+      t.last_form = form;
+    }
     // vuelve con su forma: ya aterrizado, libre y con su estado de combate rehecho (X+6048; justo tras
     // el reinicio es nulo y las rutinas de accion cerraban el juego), la transformacion del juego (lo que
     // hace P+K+G tras cargar el modelo: destino X+2984, sub_82115330), con el modelo en su hueco
-    if (t.restore && t.phase == Phase::kIdle && now >= t.restore_at && !t.slide && Free(base, x) &&
+    if (t.round_owned && t.restore) {
+      const int id = t.ids[size_t(t.active)];
+      auto snapshot = dbz3::roster::ReadForms(id, t.round_suit);
+      snapshot.capsules.assign(t.round_caps.begin() + 1, t.round_caps.begin() + 1 + t.round_caps[0]);
+      const uint32_t model = REX_LOAD_U32(x + kModel0 + 4 * t.restore);
+      const bool model_ready = model && dbz3::roster::FormSelectionRange(model, 40, false) &&
+                               !REX_LOAD_U32(model + 36);
+      const uint32_t context = REX_LOAD_U32(x + 6048);
+      const bool quiet = now - t.form_at >= kFormQuiet && REX_LOAD_U32(x + kForm) == REX_LOAD_U32(x + kNextForm);
+      round::RestoreObservation observation{t.generation, int(REX_LOAD_U32(x + kId)),
+          int(REX_LOAD_U32(x + kForm)), int(REX_LOAD_U32(x + kNextForm)),
+          snapshot.identity == t.round_identity &&
+              dbz3::forms::Availability(snapshot, int(t.restore)) == dbz3::forms::Reason::kOk,
+          model_ready, context && dbz3::roster::FormSelectionRange(context, 28, false),
+          Free(base, x), !t.slide, Fighting(base), quiet};
+      const auto step = t.restore_ticket.Poll(observation, now);
+      if (step == round::RestoreStep::kIssue) {
+        REX_STORE_U32(x + kNextForm, t.restore);
+        TAG_CALL(sub_82115330, dbz3eu_sub_82115430, x, 0);
+        REXLOG_INFO("dbz3 tag F3: restauracion PEDIDA id {} forma {}", id, t.restore);
+      } else if (step == round::RestoreStep::kConfirmed) {
+        t.form[size_t(t.active)] = uint8_t(t.restore);
+        t.restore = 0;
+        REXLOG_INFO("dbz3 tag F3: restauracion OBSERVADA id {}", id);
+      } else if ((step == round::RestoreStep::kBlocked || step == round::RestoreStep::kStale) && !t.round_blocked) {
+        t.round_blocked = true;
+        REXLOG_WARN("dbz3 tag F3: restauracion bloqueada id {}; terminar combate por menu nativo", id);
+      }
+    }
+    if (!t.round_owned && t.restore && t.phase == Phase::kIdle && now >= t.restore_at && !t.slide && Free(base, x) &&
         REX_LOAD_U32(x + 6048)) {
       if (REX_LOAD_U32(x + kModel0 + 4 * t.restore) && REX_LOAD_U32(x + kForm) == 0) {
         REX_STORE_U32(x + kNextForm, t.restore);
@@ -786,11 +959,6 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     if (autoswap && t.phase == Phase::kIdle && t.pending < 0 && now % autoswap == uint32_t(p) * autoswap / 2) {
       t.pending = Pick(t, false);
       t.pending_until = now + kSelectBuffer;
-    }
-    {
-      const uint32_t form = REX_LOAD_U32(x + kForm);
-      if (form != t.last_form || REX_LOAD_U32(x + kNextForm) != form) t.form_at = now;
-      t.last_form = form;
     }
     const bool form_quiet = now - t.form_at >= kFormQuiet;
     if (t.phase == Phase::kIdle && t.pending >= 0) {
@@ -818,14 +986,25 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     const uint16_t bit = p ? 0x0800 : 0x0400;
     const bool online = dbz3::net::Session::Get().active();
     if (t.phase != Phase::kLoading) g_net_local &= uint16_t(~bit);
-    if (t.phase == Phase::kLoading) {
+    if (t.phase == Phase::kLoading && !t.round_blocked) {
       // PRUEBA (DBZ3_TEST_STALL=1: la primera carga no llega; =2: ninguna): el modelo que entra se pierde
       static const char* stall = std::getenv("DBZ3_TEST_STALL");
-      if (stall && (stall[0] == '2' || t.retries == 0)) REX_STORE_U32(x + kModel0 + 4 * kLoad, 0);
-      bool loaded = now - t.since >= kSwapMin && Loaded(base, x, t);
+      if (!t.round_owned && stall && (stall[0] == '2' || t.retries == 0)) REX_STORE_U32(x + kModel0 + 4 * kLoad, 0);
+      bool loaded = !t.round_blocked && now - t.since >= kSwapMin &&
+          (!t.round_owned || RoundNodesReady(base, x, t)) && Loaded(base, x, t);
+      if (t.round_owned && stall && (stall[0] == '2' || t.retries == 0)) loaded = false; // no perder el puntero
+      if (loaded && t.round_owned) {
+        std::array<uint16_t, 8> caps{};
+        const int id = t.ids[size_t(t.target)];
+        auto snapshot = dbz3::roster::ReadForms(id, t.round_suit);
+        snapshot.capsules.assign(t.round_caps.begin()+1, t.round_caps.begin()+1+t.round_caps[0]);
+        loaded = ReadMemberCapsules(base, p, id, caps) && caps == t.round_caps &&
+            snapshot.identity == t.round_identity &&
+            dbz3::forms::Availability(snapshot, int(t.round_form)) == dbz3::forms::Reason::kOk;
+      }
       if (online) {
         if (loaded) g_net_local |= bit;
-        loaded = (g_net_applied[0].load() & bit) && (g_net_applied[1].load() & bit);
+        loaded = loaded && (g_net_applied[0].load() & bit) && (g_net_applied[1].load() & bit);
       }
       // apartado ya (deslizamiento de salida terminado) y sin golpe (15), modo hiper (43/44) ni
       // definitiva/Dragon Rush (>= 46) en curso: se le pone de pie con la propia accion del juego y el
@@ -838,20 +1017,23 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       if (t.down[size_t(t.active)]) {
         if (!KoLanded(base, x, t, now)) {
           loaded = false;
-        } else if (loaded && (act == 18 || act == 19 || act == 35 || act == 36) && !dbz3::g_guest_eu) {
+        } else if (loaded && ActionCtxOk(base, x) && (act == 18 || act == 19 || act == 35 || act == 36) && !dbz3::g_guest_eu) {
           Call(ctx, base, sub_82103908, x, 0);
         }
       }
       if (!t.down[size_t(t.active)] && !form_quiet) loaded = false;   // transformandose: se espera
-      if (loaded && !Free(base, x) && t.slide == 1 && now - t.slide_at >= SlideTicks(1) && act != 15 && act != 43 &&
-          act != 44 && act < 46 && !dbz3::g_guest_eu) {
+      if (loaded && !t.round_owned && !Free(base, x) && t.slide == 1 && now - t.slide_at >= SlideTicks(1) && act != 15 && act != 43 &&
+          act != 44 && act < 46 && !dbz3::g_guest_eu && ActionCtxOk(base, x)) {
         Call(ctx, base, sub_82103908, x, 0);
       }
       // efectos del que sale aun vivos: se espera (como mucho kFxWaitMax desde que empezo la carga)
       // (tambien los del rival: una tecnica suya pegada al que sale hizo caer el cambio de cuerpo,
       // sub_82115270 -> sub_82155858 -> sub_821527C0 leyendo 0x3, 2026-10-12)
       const uint32_t fx = std::max(g_tech_seen[0].load(), g_tech_seen[1].load());
-      if (loaded && now - fx < kFxQuiet && now - t.since < kFxWaitMax && !online) loaded = false;
+      if (loaded && now - fx < kFxQuiet && !online &&
+          (t.round_owned || now - t.since < kFxWaitMax)) loaded = false;
+      if (t.round_owned) loaded = round::CommitReady(loaded, false, false, false, Free(base, x),
+          t.down[size_t(t.active)] || form_quiet, now - fx >= kFxQuiet);
       if (loaded && Free(base, x)) {
         FinishSwap(ctx, base, x, t);
         g_net_local &= uint16_t(~bit);
@@ -862,6 +1044,12 @@ void Tick(PPCContext& ctx, uint8_t* base) {
         // se quedaba asi el resto del combate, con el que sale suspendido en el aire (2026-10-12: el modelo
         // del que entra no llego tras un modo hiper a mitad de carga). Se pide otra vez y, si tampoco
         // llega, se cancela el relevo y el que salio vuelve a su sitio.
+        if (t.round_owned) {
+          if (!t.round_blocked) REXLOG_WARN("dbz3 tag F3: timeout; recursos retenidos, salir por menu nativo");
+          t.round_blocked = true;
+          g_net_local &= uint16_t(~bit);
+          continue;
+        }
         const float home[3] = {t.home[0], t.home[1], t.home[2]};
         const int k = t.target, tries = t.retries;
         t.phase = Phase::kIdle;
@@ -933,7 +1121,15 @@ HudSide Hud(int player) {
 
 // Pantalla de menu del juego (byte 0x824BA110): 5 menu principal, 14 menu de Duelo.
 void OnScreen(int screen) {
-  if (screen == 5 || screen == 14) g_in_battle = false;
+  if (screen == 5 || screen == 14) {
+    g_in_battle = false;
+    g_net_local = 0;
+    g_net_applied[0] = 0; g_net_applied[1] = 0;
+    g_prev_buttons = {}; g_fall_x = 0;
+    for (auto& com : g_com) com = false;
+    std::lock_guard<std::mutex> lock(g_mu);
+    for (auto& t : g_team) { ++t.generation; t.restore = 0; t.pending = -1; }
+  }
 }
 
 // Mando del usuario (0/1) leido este tick (hook de XamInputGetState): SELECT = relevo, con L
@@ -976,8 +1172,12 @@ DBZ3_HOOK(sub_82109638, dbz3eu_sub_82109738) {
     const int p = dbz3::tag::SideOf(base, x);
     if (p >= 0) {
       dbz3::tag::Team& t = dbz3::tag::g_team[size_t(p)];
+      const uint32_t generation = t.generation + 1;
       t = dbz3::tag::Team{};
+      t.generation = generation;
+      t.round_owned = dbz3::tag::RoundEnabled();
       t.ids = dbz3::tag::DynamicTeam(p);
+      if (t.round_owned && !dbz3::tag::round::ValidTeam(t.ids)) t.ids.clear();
       // empieza con el primero (tagteam_slots.cpp pone su ID en la seleccion)
       const int now = int(REX_LOAD_U32(x + dbz3::tag::kId));
       for (size_t k = 0; k < t.ids.size(); ++k) {
@@ -996,6 +1196,9 @@ DBZ3_HOOK(sub_82109638, dbz3eu_sub_82109738) {
       REXLOG_INFO("dbz3 tag: empieza un combate");
       new_battle = true;
       dbz3::tag::g_fight_seen = false;
+      dbz3::tag::g_net_local = 0;
+      dbz3::tag::g_net_applied[0] = 0; dbz3::tag::g_net_applied[1] = 0;
+      dbz3::tag::g_prev_buttons = {}; dbz3::tag::g_fall_x = 0;
       for (auto& f : dbz3::tag::g_face) f.clear();   // las hojas del combate anterior ya no valen
     }
   }

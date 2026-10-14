@@ -9,7 +9,7 @@
 // con endian-swap), es decir, exactamente el contenido del fichero DDS que
 // produce el volcado. El runtime identifica la textura por ese hash y, si hay
 // una entrada en el pack, sube la imagen del pack en lugar de los datos del
-// juego. El factor (x1..x4) se deduce del tamano: W_pack / W_guest.
+// juego. El factor (entero, x1, x4, x8...) se deduce del tamano: W_pack / W_guest.
 //
 // El pack NO toca ficheros del juego ni la memoria guest: es una capa host.
 
@@ -66,25 +66,35 @@ const Dbz3DumpFormat* Dbz3DumpFormatFor(xenos::TextureFormat format);
 // RGBA8 y su swizzle es especifico del formato).
 bool Dbz3PackReplaceableFormat(xenos::TextureFormat format);
 
+// Un nivel de la cadena de mips de una imagen de pack ya dispuesta para la GPU.
+struct Dbz3PackLevel {
+  uint32_t offset = 0;     // bytes desde el inicio (multiplo de 512)
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t row_pitch = 0;  // bytes por fila (multiplo de 512)
+};
+
 // Entrada de un pack ya indexada por hash.
 struct Dbz3TexturePackEntry {
   uint64_t hash = 0;
   std::filesystem::path path;
   uint32_t width = 0;
   uint32_t height = 0;
-  // Factor de resolucion respecto a la textura guest (1..4).
+  // Factor de resolucion respecto a la textura guest (entero >= 1; imagen <= 16384).
   uint32_t factor = 1;
   // Nombre del pack (carpeta) al que pertenece, para diagnosticos.
   std::string pack_name;
 };
 
 // Indice de packs activos. Se construye una sola vez (los packs requieren
-// reiniciar, como el volcado). Es thread-safe para lecturas tras Init.
+// reiniciar, como el volcado), en SEGUNDO PLANO: hasta que termina, active() es
+// false y el juego usa las texturas originales; las caches de texturas rehacen lo
+// cargado cuando pasa a true. Lecturas thread-safe en cuanto active() es true.
 class Dbz3TexturePackIndex {
  public:
   static Dbz3TexturePackIndex& Get();
 
-  // Devuelve true si hay al menos un pack con entradas.
+  // Devuelve true si el indice ya esta listo y hay al menos un pack con entradas.
   bool active() const;
 
   // Busca una textura por su hash (XXH3-64 del bitmap guest). Devuelve nullptr
@@ -94,24 +104,40 @@ class Dbz3TexturePackIndex {
   // Numero de entradas indexadas (diagnostico).
   size_t size() const;
 
-  // Imagen decodificada (RGBA8) de una entrada, desde la cache de RAM (la llena
-  // la precarga en segundo plano) o decodificando en el momento. nullptr si el
-  // fichero no se puede leer.
+  // Imagen decodificada (RGBA8) de una entrada CON su cadena de mips completa (hasta
+  // 1x1) y ya dispuesta como la quiere la copia a la GPU (filas y niveles alineados a
+  // 512 B, vale para D3D12 y Vulkan): la prepara un hilo de fondo y el hilo de la GPU
+  // la sube con UNA copia. nullptr si el fichero no se puede leer.
   struct Image {
     std::vector<uint8_t> rgba;
     uint32_t width = 0;
     uint32_t height = 0;
+    std::vector<Dbz3PackLevel> layout;  // todos los niveles
   };
+  // Bloqueante: de la cache de RAM o decodificando en el hilo que llama (Vulkan, que no
+  // puede mostrar la original en el recurso Nx mientras tanto).
   std::shared_ptr<const Image> Decoded(const Dbz3TexturePackEntry& entry) const;
+  // Sin bloquear (como Burst Limit): de la cache, o nullptr y se encarga a los hilos de
+  // fondo con prioridad; el juego muestra la original y la recarga cuando IsDecoded.
+  std::shared_ptr<const Image> TryDecoded(const Dbz3TexturePackEntry& entry) const;
+  bool IsDecoded(uint64_t hash) const;
+  // Fichero ilegible o de otro tamano: no se reintenta, se queda la original.
+  bool IsBroken(uint64_t hash) const;
 
  private:
   Dbz3TexturePackIndex() = default;
   void EnsureInitialized() const;
+  void Build() const;
   void StartPreload() const;
 
-  mutable bool initialized_ = false;
+  mutable std::atomic<bool> started_{false};
+  mutable std::atomic<bool> ready_{false};   // entries_ solo se lee con esto a true
   mutable std::unordered_map<uint64_t, Dbz3TexturePackEntry> entries_;
 };
+
+// Interruptor en vivo de los packs (menu F1, cvar dbz3_texture_packs_on del
+// launcher, leida por nombre): false = texturas originales sin reiniciar.
+bool Dbz3TexturePacksOn();
 
 // Decodifica una imagen de pack (DDS: DXT1/3/5 o 32bpp sin comprimir, o PNG) a
 // RGBA8 empaquetado (width*height*4). Devuelve false si el formato no se
@@ -119,31 +145,33 @@ class Dbz3TexturePackIndex {
 bool Dbz3DecodePackImage(const std::filesystem::path& path, std::vector<uint8_t>& rgba,
                          uint32_t& width, uint32_t& height);
 
-// Descripcion de un nivel de la cadena de mips generada para un pack.
-struct Dbz3PackLevel {
-  // Offset en bytes dentro del buffer devuelto.
-  uint32_t offset = 0;
-  uint32_t width = 0;
-  uint32_t height = 0;
-  // Bytes por fila (alineado a la alineacion pedida).
-  uint32_t row_pitch = 0;
-};
-
-// Construye la cadena de mips (box filter 2x2, con clamp en los bordes) de un
-// pack a partir de su imagen base RGBA8 (`width * height * 4`). `levels` suele
-// ser `key.mip_max_level + 1`. Las filas quedan con `row_pitch` alineado a
-// `row_pitch_alignment` y cada nivel empieza en un offset tambien alineado (lo
-// que necesitan tanto las copias de D3D12 como las de Vulkan). `out` recibe el
-// buffer completo y `layouts_out` la descripcion de cada nivel.
+// Los `levels` primeros niveles de `image` (un prefijo de su disposicion) y los bytes
+// que ocupan en el buffer de subida.
+uint64_t Dbz3PackLayout(const Dbz3TexturePackIndex::Image& image, uint32_t levels,
+                        std::vector<Dbz3PackLevel>& layouts_out);
+// Copia esos `bytes` a `dst` (el buffer de subida ya mapeado) en un solo bloque: copiar
+// fila a fila a esa memoria (write-combined) iba a ~15 MB/s y una textura 4096x4096
+// tardaba 6 s en el hilo de la GPU; en bloque son ~10 ms.
 // swap_rb: la imagen del pack viene en colores reales (RGBA) y la textura guest
 // es k_8_8_8_8, que el B3 HD guarda como BGRA (mascaras del #AZT 00FF0000 = R):
 // se intercambian R y B para quedar en el orden de bytes del guest.
-void Dbz3BuildPackMips(const std::vector<uint8_t>& base, uint32_t width, uint32_t height,
-                       uint32_t levels, uint32_t row_pitch_alignment, std::vector<uint8_t>& out,
-                       std::vector<Dbz3PackLevel>& layouts_out, bool swap_rb = false);
+void Dbz3PackCopyLevels(const Dbz3TexturePackIndex::Image& image, uint64_t bytes, uint8_t* dst,
+                        bool swap_rb);
 
 // Texturas de pack subidas (acumulado; la linea `perf` lo muestra como pack=).
 extern std::atomic<uint64_t> g_dbz3_pack_uploads;
+
+// Bytes de VRAM de una entrada con todos sus mips (RGBA8, 4/3 de la base) y reparto de
+// texturas HD nuevas por submission: ~64 MB, para que al encender el pack o entrar a un
+// escenario no entren todas en el mismo frame (siempre entra al menos una).
+inline uint64_t Dbz3PackGpuBytes(const Dbz3TexturePackEntry& e) {
+  return uint64_t(e.width) * e.height * 16 / 3;
+}
+constexpr uint64_t kDbz3PackGrantBytesPerSubmission = uint64_t(64) << 20;
+
+// Anota que la partida uso esta textura del pack: la proxima vez se precarga primero
+// (shader_cache/dbz3_pack_uso.txt). Barato; la escritura va en otro hilo.
+void Dbz3PackNoteUsed(uint64_t hash);
 
 // true si la textura guest es k_8_8_8_8 (el pack se sube con R y B intercambiados).
 bool Dbz3PackSwapsRedBlue(xenos::TextureFormat format);

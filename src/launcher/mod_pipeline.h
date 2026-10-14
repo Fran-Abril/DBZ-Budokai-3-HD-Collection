@@ -110,6 +110,15 @@ class ModPipeline {
   void SetAfsPath(const std::string& path);
   std::string AfsPath() const;
 
+  // -1: pendiente o fallo de infraestructura; 0: proceso terminado correctamente.
+  int ExitCode() const { return exit_code_.load(); }
+  // A4: estado del ultimo trabajo, sin la ambiguedad de ExitCode()==-1. kRunning se fija antes
+  // de lanzar el hilo; al terminar por cualquier camino queda kOk (exit 0) o kFailed.
+  enum class JobState { kIdle, kRunning, kOk, kFailed };
+  JobState State() const { return state_.load(); }
+  // _roster publicado y completo (roster.toml, manifest.txt y build.hash); sin fuentes de
+  // personaje activas no hace falta ninguno.
+  static bool RosterArtifactsOk();
   bool IsRunning() const { return running_.load(); }
   std::string Output() const;
   // Last "@progreso k/n text" line printed by the running tool (roster_build): 0..1,
@@ -142,6 +151,8 @@ class ModPipeline {
 
   std::vector<B3Char> b3_;
   bool loaded_ = false;
+  std::atomic<int> exit_code_{-1};
+  std::atomic<JobState> state_{JobState::kIdle};
   std::atomic<bool> running_{false};
   std::atomic<int> generation_{0};
   mutable std::mutex mutex_;

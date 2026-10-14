@@ -52,7 +52,7 @@ std::unordered_map<uint32_t, int> g_map_anim;    // [animacion_mapa]: palabra ->
 std::atomic<uint32_t> g_last_battle{0xFFFFFFFFu}; // ultimo combate lanzado (palabra)
 
 void Load() {
-  for (const auto& mod : dbz3::ListMods()) {
+  for (const auto& mod : dbz3::ListMods(false)) {
     if (!mod.enabled) continue;
     std::ifstream f(dbz3::ModsRoot() / mod.name / "campana.toml");
     if (!f) continue;
