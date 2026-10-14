@@ -40,7 +40,7 @@ Copyright (c) 2026 **NovaPowers**. Released under the MIT License (see `LICENSE`
 
 ## What's new in 1.4.5.2
 
-- **Tag Team (beta):** if you are knocked out of the ring and still have a partner, they come in and the fight goes on; after a KO the partner flies in with the transformation flash.
+- **Tag Team (beta):** if you are knocked out of the ring and still have a partner, they come in and the fight goes on; the incoming fighter flies in and powers up with the game's own ki-charge pose (computer partners too).
 - **Online (beta):** different mods no longer drop the connection: the panel shows what is missing and **INSTALL WHAT IS MISSING** downloads it from Nova's Mods. Router port opening (UPnP) and the public IP are back; playing from the same house shows the local IP.
 - **Kit:** official ports (Goku GT, Vegeta GT, Pan, Baby, Janemba, sword Trunks, Future Gohan) rebuilt in one click with standard per-game presets; campaigns with new text that is allocated automatically (Frieza's story already uses it).
 

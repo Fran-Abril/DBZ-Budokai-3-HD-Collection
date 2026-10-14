@@ -44,7 +44,7 @@
 // v1.4.5 = pack de texturas HD sin tirones (carga en segundo plano, precarga aprendida) y en Nova's
 // Mods, launcher que coloca y repara los mods solo, buscadores, traducciones IT/DE/FR completas.
 // v1.4.5.1 = el pack HD instalado desde el launcher se ve sin reiniciar el juego.
-// v1.4.5.2 = Tag Team: ring out con companero vivo = relevo; Online: mods distintos se instalan desde el panel,
+// v1.4.5.2 = Tag Team: ring out con companero vivo = relevo, el que entra carga ki al aterrizar (pose del juego); Online: mods distintos se instalan desde el panel,
 // UPnP/STUN; ports oficiales recreables; campanas con textos automaticos (Freezer).
 #include <windows.h>
 

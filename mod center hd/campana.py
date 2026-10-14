@@ -442,9 +442,12 @@ def story(cfg, us, mod, work):
         pic = panel
         if c.get(key + "imagen"):
             path = os.path.join(TOML_DIR[0], c[key + "imagen"])
-            pic = pics[0]
-            pics[0] += 1
-            rb.write_entry(mod, "data_cmn.afs", pic, png2pic.build_picture(Image.open(path)), work)
+            if os.path.isfile(path):
+                pic = pics[0]
+                pics[0] += 1
+                rb.write_entry(mod, "data_cmn.afs", pic, png2pic.build_picture(Image.open(path)), work)
+            else:   # sin la imagen (p. ej. el Kit no lleva arte de terceros): el panel del juego
+                rb.log("aviso: no encuentro %s; se usa el panel del juego" % c[key + "imagen"])
         # locucion: `voz` (o `cierre_voz`), una por frase como las del juego (14, pagina, 2.N: la
         # entrada N de adx_usa/adx_jpn; la intro de Namek trae 14,1..3 = 2.1231..1233). Vale un
         # numero (entrada ADX del juego), "2.N" o un fichero de audio propio (.wav/.mp3/.ogg)
@@ -649,8 +652,13 @@ def portraits(cfg, us, mod, work):
     tpl = read_entry(us, "data_cmn.afs", 1463, work)
     for c in cfg.get("retrato", []):
         out = bytearray(tpl)
-        if c.get("png"):
-            path = c["png"] if os.path.isabs(c["png"]) else os.path.join(TOML_DIR[0], c["png"])
+        path = (c["png"] if os.path.isabs(c["png"]) else os.path.join(TOML_DIR[0], c["png"])) if c.get("png") else ""
+        if path and not os.path.isfile(path):
+            # sin el retrato propio (el Kit no lleva arte de terceros): el de Freezer forma final del juego
+            # (`sin_png`), para que la entrada exista y el dialogo no se cuelgue
+            rb.log("aviso: no encuentro %s; retrato %s = el %s del juego" % (c["png"], c["entrada"], c.get("sin_png", 1466)))
+            path = ""
+        if path:
             im = Image.open(path).convert("RGBA")
             k = min(541 / im.width, 530 / im.height) * float(c.get("escala", 1.0))
             im = im.resize((max(1, round(im.width * k)), max(1, round(im.height * k))), Image.LANCZOS)
@@ -662,7 +670,7 @@ def portraits(cfg, us, mod, work):
             for _, do, ds in azt_textures(tpl):
                 out[do + 0x80:do + ds] = pix
         else:
-            src = read_entry(us, "data_cmn.afs", int(c["entrada"]), work)
+            src = read_entry(us, "data_cmn.afs", int(c.get("sin_png", 1466) if c.get("png") else c["entrada"]), work)
             (so, sd, ss), = azt_textures(src)[:1]
             for o, do, ds in azt_textures(tpl):
                 if ss != ds:
@@ -672,6 +680,9 @@ def portraits(cfg, us, mod, work):
         rb.write_entry(mod, "data_cmn.afs", int(c["entrada"]), bytes(out), work)
         n += 1
     return n
+
+
+CLEANED = {}   # panel -> sus bytes ya limpios ([[panel_limpio]]), para las imagenes que falten
 
 
 def clean_panel(cfg, us, mod, work):
@@ -691,6 +702,7 @@ def clean_panel(cfg, us, mod, work):
             for by in range(src):
                 b[data + by * row:data + (by + 1) * row] = b[data + src * row:data + (src + 1) * row]
         rb.write_entry(mod, "data_cmn.afs", int(c["cmn"]), bytes(b), work)
+        CLEANED[int(c["cmn"])] = bytes(b)
         n += 1
     return n
 
@@ -789,8 +801,14 @@ def cmd_montar(a):
         n += story(cfg, us, mod, work)
     n += clean_panel(cfg, us, mod, work)
     for c in cfg.get("imagen", []):      # [[imagen]] entrada = N, archivo = "x.webp": imagen de narracion
-        rb.write_entry(mod, "data_cmn.afs", int(c["entrada"]),
-                       png2pic.build_picture(Image.open(os.path.join(TOML_DIR[0], c["archivo"]))), work)
+        path = os.path.join(TOML_DIR[0], c["archivo"])
+        if os.path.isfile(path):
+            pic = png2pic.build_picture(Image.open(path))
+        else:   # sin la imagen (el Kit no lleva arte de terceros): el panel de la historia, del juego
+            fondo = int(cfg.get("historia", {}).get("fondo", 1411))
+            rb.log("aviso: no encuentro %s; la entrada %s = el panel %d del juego" % (c["archivo"], c["entrada"], fondo))
+            pic = CLEANED.get(fondo) or read_entry(us, "data_cmn.afs", fondo, work)   # el ya limpio
+        rb.write_entry(mod, "data_cmn.afs", int(c["entrada"]), pic, work)
         n += 1
     n += portraits(cfg, us, mod, work)
     n += map_events(cfg, us, mod, work)

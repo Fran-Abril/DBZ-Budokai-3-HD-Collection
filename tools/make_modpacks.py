@@ -47,7 +47,7 @@ KIT_DATA = ["catalog_b3.cat", "roster_db.json", "b1_capsulas.txt",   # b1_capsul
             "presets_importar.toml", "iw_modelos.json", "du_codigos.json", "texturas_etiquetas.json",
             "tools_manifest.json",
             "ports_oficiales.toml"]   # recetas de la tarjeta "4. Ports oficiales" (importar.py oficial)
-KIT_CAMPAIGNS = ["plantilla_historia.toml", "ejemplo_freezer.toml"]   # editor de historias (sin imagenes)
+KIT_CAMPAIGNS = ["plantilla_historia.toml", "ejemplo_freezer.toml", "historia_freezer.toml"]   # editor de historias (Freezer, sin sus imagenes)
 AWO_DATA = ["psp_ramp.npy"]      # rampa toon de PSP: la carga psp_amo.py (importar de Shin Budokai)
 KIT_ROOT_FILES = ["LEEME_KIT.txt", "LEEME_KIT_EN.txt", "requirements.txt", "instalar_requisitos.bat", "DBZ3_ModKit.bat"]
 KIT_FORMAT_DOCS = ["CAPSULAS_B3.md", "MAPA_ROSTER_HD.md", "ACM_FORMAT.md", "AMO_AWO.md", "BIN_LAYOUT.md",

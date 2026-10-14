@@ -18,6 +18,8 @@
 
 namespace dbz3::tag {
 bool OnPad(PPCContext& ctx, uint8_t* base, uint32_t user, uint16_t buttons, uint8_t lt);   // tagteam.cpp
+uint16_t PoseButtons(uint32_t user);   // tagteam.cpp: pose de entrada del relevo (Y+B)
+bool PoseVirtualPad(uint16_t* buttons);   // tagteam.cpp: mando 4 virtual del COM en pose
 void Tick(PPCContext& ctx, uint8_t* base);
 }
 
@@ -84,6 +86,7 @@ namespace {
 void TagPad(PPCContext& ctx, uint8_t* base, uint32_t user, uint32_t out) {
   const uint16_t b = REX_LOAD_U16(out + 4);
   if (dbz3::tag::OnPad(ctx, base, user, b, REX_LOAD_U8(out + 6))) REX_STORE_U16(out + 4, uint16_t(b & ~0x0020));
+  if (const uint16_t pose = dbz3::tag::PoseButtons(user)) REX_STORE_U16(out + 4, uint16_t(REX_LOAD_U16(out + 4) | pose));
 }
 }  // namespace
 
@@ -91,6 +94,17 @@ DBZ3_HOOK(sub_8221C178, dbz3eu_sub_8221A940) {
   auto& s = dbz3::net::Session::Get();
   const uint32_t user = ctx.r3.u32;
   const uint32_t out = ctx.r4.u32;
+  // Tag Team: el COM que entra hace la pose con un mando 4 virtual (conectado solo durante la pose)
+  if (uint16_t fake = 0; user == 3 && out && !s.active() && dbz3::tag::PoseVirtualPad(&fake)) {
+    static uint32_t packet = 0;
+    REX_STORE_U32(out + 0, ++packet);
+    REX_STORE_U16(out + 4, fake);
+    REX_STORE_U16(out + 6, 0);
+    REX_STORE_U32(out + 8, 0);
+    REX_STORE_U32(out + 12, 0);
+    ctx.r3.u64 = 0;   // ERROR_SUCCESS: conectado
+    return;
+  }
   if (!s.active() || user > 1 || !out) {
     orig(ctx, base);
     if (user == 1) dbz3::ingame::NotePad2(ctx.r3.u32 == 0);

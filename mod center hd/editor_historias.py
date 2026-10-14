@@ -614,8 +614,8 @@ def check(data, base):
             err.append(T("Retrato %d: falta el número de entrada (ej. 1464).",
                          "Portrait %d: missing the entry number (e.g. 1464).") % i)
         if r.get("png") and not os.path.isfile(_abs(str(r["png"]), base)):
-            err.append(T("Retrato %d: no encuentro la imagen %s.", "Portrait %d: can't find the image %s.")
-                       % (i, r["png"]))
+            warn.append(T("Retrato %d: no encuentro la imagen %s (se usará un retrato del juego).",
+                          "Portrait %d: can't find the image %s (a game portrait will be used).") % (i, r["png"]))
     caps = data.get("capitulo", [])
     if not caps:
         err.append(T("La historia necesita al menos un capítulo.", "The story needs at least one chapter."))
@@ -649,7 +649,8 @@ def check(data, base):
                 err.append(T("%s: %s debe ser una imagen .png, .webp, .jpg o .avif.",
                              "%s: %s must be a .png, .webp, .jpg or .avif image.") % (t, label_for(k)))
             elif not os.path.isfile(_abs(c[k], base)):
-                err.append(T("%s: no encuentro la imagen %s.", "%s: can't find the image %s.") % (t, c[k]))
+                warn.append(T("%s: no encuentro la imagen %s (se usará el panel del juego).",
+                              "%s: can't find the image %s (the game panel will be used).") % (t, c[k]))
             if not c.get("saga"):
                 warn.append(T("%s: %s solo se usa en capítulos que abren saga.",
                               "%s: %s is only used in chapters that open a saga.") % (t, label_for(k)))
@@ -2272,15 +2273,19 @@ def selftest_window():
             assert app.nb.index("end") == 5 and app.lst_cap.size() == n, "pestañas o lista de capítulos"
             assert app.lst_cap.get(0).startswith("1 · "), app.lst_cap.get(0)
             assert app.lst_cap.get(n - 1) == "%d · %s" % (n, T("Final", "Ending")), app.lst_cap.get(n - 1)
+            if not os.path.isfile(os.path.join(CAMPANAS, "retratos", "mecha_freezer.png")):
+                host.destroy()   # el Kit no lleva el retrato aportado: el resto se prueba en el proyecto
+                continue
             app.select_cap(10)                      # cap. 11: su retrato 4501 tiene PNG propio (Freezer)
             if Image is not None:
                 assert app.cap_prev[1].winfo_manager() == "grid" and app.cap_prev[0].winfo_manager() == "", \
                     "vista previa del retrato del capítulo"
             app.select_ret(2)                       # retrato 4501 (con PNG): sin aviso de «no encuentro»
             assert app.ret_hint.cget("text") == "", repr(app.ret_hint.cget("text"))
-            r4501 = app.data["retrato"][2]          # en el archivo: escala 0.85 y desplazamiento [0, 40]
+            r4501 = app.data["retrato"][2]          # sus valores del archivo (el usuario los cambia)
             assert app.ret_place.winfo_manager() == "pack", "colocación del PNG oculta"
-            assert abs(app.sl["escala"][0].get() - 0.85) < 1e-9 and app.sl["y"][0].get() == 40, "deslizadores"
+            assert abs(app.sl["escala"][0].get() - float(r4501.get("escala", 1.0))) < 1e-9 and \
+                app.sl["y"][0].get() == r4501.get("desplazamiento", [0, 0])[1], "deslizadores"
             if Image is not None:
                 assert app.ret_scene.cget("image") != "", "vista previa del diálogo vacía"
             for name, v in (("escala", 1.25), ("x", -30), ("y", 45)):   # un arrastre: mueve y escribe
@@ -2392,12 +2397,12 @@ def _selftest_features():
         arr = style_preview("dialogo", eff, tmpd)        # vista previa: no deja cambios en campana.STYLES
         assert arr.shape[2] == 4 and arr[..., 3].max() > 0, arr.shape
         assert cp.STYLES == before, "la vista previa cambio campana.STYLES"
-        # 4. imagenes: una que no existe da error; las que existen, no
+        # 4. imagenes: una que no existe da aviso (se usa el panel del juego); las que existen, nada
         bad = copy.deepcopy(mini)
         bad["capitulo"][1]["cierre_imagen"] = "no_existe.png"
         bad["historia"]["idioma"] = "fr"
-        errs, _ = check(bad, tmpd)
-        assert any("no_existe.png" in e for e in errs) and any("Idioma de los textos" in e for e in errs), errs
+        errs, warns = check(bad, tmpd)
+        assert any("no_existe.png" in w for w in warns) and any("Idioma de los textos" in e for e in errs), (errs, warns)
         thumb = cp.png2pic.fit(Image.open(png).convert("RGBA"), (660, 420))
         assert thumb.shape[:2] == (420, 660), thumb.shape
         # 5. ida y vuelta por el TOML de la copia: mismos datos al releer
@@ -2475,10 +2480,11 @@ def selftest():
     assert not errs, errs
     bad = {"campana": {"mod": "mi mod"}, "historia": {}, "retrato": [{"entrada": 1, "png": "no_existe.png"}],
            "capitulo": [{"combate": "x", "retratos": [1]}, {"combate": 5, "retratos": [1, 2]}]}
-    errs, _ = check(bad, CAMPANAS)
-    for frag in ("Carpeta del mod", "número de combate", "retratos necesita", "no encuentro la imagen",
+    errs, bad_warns = check(bad, CAMPANAS)
+    for frag in ("Carpeta del mod", "número de combate", "retratos necesita",
                  "último capítulo", "Avanzado: falta"):
         assert any(frag in e for e in errs), (frag, errs)
+    assert any("no encuentro la imagen" in w for w in bad_warns), bad_warns   # falta: retrato del juego
     long = {"campana": {"mod": "x"}, "historia": {},
             "capitulo": [{"combate": 1, "retratos": [1, 2], "dialogo_es": ["a" * 61], "dialogo_en": ["a"],
                           "victoria_es": ["b"], "victoria_en": ["b"]}, {"es": ["x"], "en": ["y"]}]}
@@ -2486,10 +2492,10 @@ def selftest():
     assert any("61 caracteres" in w for w in warns), warns
     # ingles: mismos avisos, solo en ingles
     LANG = "en"
-    errs_en, _ = check(bad, CAMPANAS)
-    for frag in ("Mod folder", "fight number", "2 numbers", "can't find the image", "last chapter",
-                 "Advanced: missing"):
+    errs_en, bad_warns_en = check(bad, CAMPANAS)
+    for frag in ("Mod folder", "fight number", "2 numbers", "last chapter", "Advanced: missing"):
         assert any(frag in e for e in errs_en), (frag, errs_en)
+    assert any("can't find the image" in w for w in bad_warns_en), bad_warns_en
     assert not check(data, CAMPANAS)[0], "en ingles la historia de Freezer da errores"
     _, warns_en = check(long, CAMPANAS)
     assert any("61 characters" in w for w in warns_en), warns_en
@@ -2513,7 +2519,8 @@ def selftest():
     assert d3 == pl and r3 == raw, "escala/desplazamiento no vuelven igual"
     if Image is not None:                                # la vista previa del diálogo tiene su tamaño
         assert scene_image(None).size == (SCENE_W, SCENE_H)
-        assert portrait_art(os.path.join(CAMPANAS, "retratos", "mecha_freezer.png"), 1.0, 0, 0).size == (541, 530)
+        mecha = os.path.join(CAMPANAS, "retratos", "mecha_freezer.png")   # aportado: no va en el Kit
+        assert not os.path.isfile(mecha) or portrait_art(mecha, 1.0, 0, 0).size == (541, 530)
     assert cap_label(0, {"combate": 654}) == "1 · Combate 654"
     print("editor_historias.py: autocomprobacion OK (ida y vuelta de historia_freezer.toml, plantilla, "
           "validaciones en español e inglés, títulos de capítulos)")

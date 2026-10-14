@@ -139,6 +139,7 @@ struct Team {
   uint32_t ring_since = 0, ring_last = 0, ring_at = 0;   // ring_at: tick del ultimo ring out convertido
   bool ring = false, ring_giveup = false;                // giveup: el relevo no cargo, el ring out sigue
   float ring_pos[3]{};
+  uint32_t pose_at = 0, pose_until = 0;   // pose de entrada (carga de ki del juego) al aterrizar
 };
 
 std::mutex g_mu;
@@ -152,6 +153,29 @@ std::atomic<uint32_t> g_fall_x{0};            // luchador tumbado por KO que aun
 std::array<HudSide, 2> g_hud{};               // con g_mu
 bool g_in_swap = false;                       // nuestro sub_82109638 (no es un combate nuevo)
 std::array<std::atomic<bool>, 2> g_com{};     // lado del ordenador
+// Pose de entrada (2026-10-14): al aterrizar, el que entra hace ~0,5 s la carga de ki del propio juego
+// (Y+B mantenidos, acciones 20/21). Las acciones del luchador solo nacen de su entrada (X+6048 es el nodo
+// de su lista de movimientos): un humano la "pulsa" en su mando (TagPad); el COM no lee mando (su hueco
+// X+5028 = -1 lo lleva a sub_820F8470, la IA), asi que desde que baja hasta acabar la pose su hueco apunta
+// al mando 4 y el juego lee un mando 4 virtual (conectado solo entonces) con Y+B; despues vuelve a -1.
+// Con el mando 4 desconectado de verdad el juego pausaba ("Player 2's controller has been disconnected").
+constexpr uint32_t kPoseTicks = 30, kPoseWindow = 120, kPoseSlotOff = 5028, kPoseRec = 0x8238B780 + 184 * 3;
+constexpr int16_t kPoseSlot = 3;
+std::array<uint32_t, 2> g_pose_com{};           // luchador del COM con el hueco cambiado (con g_mu)
+std::array<std::atomic<bool>, 4> g_pose_pad{};  // mando (hueco) que pulsa la pose este tick
+std::array<uint32_t, 2> g_pose_ticks{};
+std::array<int, 2> g_pose_slot{-1, -1};      // mando que pulsa la pose de cada lado
+
+void PoseEnd(uint8_t* base, int p) {
+  if (const uint32_t x = g_pose_com[size_t(p)]) {
+    if (int16_t(REX_LOAD_U16(x + kPoseSlotOff)) == kPoseSlot) REX_STORE_U16(x + kPoseSlotOff, 0xFFFF);
+    for (const uint32_t o : {12u, 14u, 16u, 88u, 92u}) REX_STORE_U32(kPoseRec + o, 0);
+    g_pose_com[size_t(p)] = 0;
+  }
+  if (const int slot = g_pose_slot[size_t(p)]; slot >= 0) g_pose_pad[size_t(slot)] = false;
+  g_pose_slot[size_t(p)] = -1;
+  g_pose_ticks[size_t(p)] = 0;
+}
 std::array<std::map<int, uint32_t>, 2> g_face;  // por lado: ID -> hoja de caras (datos !AZT) del combate
 // ultimo tick en que el juego uso un banco de efectos de la ranura de tecnica del lado (sub_82092C58):
 // mientras un efecto suyo sigue vivo (rayo en pantalla, choque de poderes) el relevo espera, porque
@@ -486,6 +510,8 @@ bool RoundNodesReady(uint8_t* base, uint32_t x, const Team& t) {
 void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   if (k < 0 || k >= int(t.ids.size()) || k == t.active || t.phase != Phase::kIdle ||
       t.down[size_t(k)]) return;
+  if (const int side = SideOf(base, x); side >= 0) PoseEnd(base, side);
+  t.pose_at = 0;
   if (t.round_owned && (t.round_blocked || t.restore || !Fighting(base))) return;
   const uint32_t id = uint32_t(t.ids[size_t(k)]);
   const uint32_t sel = REX_LOAD_U32(x + kSel);
@@ -745,6 +771,17 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   if (ko && !spare) TAG_CALL(sub_820FB5D0, dbz3eu_sub_820FB6D0, x + kBody, 0);   // destello (forma 0)
   t.restore = spare;                    // se transforma al aterrizar (Tick)
   t.restore_at = g_frame.load() + SlideTicks(2) + 6;
+  static const bool no_pose = std::getenv("DBZ3_TAG_NO_POSE") != nullptr;
+  t.pose_at = (spare || no_pose || dbz3::g_guest_eu) ? 0 : t.restore_at;
+  t.pose_until = t.pose_at + kPoseWindow;   // tope para empezar; la pose dura kPoseTicks
+  // el COM pasa ya al mando 4 (sin nada pulsado): baja y aterriza quieto (su IA empezaba a moverse al
+  // aterrizar y nunca quedaba libre para la pose)
+  if (const int side = SideOf(base, x); t.pose_at && side >= 0 && int16_t(REX_LOAD_U16(x + kPoseSlotOff)) == -1 &&
+                                        !dbz3::net::Session::Get().active()) {
+    for (const uint32_t o : {12u, 14u, 16u, 88u, 92u}) REX_STORE_U32(kPoseRec + o, 0);
+    REX_STORE_U16(x + kPoseSlotOff, uint16_t(kPoseSlot));
+    g_pose_com[size_t(side)] = x;
+  }
   if (t.round_owned) {
     t.visited[size_t(k)] = true;
     t.restore_ticket.Begin(t.generation, int(id), int(spare), g_frame.load());
@@ -810,6 +847,11 @@ void Tick(PPCContext& ctx, uint8_t* base) {
   static uint32_t battle_frames = 0;
   if (!g_in_battle.load()) {
     battle_frames = 0;
+    if (g_pose_com[0] || g_pose_com[1] || g_pose_slot[0] >= 0 || g_pose_slot[1] >= 0) {   // nada pulsado en los menus
+      std::lock_guard<std::mutex> lock(g_mu);
+      PoseEnd(base, 0);
+      PoseEnd(base, 1);
+    }
     return;
   }
   // el jugador no pierde vida y, desde los 2 s, el rival se queda a 0 hasta que un golpe lo tumba
@@ -876,7 +918,10 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     const uint32_t x = Fighter(base, p);
     Team* tp = TeamOf(base, x);
     g_hud[size_t(p)] = HudSide{};
-    if (!tp || over) continue;
+    if (!tp || over) {
+      PoseEnd(base, p);
+      continue;
+    }
     Team& t = *tp;
     // posicion no valida (NaN): tras algunas caidas por KO quedaba asi y golpearle cerraba el juego
     // (2026-10-12, logs 960/962). Vuelve a la ultima buena de ese lado.
@@ -992,6 +1037,33 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     StepSlide(base, x, t, now);   // deslizamiento de salida / llegada del relevo
     const uint16_t bit = p ? 0x0800 : 0x0400;
     const bool online = dbz3::net::Session::Get().active();
+    // pose de entrada: aterrizado y libre; termina a su tiempo, al caer o si hace otra cosa (un golpe)
+    if (t.pose_at && (online || t.phase != Phase::kIdle || t.down[size_t(t.active)] || now >= t.pose_until ||
+                      g_pose_ticks[size_t(p)] > kPoseTicks)) {
+      PoseEnd(base, p);
+      t.pose_at = 0;
+    } else if (t.pose_at && now >= t.pose_at && !t.slide) {
+      const uint16_t act = REX_LOAD_U16(x + 3244);
+      const int16_t slot = int16_t(REX_LOAD_U16(x + kPoseSlotOff));
+      if (!g_pose_ticks[size_t(p)]) {
+        if (Free(base, x)) {          // empieza (el COM ya esta en el mando 4 desde FinishSwap)
+          if (slot == -1) {
+            REX_STORE_U16(x + kPoseSlotOff, uint16_t(kPoseSlot));
+            g_pose_com[size_t(p)] = x;
+          } else if (slot >= 0 && slot < 4 && slot != kPoseSlot) {
+            g_pose_pad[size_t(slot)] = true;
+            g_pose_slot[size_t(p)] = slot;
+          }
+          g_pose_ticks[size_t(p)] = 1;
+          REXLOG_INFO("dbz3 tag: pose de entrada de {:08X} ({})", x, g_pose_com[size_t(p)] ? "COM" : "mando");
+        }
+      } else if (act > 2 && act != 20 && act != 21) {   // golpeado o haciendo otra cosa
+        PoseEnd(base, p);
+        t.pose_at = 0;
+      } else {
+        ++g_pose_ticks[size_t(p)];
+      }
+    }
     if (t.phase != Phase::kLoading) g_net_local &= uint16_t(~bit);
     if (t.phase == Phase::kLoading && !t.round_blocked) {
       // PRUEBA (DBZ3_TEST_STALL=1: la primera carga no llega; =2: ninguna): el modelo que entra se pierde
@@ -1049,14 +1121,18 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       if (loaded && (Free(base, x) || ring_lying)) {
         FinishSwap(ctx, base, x, t);
         g_net_local &= uint16_t(~bit);
-      } else if (!loaded && !online && now - t.since > kLoadTimeout) {
+      } else if (!loaded && !online &&
+                 (now - t.since > kLoadTimeout ||
+                  // ring out a mitad de un relevo pedido: el reinicio del caido (RingOutReset) vacia el modelo
+                  // que se estaba cargando; se pide otra vez ya (antes: 10 s de espera y el asalto perdido)
+                  (t.ring_at && t.retries == 0 && now - t.ring_at > 30 && !REX_LOAD_U32(x + kModel0 + 4 * kLoad)))) {
         const uint32_t cam = t.new_cam, model = REX_LOAD_U32(x + kModel0 + 4 * kLoad);
         REXLOG_WARN("dbz3 tag: luchador {:08X}: la carga no termina (camara {:08X} +192 {:08X}, modelo {:08X} +36 {:08X})",
                     x, cam, cam ? REX_LOAD_U32(cam + 192) : 0, model, model ? REX_LOAD_U32(model + 36) : 0);
         // tras un ring out convertido en relevo: si el que entra no carga, el asalto termina como el ring
         // out que era (aviso del juego mgr+35569 = hueco del ganador + 1); si no, el caido se quedaba fuera
         // de juego para siempre
-        if (t.ring_at && !t.ring_giveup) {
+        if (t.ring_at && !t.ring_giveup && t.retries >= 1) {   // tras un reintento
           t.ring_giveup = true;
           t.ring_at = 0;
           t.ring = false;
@@ -1163,6 +1239,21 @@ void OnScreen(int screen) {
 
 // Mando del usuario (0/1) leido este tick (hook de XamInputGetState): SELECT = relevo, con L
 // (LB o gatillo) al tercero. Devuelve true si hay que ocultar SELECT al juego.
+// Y+B (XInput 0x8000 | 0x2000) que pulsa la pose de entrada en ese mando (solo sin online)
+uint16_t PoseButtons(uint32_t user) { return user < 4 && g_pose_pad[user].load() ? 0xA000 : 0; }
+
+// Mando 4 virtual del COM en pose: true mientras algun lado lo usa; *buttons = Y+B si su pose ya empezo
+bool PoseVirtualPad(uint16_t* buttons) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  for (int p = 0; p < 2; ++p) {
+    if (g_pose_com[size_t(p)]) {
+      *buttons = g_pose_ticks[size_t(p)] ? 0xA000 : 0;
+      return true;
+    }
+  }
+  return false;
+}
+
 bool OnPad(PPCContext& ctx, uint8_t* base, uint32_t user, uint16_t buttons, uint8_t lt) {
   if (user > 1) return false;
   constexpr uint16_t kBack = 0x0020, kStart = 0x0010, kLb = 0x0100;

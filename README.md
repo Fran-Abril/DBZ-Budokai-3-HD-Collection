@@ -39,7 +39,7 @@ Copyright (c) 2026 **NovaPowers**. Licencia MIT (ver `LICENSE`).
 
 ## Novedades de la 1.4.5.2
 
-- **Tag Team (beta):** si te sacan del ring y te queda compañero, entra él y el combate sigue; tras un KO el compañero llega volando con el destello de transformación.
+- **Tag Team (beta):** si te sacan del ring y te queda compañero, entra él y el combate sigue; el que entra llega volando y carga ki con la pose del propio juego (también los del ordenador).
 - **Online (beta):** con mods distintos ya no se corta la conexión: el panel dice qué falta y **INSTALAR LO QUE FALTA** lo baja de Nova's Mods. Vuelven la apertura del puerto del router (UPnP) y la IP pública; desde la misma casa se enseña la IP local.
 - **Kit:** ports oficiales (Goku GT, Vegeta GT, Pan, Baby, Janemba, Trunks espada, Gohan del Futuro) recreables con un clic y ajustes estándar por juego; campañas con textos nuevos que se reparten solos (la historia de Freezer ya lo usa).
 
