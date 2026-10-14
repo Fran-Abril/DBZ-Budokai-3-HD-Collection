@@ -27,7 +27,7 @@ nativo en Windows y Linux (Vulkan).
 | Plataforma | Windows / Linux |
 | Motor | Xbox 360 (ReXGlue SDK) |
 | Género | Lucha 3D |
-| Versión | v1.4.5 |
+| Versión | v1.4.5.1 |
 
 Copyright (c) 2026 **NovaPowers**. Licencia MIT (ver `LICENSE`).
 

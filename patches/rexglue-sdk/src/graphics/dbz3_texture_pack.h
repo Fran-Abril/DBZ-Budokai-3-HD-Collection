@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -86,8 +87,8 @@ struct Dbz3TexturePackEntry {
   std::string pack_name;
 };
 
-// Indice de packs activos. Se construye una sola vez (los packs requieren
-// reiniciar, como el volcado), en SEGUNDO PLANO: hasta que termina, active() es
+// Indice de packs activos. Se construye al arrancar y se rehace si cambia la lista de
+// packs (instalar o activar uno en el launcher), en SEGUNDO PLANO: hasta que termina, active() es
 // false y el juego usa las texturas originales; las caches de texturas rehacen lo
 // cargado cuando pasa a true. Lecturas thread-safe en cuanto active() es true.
 class Dbz3TexturePackIndex {
@@ -125,14 +126,24 @@ class Dbz3TexturePackIndex {
   bool IsBroken(uint64_t hash) const;
 
  private:
+  using Map = std::unordered_map<uint64_t, Dbz3TexturePackEntry>;
   Dbz3TexturePackIndex() = default;
   void EnsureInitialized() const;
-  void Build() const;
-  void StartPreload() const;
+  static void Build(const std::string& list, Map& entries);
+  static void StartPreload(const Map& entries);
+  const Map* Entries() const;
 
-  mutable std::atomic<bool> started_{false};
-  mutable std::atomic<bool> ready_{false};   // entries_ solo se lee con esto a true
-  mutable std::unordered_map<uint64_t, Dbz3TexturePackEntry> entries_;
+  // El indice se rehace si cambia la lista de packs (pack instalado desde el launcher en
+  // la misma sesion: antes se quedaba el indice vacio del arranque hasta reiniciar).
+  // Los indices viejos no se liberan: la precarga y las caches guardan punteros a sus
+  // entradas (pocos MB y solo al cambiar la lista).
+  mutable std::mutex check_mutex_;
+  mutable std::string built_list_;           // con check_mutex_
+  mutable bool started_ = false;             // con check_mutex_
+  mutable std::atomic<int64_t> next_check_{0};
+  mutable std::atomic<bool> building_{false};
+  mutable std::atomic<bool> ready_{false};
+  mutable std::atomic<const Map*> map_{nullptr};
 };
 
 // Interruptor en vivo de los packs (menu F1, cvar dbz3_texture_packs_on del

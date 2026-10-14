@@ -148,6 +148,7 @@ rendimiento»**.
 
 | Versión | Fecha | Resumen |
 |---|---|---|
+| v1.4.5.1 | 2026-10-14 | El pack HD instalado desde el launcher se ve al pulsar JUGAR, sin reiniciar | 1.4.3 |
 | v1.4.5 | 2026-10-14 | Pack HD sin tirones (carga en segundo plano, precarga aprendida) y en Nova's Mods, launcher que coloca y protege los mods, buscadores, traducciones IT/DE/FR | 1.4.3 |
 | v1.4.4 | 2026-10-12 | Tag Team y Online (beta) nativos, Nova's Mods, historia de Freezer, selector de transformación (beta), Budokai 2 en el importador | 1.4.3 |
 | v1.4.3 | 2026-10-09 | Definitivas de Budokai 1 adaptadas (Zarbon, Dodoria, Androide 19), Infinite World con movesets propios y modo hiper, copias USA/EUR de los juegos de origen, launcher y Kit más fáciles | 1.4.3 |

@@ -43,13 +43,14 @@
 // descritos en el launcher, interruptor del selector de transformacion (beta).
 // v1.4.5 = pack de texturas HD sin tirones (carga en segundo plano, precarga aprendida) y en Nova's
 // Mods, launcher que coloca y repara los mods solo, buscadores, traducciones IT/DE/FR completas.
+// v1.4.5.1 = el pack HD instalado desde el launcher se ve sin reiniciar el juego.
 #include <windows.h>
 
 #define VERSION_MAJOR 1
 #define VERSION_MINOR 4
 #define VERSION_PATCH 5
-#define VERSION_BUILD 0
-#define DBZ3_VERSION_STR "1.4.5"
+#define VERSION_BUILD 1
+#define DBZ3_VERSION_STR "1.4.5.1"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, VERSION_BUILD

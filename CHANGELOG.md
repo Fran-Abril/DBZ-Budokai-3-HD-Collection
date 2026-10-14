@@ -6,6 +6,9 @@ are summarized at the end; the full history (in Spanish) is in
 
 Downloads: [latest release](../../releases/latest).
 
+## v1.4.5.1 (2026-10-14)
+- Fixed: an HD texture pack installed from the launcher (Nova's Mods, zip or enabling it) was not used until the game was restarted. The pack index is now rebuilt when the list of packs changes, so the pack shows as soon as you press PLAY.
+
 ## v1.4.5 (2026-10-14)
 - HD texture packs (Burst Limit style): images decoded on background threads with alpha-weighted mips already laid out for the GPU; the HD texture is created only once its image is ready (the original is shown meanwhile), single-block upload (row-by-row copies to the upload heap ran at 15 MB/s), pooled upload buffers, 64 MB of new HD textures per frame, texture cache limits from VRAM, RAM budget from free memory (no more paging freezes), learned preload of the textures used in previous sessions, cached pack index (startup 21-63 s -> under 1 s). Worst hitch with a 2.8 GB pack at 3x: 1.1 s -> 0.11 s, including toggling the pack live.
 - Fixed: 1.4.4.5 loaded no texture pack (long-path prefix); x8+ packs; zip installs of big packs; first-run freeze while indexing.

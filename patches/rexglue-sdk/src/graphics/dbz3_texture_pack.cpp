@@ -616,33 +616,72 @@ bool ScanPack(const std::string& dir, std::string& name,
 }  // namespace
 
 void Dbz3TexturePackIndex::EnsureInitialized() const {
-  if (started_.exchange(true)) {
+  // Se llama en cada busqueda: la lista de packs se mira como mucho 2 veces por segundo.
+  const int64_t now = std::chrono::steady_clock::now().time_since_epoch().count();
+  int64_t next = next_check_.load(std::memory_order_relaxed);
+  if (now < next || building_.load(std::memory_order_acquire)) {
     return;
   }
-  // El primer recorrido de un pack recien instalado lee la cabecera de miles de ficheros
-  // (con el antivirus revisando cada uno): 12345 PNG tardaron ~60 s y, en el hilo de la
-  // GPU, la ventana salia como "no responde" (2026-10-13). Se indexa en segundo plano.
-  // ponytail: hilo suelto como la precarga; salir del juego a mitad del indexado no espera.
-  std::thread([this] {
-    const auto t0 = std::chrono::steady_clock::now();
-    Build();
-    ready_.store(true, std::memory_order_release);
-    if (!entries_.empty()) {
-      REXGPU_INFO("dbz3: indice de packs listo en {} ms (hasta ahora, texturas originales)",
-                  std::chrono::duration_cast<std::chrono::milliseconds>(
-                      std::chrono::steady_clock::now() - t0).count());
-    }
-  }).detach();
-}
-
-void Dbz3TexturePackIndex::Build() const {
+  std::unique_lock<std::mutex> lock(check_mutex_, std::try_to_lock);
+  if (!lock.owns_lock()) {
+    return;
+  }
+  next_check_.store(
+      now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::milliseconds(500)).count(),
+      std::memory_order_relaxed);
   // Leer por el REGISTRO por nombre: el launcher (exe) registra esta misma cvar
   // antes que el plugin, asi que el registro del plugin se ignora y su storage
   // local se queda por defecto. La consulta por nombre devuelve el valor real.
   const std::string list = REXCVAR_QUERY(std::string, dbz3_texture_packs);
-  if (list.empty()) {
+  if (started_ && list == built_list_) {
     return;
   }
+  // La cache de texturas se crea al abrir el launcher: con el pack instalado desde Nova's
+  // Mods en esa misma sesion la lista estaba vacia entonces y el pack no se veia hasta
+  // reiniciar (reporte del usuario, 1.4.5). Ahora se rehace: active() pasa a false y las
+  // caches rehacen lo cargado cuando vuelve a true.
+  if (started_) {
+    REXGPU_INFO("dbz3: la lista de packs ha cambiado; se rehace el indice");
+  }
+  started_ = true;
+  built_list_ = list;
+  ready_.store(false, std::memory_order_release);
+  if (list.empty()) {
+    map_.store(nullptr, std::memory_order_release);
+    ready_.store(true, std::memory_order_release);
+    return;
+  }
+  building_.store(true, std::memory_order_release);
+  // El primer recorrido de un pack recien instalado lee la cabecera de miles de ficheros
+  // (con el antivirus revisando cada uno): 12345 PNG tardaron ~60 s y, en el hilo de la
+  // GPU, la ventana salia como "no responde" (2026-10-13). Se indexa en segundo plano.
+  // ponytail: hilo suelto como la precarga; salir del juego a mitad del indexado no espera.
+  std::thread([this, list] {
+    const auto t0 = std::chrono::steady_clock::now();
+    Map* entries = new Map();  // nunca se libera (ver dbz3_texture_pack.h)
+    Build(list, *entries);
+    map_.store(entries, std::memory_order_release);
+    ready_.store(true, std::memory_order_release);
+    building_.store(false, std::memory_order_release);
+    if (!entries->empty()) {
+      REXGPU_INFO("dbz3: indice de packs listo en {} ms (hasta ahora, texturas originales)",
+                  std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - t0).count());
+      StartPreload(*entries);
+    }
+  }).detach();
+}
+
+const Dbz3TexturePackIndex::Map* Dbz3TexturePackIndex::Entries() const {
+  EnsureInitialized();
+  if (!ready_.load(std::memory_order_acquire)) {
+    return nullptr;
+  }
+  return map_.load(std::memory_order_acquire);
+}
+
+void Dbz3TexturePackIndex::Build(const std::string& list, Map& entries_) {
   // Primero se lee cada pack; luego se indexan del MAS PEQUENO al mas grande: si dos
   // packs traen la misma textura gana el pequeno (un pack de idioma o de retoques va
   // encima del pack HD completo, sin depender del orden alfabetico de las carpetas).
@@ -703,29 +742,28 @@ void Dbz3TexturePackIndex::Build() const {
   }
   if (!entries_.empty()) {
     REXGPU_INFO("dbz3: {} pack(s) de texturas, {} texturas en total", pack_count, entries_.size());
-    StartPreload();
   }
 }
 
 bool Dbz3TexturePacksOn() { return rex::cvar::GetFlagByName("dbz3_texture_packs_on") != "false"; }
 
 bool Dbz3TexturePackIndex::active() const {
-  EnsureInitialized();
-  return ready_.load(std::memory_order_acquire) && !entries_.empty();
+  const Map* entries = Entries();
+  return entries != nullptr && !entries->empty();
 }
 
 size_t Dbz3TexturePackIndex::size() const {
-  EnsureInitialized();
-  return ready_.load(std::memory_order_acquire) ? entries_.size() : 0;
+  const Map* entries = Entries();
+  return entries != nullptr ? entries->size() : 0;
 }
 
 const Dbz3TexturePackEntry* Dbz3TexturePackIndex::Find(uint64_t hash) const {
-  EnsureInitialized();
-  if (!ready_.load(std::memory_order_acquire)) {
+  const Map* entries = Entries();
+  if (entries == nullptr) {
     return nullptr;
   }
-  auto it = entries_.find(hash);
-  return it != entries_.end() ? &it->second : nullptr;
+  auto it = entries->find(hash);
+  return it != entries->end() ? &it->second : nullptr;
 }
 
 // --- cache de imagenes decodificadas + hilos de fondo (como Burst Limit 4.2) ------
@@ -1180,7 +1218,7 @@ bool Dbz3TexturePackIndex::IsDecoded(uint64_t hash) const { return CacheHas(hash
 
 bool Dbz3TexturePackIndex::IsBroken(uint64_t hash) const { return CacheFailed(hash); }
 
-void Dbz3TexturePackIndex::StartPreload() const {
+void Dbz3TexturePackIndex::StartPreload(const Map& entries_) {
   const uint64_t budget = CacheBudget();
   uint64_t all = 0;
   for (const auto& [hash, e] : entries_) {
