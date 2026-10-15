@@ -743,7 +743,7 @@ bool PrepareNamesMod(const std::vector<std::pair<int, uint32_t>>& banks, const s
   uint32_t count = 0;
   for (const auto& [n, p] : afss) {
     stamp += "|" + n + ":" + std::to_string(fs::file_size(p, ec)) + ":" +
-             std::to_string(fs::last_write_time(p, ec).time_since_epoch().count());
+             std::to_string(static_cast<long long>(fs::last_write_time(p, ec).time_since_epoch().count()));   // Linux: __int128
     count = std::max(count, AfsCount(p));
   }
   for (const auto& [id, fid] : banks) stamp += "|" + std::to_string(id) + ":" + std::to_string(fid);
