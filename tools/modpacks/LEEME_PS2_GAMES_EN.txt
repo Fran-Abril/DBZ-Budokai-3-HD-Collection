@@ -20,3 +20,7 @@ ISOs are read as they are: no need to extract them.
 Tested with: Budokai 1 and 2 (Europe), Infinite World, Shin Budokai and Another
 Road (USA). Other regions are found the same way (by content) but are not tested
 yet: if one does not work, tell us on Discord.
+
+HUB MODES: with the Budokai 1 ISO here, the HUB in the main menu (page 2) unlocks
+"Mr. Satan's Legend": its challengers, talks and pictures are read from your copy
+while playing (never copied or shared). Without the ISO the entry is greyed out.

@@ -41,6 +41,8 @@ bool FormSelectorEnabled();
 uint16_t TeamPickFilter(uint16_t real, int user);
 // Personaje confirmado en la rueda (select_ext.cpp): true si era un miembro del equipo.
 bool OnSelectPicked(int player, int id);
+// Via nativa: el lado aun no tiene el equipo completo (el miembro elegido vuelve a la rueda, tagteam.cpp).
+bool TeamWantsMore(int side);
 // Menu de capsulas del juego tras confirmar (select_ext.cpp): elegido o atras, opcion (0 Normal,
 // 1 Custom) y la lista Custom de la casilla (7 IDs, 0xFFFF = hueco).
 void OnCapsuleChoice(int player, bool chosen, int option, const uint16_t* custom);

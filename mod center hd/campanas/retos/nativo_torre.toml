@@ -1,0 +1,49 @@
+# Reto nativo (torre) generado por modos_reto.py. Lo lee el juego en user_data/dbz3/modos/torre.toml.
+# vida = maxima del jugador; vida_inicial = la del primer combate (0 = la maxima); arrastra_vida =
+# la vida que le queda pasa al siguiente (+ recupera); pausa = espera a la pantalla de resultados del HUB.
+# Por combate: rival (ID 0-63), traje, escenario (0-16) y vida del rival (0 = la normal, 3000).
+vida = 3000
+vida_inicial = 0
+arrastra_vida = false
+recupera = 0
+pausa = false
+
+[[combate]]
+rival = 42
+escenario = 0
+vida = 2000
+
+[[combate]]
+rival = 18
+escenario = 1
+vida = 2300
+
+[[combate]]
+rival = 19
+escenario = 2
+vida = 2600
+
+[[combate]]
+rival = 21
+escenario = 3
+vida = 2900
+
+[[combate]]
+rival = 20
+escenario = 4
+vida = 3200
+
+[[combate]]
+rival = 27
+escenario = 5
+vida = 3500
+
+[[combate]]
+rival = 33
+escenario = 6
+vida = 3800
+
+[[combate]]
+rival = 36
+escenario = 7
+vida = 4100

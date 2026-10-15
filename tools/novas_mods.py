@@ -16,6 +16,12 @@
       trozos de 1900 MiB (GitHub: < 2 GiB por asset) y subido como assets de esa release del
       mismo repo privado. El catalogo lleva `partes = [ids]` y el launcher los baja y une.
       `autor` y `enlaces = ["https://..."]` salen en la ficha con botones clicables.
+
+      Mods que necesitan un exe nuevo (`exe_nuevo = true`): su zip va a mods/nuevos/ y el catalogo lo da como
+      `archivo` en vez de `zip`, asi los launchers de antes (que solo leen `zip`) no los ven. Para tener las dos
+      versiones de un mod, dos entradas con el mismo id: la de antes con `congelado = true` (no se vuelve a
+      empaquetar: se queda su zip publicado) y despues la nueva con `exe_nuevo = true` (el launcher nuevo se queda
+      con la ultima entrada de cada id).
 """
 import argparse
 import getpass
@@ -130,11 +136,15 @@ def cmd_publicar(a):
         if not os.path.isdir(src) and os.path.isdir(src + ".disabled"):
             src += ".disabled"
         big = "release" in m
-        zrel = "mods/%s.zip" % mid
+        nuevo = m.get("exe_nuevo", False)
+        zrel = ("mods/nuevos/%s.zip" if nuevo else "mods/%s.zip") % mid
         zpath = os.path.join(BIG if big else WORK, zrel)
         os.makedirs(os.path.dirname(zpath), exist_ok=True)
         ids_file = zpath + ".ids.json"    # ids de los assets subidos (para regenerar el catalogo)
-        if not a.solo or mid in a.solo:
+        if m.get("congelado"):
+            if not os.path.isfile(zpath):
+                sys.exit("El mod congelado %s no tiene su zip publicado en %s" % (mid, zpath))
+        elif not a.solo or mid in a.solo:
             if not os.path.isdir(src):
                 sys.exit("No encuentro el mod %s en %s" % (mid, a.mods))
             pack(src, mid, m["version"], m["nombre_es"], zpath, m.get("autor"))
@@ -150,7 +160,7 @@ def cmd_publicar(a):
         if big:
             out.append("partes = [%s]" % ", ".join(str(i) for i in json.load(open(ids_file))))
         else:
-            out.append("zip = " + toml_str(zrel))
+            out.append(("archivo = " if nuevo else "zip = ") + toml_str(zrel))
         out.append("size = %d" % os.path.getsize(zpath))
         if "autor" in m:
             out.append("autor = " + toml_str(m["autor"]))

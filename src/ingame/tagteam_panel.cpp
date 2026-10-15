@@ -1,7 +1,8 @@
 // dbz3 - Pantalla TAG TEAM dentro del juego (X en el menu principal). Se parece al menu de
 // Duelo: cinta con el titulo, marco con filas, anfitriones y bocadillo que explica la fila.
-//   - 1P VS COM / 1P VS 2P / COM VS COM (+ formato 2 VS 1, 2 VS 2, 3 VS 3): lleva al juego
-//     (piloto de menus) a esa opcion del Duelo; los miembros se eligen en la rueda nativa.
+//   - 1P VS COM / 1P VS 2P / COM VS COM (+ formato 2 VS 1, 2 VS 2, 3 VS 3): abre la rueda del
+//     juego en esa opcion del Duelo (US: via nativa, tagteam.cpp NativeEnter; EU: piloto de menus);
+//     los miembros se eligen en la rueda nativa.
 // El combate lo lleva src/tagteam.cpp. El dibujo con aspecto del juego, game_style.cpp.
 #include "tagteam_panel.h"
 #include "../form_selection_state.h"
@@ -15,11 +16,19 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <rex/input/input_system.h>
+#include <rex/ui/image_decode.h>
+#include <rex/ui/immediate_drawer.h>
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
@@ -27,11 +36,13 @@
 #include "../guest_region.h"
 #include "../launcher/i18n.h"
 #include "../launcher/launcher_state.h"
+#include "../mods.h"
 #include "../launcher/ui_kit.h"
 #include "../roster_ext.h"
 #include "../tagteam.h"
 #include "../net/netplay.h"
 #include "game_style.h"
+#include "hub_panel.h"
 #include "menu_pilot.h"
 #include "online_panel.h"
 
@@ -45,6 +56,7 @@ int dbz3_select_capsule_option(int k);
 
 namespace dbz3 {
 bool GameDimmed();
+bool OverlayOpen();
 }
 
 REXCVAR_DEFINE_BOOL(dbz3_form_select_enabled, true, "DBZ3/Mods", "LT/RT starting-form selector at character select (beta)");
@@ -79,6 +91,7 @@ std::array<bool, 2> g_await{};        // miembro confirmado esperando su menu de
 std::array<bool, 2> g_converted{};    // su A se convirtio en Y (el "atras" que llega es la eleccion)
 std::array<bool, 2> g_eat_a{};        // A comida hasta soltarla (ya convertida)
 std::array<int, 2> g_choice{};        // opcion de capsulas del ultimo miembro: 0 Normal, 1 Custom
+std::array<bool, 2> g_skip_caps{};    // via nativa: repetido, sus capsulas no se apuntan
 std::array<uint16_t, 2> g_prev{};
 std::array<std::atomic<int>, 2> g_start_form{};     // forma inicial elegida con LT/RT por lado
 std::array<std::atomic<bool>, 2> g_form_dirty{};    // la vista previa de la rueda se rehace
@@ -108,28 +121,105 @@ int Need(int side) {
   }
 }
 
+// Nombres de los personajes del juego tal como los rotula su propia rueda en cada idioma (texturas 26-64 del #AZT de
+// la entrada 2027 de data_usi / data_eng / spn / fra / ger / ita, leidas el 2026-10-15; las de EU en ingles son las
+// mismas que las de US). Antes eran nombres nuestros ("Krilin", "Freezer", "Goku (nino)"...) y en frances, aleman o
+// italiano salian en ingles.
 struct Fighter {
   int id;
-  const char* es;
   const char* en;
+  const char* es;
+  const char* fr;
+  const char* de;
+  const char* it;
 };
 constexpr Fighter kFighters[] = {
-    {0, "Goku", "Goku"}, {1, "Goku (nino)", "Kid Goku"}, {2, "Gohan (nino)", "Kid Gohan"},
-    {3, "Gohan (adolescente)", "Teen Gohan"}, {4, "Gohan", "Gohan"}, {5, "Gran Saiyaman", "Great Saiyaman"},
-    {6, "Goten", "Goten"}, {7, "Vegeta", "Vegeta"}, {8, "Trunks", "Trunks"}, {9, "Trunks (nino)", "Kid Trunks"},
-    {10, "Krilin", "Krillin"}, {11, "Piccolo", "Piccolo"}, {12, "Ten Shin Han", "Tien"}, {13, "Yamcha", "Yamcha"},
-    {14, "Mr. Satan", "Hercule"}, {15, "Videl", "Videl"}, {16, "Kaio-shin", "Supreme Kai"}, {17, "Uub", "Uub"},
-    {18, "Raditz", "Raditz"}, {19, "Nappa", "Nappa"}, {20, "Ginyu", "Ginyu"}, {21, "Recoome", "Recoome"},
-    {27, "Freezer", "Frieza"}, {28, "Androide 16", "Android 16"}, {29, "Androide 17", "Android 17"},
-    {30, "Androide 18", "Android 18"}, {32, "Dr. Gero", "Dr. Gero"}, {33, "Cell", "Cell"},
-    {34, "Majin Buu", "Majin Buu"}, {35, "Super Buu", "Super Buu"}, {36, "Kid Buu", "Kid Buu"},
-    {37, "Dabura", "Dabura"}, {38, "Cooler", "Cooler"}, {39, "Bardock", "Bardock"}, {40, "Broly", "Broly"},
-    {41, "Omega Shenron", "Omega Shenron"}, {42, "Saibaman", "Saibaman"}, {43, "Cell Jr.", "Cell Jr."}};
+    {0, "Goku", "Goku", "Goku", "Goku", "Goku"},
+    {1, "Kid Goku", "Chico Goku", "Goku petit", "Kid Goku", "Goku bambino"},
+    {2, "Kid Gohan", "Chico Gohan", "Gohan petit", "Kid Gohan", "Gohan bambino"},
+    {3, "Teen Gohan", "Joven Gohan", "Gohan ado", "Teen Gohan", "Gohan ragazzo"},
+    {4, "Gohan", "Gohan", "Gohan", "Gohan", "Gohan"},
+    {5, "Great Saiyaman", "Gt. Saiyaman", "Gt.Saiyaman", "Gt.Saiyaman", "Gt.Saiyaman"},
+    {6, "Goten", "Goten", "Goten", "Goten", "Goten"},
+    {7, "Vegeta", "Vegeta", "Vegeta", "Vegeta", "Vegeta"},
+    {8, "Trunks", "Trunks", "Trunks", "Trunks", "Trunks"},
+    {9, "Kid Trunks", "Chico Trunks", "Trunks petit", "Kid Trunks", "Trunks bambino"},
+    {10, "Krillin", "Krillin", "Krillin", "Krillin", "Krillin"},
+    {11, "Piccolo", "Piccolo", "Piccolo", "Piccolo", "Piccolo"},
+    {12, "Tien", "Tenshinhan", "Tenshinhan", "Tenshinhan", "Tenshinhan"},
+    {13, "Yamcha", "Yamcha", "Yamcha", "Yamcha", "Yamcha"},
+    {14, "Hercule", "Mr. Satan", "Mr. Satan", "Mr. Satan", "Mr. Satan"},
+    {15, "Videl", "Videl", "Videl", "Videl", "Videl"},
+    {16, "Supreme Kai", "Kaiyoshin", "Kaïo Shin", "Kaioshin", "Kaiohshin"},
+    {17, "Uub", "Ub", "Uubu", "Uubu", "Ub"},
+    {18, "Raditz", "Raditz", "Radditz", "Radditz", "Radditz"},
+    {19, "Nappa", "Nappa", "Nappa", "Nappa", "Nappa"},
+    {20, "Captain Ginyu", "Ginyu", "Ginyu", "Ginyu", "Ginyu"},
+    {21, "Recoome", "Recoome", "Recoome", "Recoome", "Recoome"},
+    {27, "Frieza", "Frieza", "Frieza", "Frieza", "Frieza"},
+    {28, "Android #16", "Androide n°16", "C-16", "Cyborg Nr.16", "Androide N°16"},
+    {29, "Android #17", "Androide n°17", "C-17", "Cyborg Nr.17", "Androide N°17"},
+    {30, "Android #18", "Androide n°18", "C-18", "Cyborg Nr.18", "Androide N°18"},
+    {32, "Dr. Gero", "Dr. Gero", "Dr. Gero", "Gero", "Gero"},
+    {33, "Cell", "Cell", "Cell", "Cell", "Cell"},
+    {34, "Majin Buu", "Monstruo Bu", "Buu", "Majin Buu", "Majin Bu"},
+    {35, "Super Buu", "Súper Bu", "Super Buu", "Super Buu", "Super Bu"},
+    {36, "Kid Buu", "Pequeño Bu", "Buu petit", "Kid Buu", "Kid Bu"},
+    {37, "Dabura", "Dabra", "Dabura", "Dabura", "Darbula"},
+    {38, "Cooler", "Cooler", "Cooler", "Cooler", "Cooler"},
+    {39, "Bardock", "Bardock", "Bardock", "Bardock", "Bardak"},
+    {40, "Broly", "Broly", "Broly", "Broly", "Broly"},
+    {41, "Omega Shenron", "Súper Yi-Shin-Long", "LiShenron", "Ii Shenlong", "Super Ishinlon"},
+    {42, "Saibamen", "Saibaiman", "Saibaiman", "Saibaiman", "Saibaiman"},
+    {43, "Cell Jr.", "Cell Jr.", "Cell Jr.", "Cell Jr.", "Cell Jr."}};
+
+// Personajes anadidos por mods (roster_build.py genera mods/_roster/roster.toml): cada [[personaje]] va tras
+// un comentario "# <Nombre> (mod <carpeta>)" y su "id = N". De ahi el nombre tal cual lo escribio su autor y
+// la carpeta del mod, cuya ui/_vista/hud.png es su cara del marcador (la misma que pone en el juego). No lee
+// memoria del juego: vale igual en US y EU. Hilo de dibujo; se relee si cambia el fichero.
+struct PortInfo {
+  std::string name, folder;
+};
+const std::map<int, PortInfo>& PortRoster() {
+  static std::map<int, PortInfo> roster;
+  static std::filesystem::file_time_type stamp{};
+  static double checked = -10;
+  if (Now() - checked < 2.0) return roster;
+  checked = Now();
+  std::error_code ec;
+  const auto file = dbz3::ModsRoot() / "_roster" / "roster.toml";
+  const auto t = std::filesystem::last_write_time(file, ec);
+  if (ec) {
+    roster.clear();
+    return roster;
+  }
+  if (t == stamp) return roster;
+  stamp = t;
+  roster.clear();
+  std::ifstream in(file);
+  PortInfo pending;
+  for (std::string line; std::getline(in, line);) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.rfind("# ", 0) == 0) {
+      const size_t at = line.rfind(" (mod ");
+      if (at != std::string::npos && line.size() > at + 7 && line.back() == ')') {
+        pending = {line.substr(2, at - 2), line.substr(at + 6, line.size() - at - 7)};
+      }
+    } else if (line.rfind("id = ", 0) == 0 && !pending.folder.empty()) {
+      roster[std::atoi(line.c_str() + 5)] = pending;
+      pending = {};
+    }
+  }
+  return roster;
+}
 
 std::string Name(int id) {
   for (const auto& f : kFighters) {
-    if (f.id == id) return T::T(f.es, f.en);
+    if (f.id != id) continue;
+    const std::string lang = T::LangCode();   // el idioma de los textos del juego (dbz3_language)
+    return lang == "es" ? f.es : lang == "fr" ? f.fr : lang == "de" ? f.de : lang == "it" ? f.it : f.en;
   }
+  if (const auto& ports = PortRoster(); ports.count(id) && !ports.at(id).name.empty()) return ports.at(id).name;
   std::string n = dbz3::roster::InternalName(uint32_t(std::max(id, 0)));
   for (size_t i = 1; i < n.size(); ++i) n[i] = char(std::tolower(uint8_t(n[i])));
   if (!n.empty()) return n;
@@ -138,8 +228,40 @@ std::string Name(int id) {
   return buf;
 }
 
-// Cara del marcador del personaje (ingame_ui/caras/<ID>.png, tools/ingame_ui.py). Hilo de dibujo.
-ImTextureID FaceOf(int id) { return S::Img(("caras/" + std::to_string(id)).c_str()).tex; }
+// Cara del marcador de un personaje de mod: ui/_vista/hud.png de su mod (o su icono de la rueda).
+ImTextureID PortFace(int id) {
+  static std::map<int, std::unique_ptr<rex::ui::ImmediateTexture>> cache;
+  static std::map<int, std::string> tried;   // carpeta probada (si cambia el roster se prueba otra vez)
+  const auto& ports = PortRoster();
+  const auto it = ports.find(id);
+  if (it == ports.end()) return {};
+  auto& tex = cache[id];
+  if (tried[id] == it->second.folder) return tex ? reinterpret_cast<ImTextureID>(tex.get()) : ImTextureID{};
+  auto* drawer = dbz3::launcher::PreviewDrawer();
+  if (!drawer) return {};
+  tried[id] = it->second.folder;
+  tex.reset();
+  const auto dir = dbz3::ModsRoot() / it->second.folder / "ui" / "_vista";
+  for (const char* file : {"hud.png", "icono.png"}) {
+    std::ifstream in(dir / file, std::ios::binary);
+    if (!in) continue;
+    const std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    int w = 0, h = 0;
+    const std::vector<uint8_t> px = rex::ui::DecodeImageRGBA(data.data(), data.size(), w, h);
+    if (px.empty()) continue;
+    tex = drawer->CreateTexture(uint32_t(w), uint32_t(h), rex::ui::ImmediateTextureFilter::kLinear, false, px.data());
+    REXLOG_INFO("dbz3 tag: cara del id {} desde {} ({}x{})", id, (dir / file).string(), w, h);
+    break;
+  }
+  return tex ? reinterpret_cast<ImTextureID>(tex.get()) : ImTextureID{};
+}
+
+// Cara del marcador del personaje: la del juego (native_ui, caras/<ID>) y, para los de mods (IDs 22-26, 31 y
+// 44-63, que antes salian con una letra), la de su mod. Hilo de dibujo.
+ImTextureID FaceOf(int id) {
+  if (const ImTextureID t = S::Img(("caras/" + std::to_string(id)).c_str()).tex) return t;
+  return PortFace(id);
+}
 
 rex::input::InputSystem* Input() {
   auto* rt = rex::Runtime::instance();
@@ -200,13 +322,21 @@ void StartGate(Gate g) {
   g_gate = g;
 }
 
+// Entrada nativa (US, tagteam.cpp NativeEnter): el menu principal sale con su sonido y su fundido; la
+// pantalla TAG TEAM se queda encima y funde a negro a la vez que el juego, hasta que deja la pantalla 5.
+std::atomic<bool> g_entering{false};
+std::atomic<bool> g_native_path{false};   // esta eleccion entro por la via nativa (sin piloto)
+double g_entering_at = 0;
+constexpr double kGameFade = 10.0 / 60.0;  // sub_821D27B8(10): 10 fotogramas
+
 }  // namespace
 
-bool TagTeamGate() { return g_gate.load() != Gate::kNone; }
+bool TagTeamGate() { return g_gate.load() != Gate::kNone || g_entering.load(); }
 
 std::atomic<double> g_opened_at{0};
 // el A que abre la pantalla (desde el menu principal) seguia pulsado y elegia 1P VS COM solo
 void TagTeamOpen() {
+  if (dbz3::OverlayOpen()) return;   // X con el launcher o el menu rapido encima: no se abre detras
   g_opened_at = Now();
   g_wanted = true;
 }
@@ -225,7 +355,11 @@ bool OnSelectPicked(int player, int id) {
   if (std::find(picks.begin(), picks.end(), id) != picks.end()) {   // como Tenkaichi 3: sin repetir
     g_notice = {player, Event::kRepeated, Now()};
     REXLOG_INFO("dbz3 tag: lado {} ya tiene el id {} (no se repite)", player + 1, id);
-    dbz3::ingame::pilot::Run({dbz3::ingame::pilot::PressUntilBrowse(kY, player, PilotUser(player))});
+    if (g_native_path.load()) {   // su menu de capsulas sigue y al elegir vuelve a la rueda sin sumar (TeamWantsMore)
+      g_skip_caps[size_t(player)] = true;
+    } else {
+      dbz3::ingame::pilot::Run({dbz3::ingame::pilot::PressUntilBrowse(kY, player, PilotUser(player))});
+    }
     return true;
   }
   picks.push_back(id);
@@ -243,6 +377,12 @@ bool OnSelectPicked(int player, int id) {
   // se apunta y vuelve a la rueda (TeamPickFilter), a por el siguiente miembro
   g_await[size_t(player)] = true;
   return true;
+}
+
+bool TeamWantsMore(int side) {
+  if (!g_team_mode.load() || !g_native_path.load() || side < 0 || side > 1) return false;
+  std::lock_guard<std::mutex> lock(g_mu);
+  return !g_done[size_t(side)] && !g_picks[size_t(side)].empty();
 }
 
 // Menu de capsulas del juego tras confirmar (select_ext.cpp, sub_8217CB10): elegido o atras, con la
@@ -266,16 +406,19 @@ void OnCapsuleChoice(int player, bool chosen, int option, const uint16_t* custom
   const bool await = g_await[size_t(player)], converted = g_converted[size_t(player)];
   g_await[size_t(player)] = false;
   g_converted[size_t(player)] = false;
+  if (std::exchange(g_skip_caps[size_t(player)], false)) return;   // repetido: no entra
   if (!chosen && !converted) {   // atras de verdad en el menu de capsulas: ese miembro no entra
-    if (await && !picks.empty()) {
+    // (el ultimo tambien: el juego vuelve a la rueda y el equipo deja de estar completo)
+    if ((await || g_done[size_t(player)]) && !picks.empty()) {
       forms::ForgetMember(player, picks.back());
       picks.pop_back();
+      g_done[size_t(player)] = false;
       g_notice = {player, Event::kRemoved, Now()};
     }
     return;
   }
   if (picks.empty()) return;
-  option = g_choice[size_t(player)];
+  if (!g_native_path.load()) option = g_choice[size_t(player)];   // nativo: la opcion que eligio el juego
   confirm_form(option);
   if (option == 1) {   // Custom: las de la casilla, sin huecos (n + 7, como char96 +80)
     uint16_t caps[8] = {};
@@ -313,7 +456,7 @@ uint16_t TeamPickFilter(uint16_t real, int user) {
     }
     return uint16_t((real & ~kA) | (menu == k ? kY : 0));
   }
-  if (menu >= 0 && (pressed & kA)) {
+  if (menu >= 0 && (pressed & kA) && !g_native_path.load()) {   // via nativa: lo hace tagteam.cpp (sub_8217CF60)
     const int opt = dbz3_select_capsule_option(menu);
     if (opt == 0 || opt == 1) {
       g_choice[size_t(menu)] = opt;
@@ -511,8 +654,15 @@ void TagTeamPanel::DrawMenu(ImGuiIO& io, uint16_t pressed) {
     dbz3::tag::SetComSide(1, row_ != 1);
     g_team_mode = true;
     g_after_battle = false;
-    StartGate(Gate::kToWheel);
-    if (PilotReady()) PilotToDuel(row_ == 0 ? 0 : row_ == 1 ? 1 : 3);   // Duelo: 1P VS COM, 1P VS 2P, COM VS 2P, COM VS COM
+    const int duel_row = row_ == 0 ? 0 : row_ == 1 ? 1 : 3;   // Duelo: 1P VS COM, 1P VS 2P, COM VS 2P, COM VS COM
+    g_native_path = dbz3::tag::NativeEnter(duel_row);
+    if (g_native_path.load()) {
+      g_entering_at = Now();
+      g_entering = true;
+    } else {   // EU: el piloto recorre los menus por debajo del negro
+      StartGate(Gate::kToWheel);
+      if (PilotReady()) PilotToDuel(duel_row);
+    }
   }
 
   // Como el Duelo: fondo del juego, cinta con el titulo, marco con las filas del juego y los
@@ -581,9 +731,16 @@ void TagTeamPanel::DrawPicking(ImGuiIO& io) {
   const int mode = g_mode.load();
   const int cur = mode == 1 ? -1 : (done[0] ? 1 : 0);
   const float since = float(Now() - notice.at);
+  // la bandeja "Custom Tray" de Edit Skills (abierta de verdad, no solo resaltada: WheelTray) y las pantallas 5-7
+  // tapan esa mitad: ni tira ni ayuda encima de ellas. En la EU (sin WheelTray) se sigue ocultando al resaltarla.
+  auto skills_open = [](int k) {
+    if (dbz3::tag::WheelMenu(k) >= 5 || dbz3::tag::WheelTray(k)) return true;
+    return dbz3::g_guest_eu && dbz3_select_capsule_option(k) == 2;
+  };
+  const bool skills = skills_open(0) || skills_open(1);
   for (int side = 0; side < 2; ++side) {
     const int need = Need(side);
-    if (need < 2) continue;
+    if (need < 2 || skills_open(side)) continue;
     std::vector<std::string> names;
     std::vector<ImTextureID> faces;
     for (int id : picks[size_t(side)]) {
@@ -619,38 +776,95 @@ void TagTeamPanel::DrawPicking(ImGuiIO& io) {
   } else if (cur < 0) {
     who = T::T("Cada jugador elige su equipo", "Each player picks a team");
   }
+  if (skills) return;
   if (!who.empty()) S::MenuText(dl, a.At(600, 836), 30 * a.s, who.c_str(), true, false);
   S::HelpLine(dl, a.At(600, 878), 34 * a.s,
               {{"A", T::T("Anadir", "Add")}, {"Y", T::T("Quitar el ultimo", "Remove last")}});
 }
 
+// Ficha de un compañero con el marco propio (assets_propios/png/tagteam -> res/ingame_ui/tt_*.png; 864x132 =
+// 3x de 288x44, el origen p0 de la ficha cae en (14,2) del marco). Por debajo la cara del marcador del juego
+// (ventana 0..64 x 1..39) y por encima el nombre, la vida (surco 70..248 x 25..34), el boton y el aviso de
+// relevo. Sin los PNG, false (se dibuja la ficha de game_style).
+bool NativeCard(ImDrawList* dl, ImVec2 p0, float s, bool mirror, int id, float hp, bool down, const char* button,
+                int swap, float t) {
+  const S::Pic frame = S::Img(down ? "tt_ficha_ko" : "tt_ficha");
+  if (!frame) return false;
+  auto X = [&](float dx) { return mirror ? p0.x - dx * s : p0.x + dx * s; };
+  auto Box = [&](float x0, float y0, float x1, float y1, ImVec2* a, ImVec2* b) {
+    *a = ImVec2(std::min(X(x0), X(x1)), p0.y + y0 * s);
+    *b = ImVec2(std::max(X(x0), X(x1)), p0.y + y1 * s);
+  };
+  ImVec2 a, b;
+  if (const ImTextureID face = FaceOf(id)) {   // recorte 1.6:1 de la cara de 192x120, como la ficha dibujada
+    Box(0, 1, 64, 39, &a, &b);
+    dl->AddImage(face, a, b, ImVec2(mirror ? 0.80f : 0.05f, 0.0f), ImVec2(mirror ? 0.05f : 0.80f, 0.75f),
+                 down ? IM_COL32(110, 110, 120, 255) : IM_COL32_WHITE);
+  }
+  Box(-14, -2, 274, 42, &a, &b);
+  S::DrawPic(dl, frame, a, b, ImVec4(0, 0, 0, 0), IM_COL32_WHITE, mirror);
+  Box(70, 25, 248, 34, &a, &b);
+  dl->AddRectFilled(a, b, IM_COL32(10, 15, 30, 255));
+  if (down) {
+    S::MenuText(dl, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f), 16 * s, "KO", false, true);
+  } else {
+    const float len = (b.x - a.x) * std::clamp(hp, 0.0f, 1.0f);
+    const ImVec2 f0 = mirror ? ImVec2(b.x - len, a.y) : a, f1 = mirror ? b : ImVec2(a.x + len, b.y);
+    const ImU32 col = hp > 0.5f ? IM_COL32(70, 230, 60, 255) : hp > 0.25f ? IM_COL32(240, 210, 40, 255)
+                                                                         : IM_COL32(240, 70, 40, 255);
+    dl->AddRectFilledMultiColor(f0, f1, col, col, IM_COL32(20, 110, 20, 255), IM_COL32(20, 110, 20, 255));
+  }
+  Box(70, 2, 248, 23, &a, &b);
+  S::MenuText(dl, ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f), 19 * s, Name(id).c_str(), !down, down);
+  float x = 280;   // fuera de la ficha: aviso de relevo y boton
+  if (swap) {
+    const S::Pic icon = S::Img(swap > 0 ? "tt_swap_listo" : "tt_swap_espera");
+    if (icon) {
+      const float alpha = swap > 0 ? 0.6f + 0.4f * std::sin(t * 6.0f) : 0.8f;
+      Box(x, 0, x + 40, 40, &a, &b);
+      S::DrawPic(dl, icon, a, b, ImVec4(0, 0, 0, 0), IM_COL32(255, 255, 255, int(alpha * 255)));
+      x += 44;
+    }
+  }
+  if (button && !down) {
+    const float gh = 34 * s, gw = S::Glyph(nullptr, button, ImVec2(), gh);
+    S::Glyph(dl, button, ImVec2(mirror ? X(x) - gw : X(x), p0.y + 20 * s), gh);
+  }
+  return true;
+}
+
 // En combate: fichas de los compañeros bajo el marcador de cada jugador (P1 izquierda, P2
-// derecha). El marcador del juego ocupa x 15..540 / 660..1185, y 50..160 del area 4:3.
+// derecha). El marcador del juego ocupa x 15..540 / 660..1185, y 50..160 del area 4:3. Solo con el
+// marcador a la vista (no en la presentacion ni el READY).
 void DrawTeamHud(ImGuiIO& io) {
   const S::Area a = S::GameArea(io);
   auto* dl = ImGui::GetForegroundDrawList();
   const float t = float(ImGui::GetTime());
   for (int p = 0; p < 2; ++p) {
     const dbz3::tag::HudSide h = dbz3::tag::Hud(p);
-    if (h.n < 2) continue;
+    if (h.n < 2 || !h.shown) continue;
     float y = 168;
     int alive_seen = 0;
     for (int s = 1; s < h.n; ++s) {   // en el orden del relevo
       const int k = (h.active + s) % h.n;
       const char* button = nullptr;
+      const bool next = !h.down[k] && alive_seen == 0;   // el que entra con SELECT
       if (!h.down[k]) button = alive_seen++ == 0 ? "BACK" : "BACK+LB";   // SELECT del mando = BACK
       const ImVec2 p0 = p == 0 ? a.At(40, y) : a.At(1160, y);
-      // SELECT rechazado (no libre, enfriamiento, sin pelea): la ficha parpadea en gris medio segundo
-      const bool grey = h.down[k] || (h.refused && std::fmod(t * 8.0f, 2.0f) < 1.0f);
-      S::PartnerCard(dl, p0, a.s, p == 1, Name(h.ids[k]).c_str(), FaceOf(h.ids[k]), h.hp[k], grey, button,
-                     h.switching && s == 1, t);
+      // SELECT rechazado (no libre, enfriamiento, sin pelea): espera; si no, listo
+      const int swap = !next ? 0 : (h.refused || h.switching) ? -1 : 1;
+      if (!NativeCard(dl, p0, a.s, p == 1, h.ids[k], h.hp[k], h.down[k], button, swap, t)) {
+        const bool grey = h.down[k] || (h.refused && std::fmod(t * 8.0f, 2.0f) < 1.0f);
+        S::PartnerCard(dl, p0, a.s, p == 1, Name(h.ids[k]).c_str(), FaceOf(h.ids[k]), h.hp[k], grey, button,
+                       h.switching && s == 1, t);
+      }
       y += 48;
     }
   }
 }
 
 void TagTeamPanel::OnDraw(ImGuiIO& io) {
-  if (dbz3::GameDimmed()) return;   // fuera de la ventana: solo la pantalla oscura del juego
+  if (dbz3::GameDimmed() || dbz3::OverlayOpen()) return;   // fuera de la ventana o launcher encima
   const bool battle = dbz3::tag::InBattle();
   if (battle || !dbz3_select_live()) forms::FlushPreferences();
   const auto preference_error = forms::PreferenceError();
@@ -662,8 +876,9 @@ void TagTeamPanel::OnDraw(ImGuiIO& io) {
   if (g_team_mode.load()) {
     if (battle) {
       g_after_battle = true;
-    } else if (GameScreen() == kMainScreen && !dbz3::ingame::pilot::Busy()) {
+    } else if (GameScreen() == kMainScreen && !dbz3::ingame::pilot::Busy() && !g_entering.load()) {
       g_team_mode = false;                 // fuera del modo Tag Team: el Duelo vuelve a ser normal
+      dbz3::tag::NativeEnd();
       dbz3::tag::ClearDynamicTeams();
       dbz3::tag::SetComSide(0, false);
       dbz3::tag::SetComSide(1, false);
@@ -682,7 +897,12 @@ void TagTeamPanel::OnDraw(ImGuiIO& io) {
     g_start_form[0] = 0;
     g_start_form[1] = 0;
   }
-  const bool show = g_wanted.load() && !battle && !dbz3::ingame::pilot::Busy();
+  // la pantalla HUB abierta: TAG TEAM no se pinta encima; una peticion que llega con ella abierta (X en el menu
+  // principal) se descarta. La del propio HUB cierra antes su pantalla (hub_menu.cpp, Launch), de ahi el margen.
+  const auto hub = dbz3::hub::Snapshot();
+  const bool hub_screen = hub.menu && hub.open;   // (X no la cierra: sigue abierta detras, 'other')
+  if (hub_screen && g_wanted.load() && Now() - g_opened_at.load() > 0.15) g_wanted = false;
+  const bool show = g_wanted.load() && !battle && !dbz3::ingame::pilot::Busy() && !hub_screen;
   auto* in = Input();
   if (show != blocked_ && in) {
     if (show) in->AddUIInputBlocker(); else in->RemoveUIInputBlocker();
@@ -691,11 +911,21 @@ void TagTeamPanel::OnDraw(ImGuiIO& io) {
   if (show && !shown_) wait_release_ = true;
   shown_ = show;
   if (show) DrawMenu(io, Pad());
+  if (g_entering.load()) {   // via nativa: TAG TEAM funde a negro con el juego mientras su menu sale
+    const double age = Now() - g_entering_at;
+    if (GameScreen() != kMainScreen || age > 5.0) {
+      g_entering = false;
+    } else if (!show) {
+      DrawMenu(io, 0);
+      const float alpha = std::clamp(float(age / kGameFade), 0.0f, 1.0f);
+      ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, int(alpha * 255)));
+    }
+  }
 
   // de la rueda al menu de Duelo en modo Tag Team (Y sin miembros): de vuelta a TAG TEAM por debajo
   const double now = Now();
   if (dbz3_select_live()) g_live_at = now;
-  const bool duel_menu = g_team_mode.load() && !battle && GameScreen() == kDuelScreen && !dbz3_select_live() &&
+  const bool duel_menu = g_team_mode.load() && !g_native_path.load() && !battle && GameScreen() == kDuelScreen && !dbz3_select_live() &&
                          !dbz3_select_to_stage() && !dbz3::ingame::pilot::Busy() && g_gate.load() == Gate::kNone;
   if (!duel_menu) {
     g_duel_at = 0;

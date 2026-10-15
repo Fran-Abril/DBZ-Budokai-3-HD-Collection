@@ -26,6 +26,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <set>
@@ -35,6 +36,7 @@
 
 #include "generated/dbz3_init.h"
 #include "guest_region.h"
+#include "launcher/settings.h"
 #include "mods.h"
 
 namespace dbz3::campaigns {
@@ -42,7 +44,9 @@ namespace {
 
 std::once_flag g_once;
 std::unordered_map<int32_t, uint32_t> g_codes;   // codigo -> contenedor
-std::unordered_map<int32_t, uint32_t> g_story_codes;   // [codigos_historia]: solo en las casillas de [rueda]
+// [codigos_historia] de cada mod, con los IDs de su [rueda]: solo mientras se juega la casilla de ese mod, asi
+// varias campanas (cada una en su casilla) pueden copiar las mismas escenas compartidas (102, 1, 2100...)
+std::vector<std::pair<std::vector<int>, std::unordered_map<int32_t, uint32_t>>> g_story_codes;
 std::vector<int> g_wheel_ids;                    // personajes de mas en la rueda de DU
 std::unordered_map<uint32_t, int> g_start_form;  // [forma_jugador]: palabra del combate -> forma inicial
 std::unordered_map<uint32_t, int> g_rival_suit;  // [traje_rival]: palabra del combate -> traje del rival
@@ -59,10 +63,13 @@ void Load() {
     std::string line;
     bool in_codes = false, in_story = false, in_wheel = false, in_forms = false, in_suits = false, in_models = false, in_map_suits = false, in_map_anims = false;
     int n = 0;
+    g_story_codes.emplace_back();
     while (std::getline(f, line)) {
       const auto hash = line.find('#');
       if (hash != std::string::npos) line.resize(hash);
-      if (line.find('[') != std::string::npos) {
+      // cabecera de seccion solo si la linea EMPIEZA por '[': `personajes = [27]` (lista TOML) no es una
+      // (2026-10-15: con el '[' en cualquier sitio la [rueda] quedaba vacia y al cargar salia Goku)
+      if (const auto first = line.find_first_not_of(" \t"); first != std::string::npos && line[first] == '[') {
         in_codes = line.find("[codigos]") != std::string::npos;
         in_story = line.find("[codigos_historia]") != std::string::npos;
         in_wheel = line.find("[rueda]") != std::string::npos;
@@ -82,7 +89,10 @@ void Load() {
             ++p;
             continue;
           }
-          if (id >= 0 && id < 64) g_wheel_ids.push_back(int(id));
+          if (id >= 0 && id < 64) {
+            g_wheel_ids.push_back(int(id));
+            g_story_codes.back().first.push_back(int(id));
+          }
           p = end;
         }
         continue;
@@ -101,7 +111,7 @@ void Load() {
       const long code = std::strtol(line.c_str(), &end, 10);
       const long cont = std::strtol(line.c_str() + eq + 1, &end, 10);
       if (code <= 0 || cont <= 0) continue;
-      (in_story ? g_story_codes : g_codes)[int32_t(code)] = uint32_t(cont);
+      (in_story ? g_story_codes.back().second : g_codes)[int32_t(code)] = uint32_t(cont);
       ++n;
     }
     REXLOG_INFO("dbz3 campanas: '{}' cambia {} escenas de Dragon Universe", mod.name, n);
@@ -124,6 +134,25 @@ int RivalSuit() {
   const auto it = g_rival_suit.find(g_last_battle.load());
   return it == g_rival_suit.end() ? -1 : it->second;
 }
+// En el menu principal (fuera de Dragon Universe) se olvida el ultimo combate de historia. Antes no se
+// borraba nunca: tras un combate de una historia de mod con [forma_jugador] / [traje_rival], el Duelo,
+// el Tag Team o el online siguientes empezaban con esa forma y ese traje del rival (2026-10-15).
+void ForgetStoryBattle() {
+  // PRUEBA (tools/pruebas.py historia_y_duelo): DBZ3_TEST_STORY_WORD=palabra hace como si se volviera de
+  // Dragon Universe tras ese combate (la primera vez que se llega al menu principal); DBZ3_TEST_KEEP_STORY=1
+  // deja el comportamiento de antes (no se olvida) para ver el fallo
+  if (static const char* w = std::getenv("DBZ3_TEST_STORY_WORD"); w) {
+    static bool once = false;
+    if (!once) {
+      once = true;
+      g_last_battle = uint32_t(std::strtoul(w, nullptr, 0));
+      REXLOG_INFO("dbz3 campanas: PRUEBA: ultimo combate de historia {:08X}", g_last_battle.load());
+    }
+  }
+  if (static const bool keep = std::getenv("DBZ3_TEST_KEEP_STORY") != nullptr; keep) return;
+  if (g_last_battle.exchange(0xFFFFFFFFu) != 0xFFFFFFFFu)
+    REXLOG_INFO("dbz3 campanas: menu principal: se olvida el ultimo combate de historia");
+}
 bool IsModBattle(uint8_t* base, uint32_t word) {
   const uint32_t code = word >> 16;
   if (word == 0xFFFFFFFF || code < 5400 || code >= 5800) return false;
@@ -143,10 +172,11 @@ DBZ3_HOOK(sub_82156F30, dbz3eu_sub_82156EF0) {
   // escenas compartidas del juego (eventos del mapa) con la copia del mod solo mientras se juega
   // la historia de uno de sus personajes de [rueda] (la casilla de DU en 0x824A58A0)
   if (!cont && !dbz3::g_guest_eu) {
-    const auto st = dbz3::campaigns::g_story_codes.find(code);
-    if (st != dbz3::campaigns::g_story_codes.end()) {
-      const uint32_t slot = REX_LOAD_U8(0x824A58A0);
-      for (int id : dbz3::campaigns::g_wheel_ids) {
+    const uint32_t slot = REX_LOAD_U8(0x824A58A0);
+    for (const auto& [ids, codes] : dbz3::campaigns::g_story_codes) {
+      const auto st = codes.find(code);
+      if (st == codes.end()) continue;
+      for (int id : ids) {
         if (REX_LOAD_U16(0x82020668 + uint32_t(id) * 2) == slot) cont = st->second;
       }
     }
@@ -157,8 +187,8 @@ DBZ3_HOOK(sub_82156F30, dbz3eu_sub_82156EF0) {
     ctx.r3.u64 = cont;
   }
   // una linea por escena: quien hace campañas ve que codigo pide cada momento de la historia
-  REXLOG_INFO("dbz3 campanas: codigo {} -> contenedor {}{} (desde {:08X})", code, ctx.r3.s32,
-              cont ? " (del mod)" : "", lr);
+  REXLOG_INFO("dbz3 campanas: codigo {} -> contenedor {}{} (desde {:08X}, casilla {})", code, ctx.r3.s32,
+              cont ? " (del mod)" : "", lr, dbz3::g_guest_eu ? 255u : uint32_t(REX_LOAD_U8(0x824A58A0)));
 }
 
 // Rueda de Dragon Universe: r3 = objeto de la rueda (+32 = casillas que permite el modo, r4 = las
@@ -400,6 +430,77 @@ void WithLook(uint8_t* base, uint32_t rec, const MapLook& l, F&& create) {
 }  // namespace
 }  // namespace dbz3::campaigns
 
+// Partida guardada: el juego solo guarda las historias de sus 11 personajes de DU (copias fijas de
+// 4624 B en sub_821D2BD8 = guardar, sub_821D2F80 = cargar; casillas de 0x4_00023C9D). Las casillas de
+// [rueda] de los mods (Freezer = 22) volvian vacias al cargar y salia Goku. Se guardan aparte, en
+// historias_extra.bin junto a las preferencias, en el mismo momento que la partida del juego. Solo US.
+namespace dbz3::campaigns {
+namespace {
+// las dos copias de los datos de DU (bloque k: +336 + 4624k): la del juego en curso y la de la partida
+// (la que leen y escriben las conversiones; medido 2026-10-14: sub_821D2F80 carga en 0x824BA110)
+bool IsDuStruct(uint32_t a) { return a == 0x8247A8E0 || a == 0x824BA110; }
+constexpr uint32_t kDuBlock = 4624;
+constexpr uint64_t kDuNative = 0x400023C9Dull;        // casillas que el juego si guarda
+std::vector<uint32_t> ExtraSlots(uint8_t* base) {
+  std::call_once(g_once, Load);
+  std::vector<uint32_t> out;
+  for (int id : g_wheel_ids) {
+    const uint32_t slot = REX_LOAD_U16(0x82020668 + uint32_t(id) * 2);
+    if (slot < 38 && !((kDuNative >> slot) & 1)) out.push_back(slot);
+  }
+  return out;
+}
+std::filesystem::path ExtraFile() { return dbz3::settings::UserDataRoot() / "historias_extra.bin"; }
+}  // namespace
+}  // namespace dbz3::campaigns
+
+REX_HOOK_RAW(sub_821D2BD8) {   // r3 = partida a guardar, r4 = datos de DU
+  using namespace dbz3::campaigns;
+  if (const uint32_t du = ctx.r4.u32; !dbz3::g_guest_eu && IsDuStruct(du)) {
+    const auto slots = ExtraSlots(base);
+    if (!slots.empty()) {
+      std::error_code ec;
+      const auto path = ExtraFile();
+      std::filesystem::create_directories(path.parent_path(), ec);
+      std::ofstream out(path.string() + ".tmp", std::ios::binary | std::ios::trunc);
+      out.write("DBZ3DU1", 8);
+      for (uint32_t slot : slots) {
+        const uint32_t be = __builtin_bswap32(slot);
+        out.write(reinterpret_cast<const char*>(&be), 4);
+        out.write(reinterpret_cast<const char*>(base + du + 336 + kDuBlock * slot), kDuBlock);
+      }
+      out.close();
+      if (out) std::filesystem::rename(path.string() + ".tmp", path, ec);
+      REXLOG_INFO("dbz3 campanas: partida: {} historias de mods guardadas aparte{}", slots.size(), ec ? " (ERROR)" : "");
+    }
+  }
+  __imp__sub_821D2BD8(ctx, base);
+}
+
+REX_HOOK_RAW(sub_821D2F80) {   // r3 = datos de DU, r4 = partida cargada
+  const uint32_t live = ctx.r3.u32;
+  __imp__sub_821D2F80(ctx, base);
+  using namespace dbz3::campaigns;
+  if (dbz3::g_guest_eu || !IsDuStruct(live)) return;
+  const auto slots = ExtraSlots(base);
+  std::ifstream in(ExtraFile(), std::ios::binary);
+  char magic[8] = {};
+  if (slots.empty() || !in.read(magic, 8) || std::memcmp(magic, "DBZ3DU1", 8) != 0) {
+    if (!slots.empty()) REXLOG_INFO("dbz3 campanas: partida: sin historias de mods guardadas aparte");
+    return;
+  }
+  uint32_t be = 0;
+  int n = 0;
+  std::vector<char> blk(kDuBlock);
+  while (in.read(reinterpret_cast<char*>(&be), 4) && in.read(blk.data(), kDuBlock)) {
+    const uint32_t slot = __builtin_bswap32(be);
+    if (std::find(slots.begin(), slots.end(), slot) == slots.end()) continue;   // mod quitado: se ignora
+    std::memcpy(base + live + 336 + kDuBlock * slot, blk.data(), kDuBlock);
+    ++n;
+  }
+  REXLOG_INFO("dbz3 campanas: partida: {} historias de mods recuperadas", n);
+}
+
 // Personaje del mapa al volver de un combate o al empezar la historia (sub_821C24B8): lo crea
 // sub_82133B88(ID, modelo +4578, traje +4579) con el registro del jugador de DU (0x82479A60 +180).
 // Freezer: modelo 5 = Mecha; traje 2 con modelo 0 = el modelo 193, Freezer en su nave. Solo US.
@@ -455,7 +556,12 @@ REX_HOOK_RAW(sub_82096FF0) {
     // con tecnicas, DBZ3_FX_VTDIAG 2026-10-12): uno liberado por un relevo y reutilizado por otra clase
     // pasaba el control anterior y el juego acababa en sub_822F5460 -> sub_822F8988 (cierre)
     constexpr uint32_t kFxVtable = 0x8201CAA0;
-    const bool ok = entry && (!res || (res >= 0x10000 && REX_LOAD_U32(res) == kFxVtable &&
+    // y en memoria que existe (montones del juego, imagen o fisica): una direccion basura (no mapeada) cerraba el
+    // juego al leer su vtable (frente de escenarios, 2026-10-15)
+    auto heap = [](uint32_t a) {
+      return !(a & 3) && ((a >= 0x40000000u && a < 0x80000000u) || (a >= 0x82000000u && a < 0x83000000u) || a >= 0xA0000000u);
+    };
+    const bool ok = entry && (!res || (heap(res) && REX_LOAD_U32(res) == kFxVtable &&
                                        code(REX_LOAD_U32(REX_LOAD_U32(res) + 4))));
     static const bool vtdiag = std::getenv("DBZ3_FX_VTDIAG") != nullptr;
     if (ok && res && vtdiag) {   // DIAGNOSTICO: clases de recurso que usa el juego

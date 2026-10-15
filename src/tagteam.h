@@ -17,6 +17,7 @@ struct HudSide {
   bool down[5] = {};      // caido
   bool switching = false;
   bool refused = false;   // SELECT rechazado hace poco (el HUD parpadea)
+  bool shown = true;      // marcador del juego a la vista (no en la presentacion ni el READY)
 };
 HudSide Hud(int player);
 
@@ -42,5 +43,16 @@ void BeforeBattleSetup(uint8_t* base, uint32_t sel);
 // mandos aplicados; el relevo acaba cuando los dos PCs lo tienen (mismo tick en los dos).
 uint16_t NetReadyBits();
 void NetApplied(uint32_t user, uint16_t buttons);
+// TAG TEAM por la via nativa (solo US, docs/12_conectores/13_tagteam_nativo.md): el menu principal sale
+// como con su A y abre la rueda directamente (pantalla 14, argumento 1) en la fila del Duelo `duel_row`
+// (0 1P VS COM, 1 1P VS 2P, 3 COM VS COM); "atras" en la rueda vuelve a la pantalla TAG TEAM.
+// false = EU o DBZ3_TAG_PILOT (sigue el piloto de menus).
+bool NativeEnter(int duel_row);
+void NativeEnd();
+// Pantalla abierta sobre la rueda del lado (0/1) tras confirmar: estado +10 de la rueda (2-4 menu de capsulas,
+// 5-7 las de Edit Skills/Ability); 0 = ninguna o la rueda no esta viva (solo US).
+int WheelMenu(int side);
+// La bandeja "Custom Tray" de Edit Skills de ese lado esta abierta (no basta con tener resaltada la opcion; solo US).
+bool WheelTray(int side);
 
 }  // namespace dbz3::tag

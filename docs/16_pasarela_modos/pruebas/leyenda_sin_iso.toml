@@ -1,0 +1,8 @@
+# Sin ISO de Budokai 1 (carpeta vacia): el modo no esta disponible y no empieza.
+descripcion = "Pasarela: sin ISO, modo no disponible"
+env = ["DBZ3_TEST_PASARELA=auto", "DBZ3_PS2_GAMES=E:/DBZ3HD_trabajo/pasarela/sin_isos"]
+pasos = [
+  'log "pasarela: leyenda de Mr. Satan no disponible \(sin ISO de Budokai 1" 40',
+  'log "pasarela: prueba: disponible false; no empieza" 20',
+  'captura 01_menu_sin_modo',
+]

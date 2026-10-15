@@ -1,0 +1,517 @@
+# Reto predefinido 'nativo_supervivencia_mision100' (catalogo de la vision futura, 2026-10-15).
+# Lo lee el juego en user_data/dbz3/modos/supervivencia.toml: instalalo con
+#   python retos_predefinidos.py instalar nativo_supervivencia_mision100 --juego <carpeta del juego>
+# tipo/nombre/name/descripcion/description son del catalogo (el juego las ignora).
+# vida = maxima del jugador; vida_inicial = la del primer combate (0 = la maxima); arrastra_vida =
+# la vida que le queda pasa al siguiente (+ recupera); pausa = espera a la pantalla de resultados del HUB.
+# Por combate: rival (ID 0-63), escenario (0-16) y vida del rival (0 = la normal, 3000; tope 7000).
+tipo = "supervivencia"
+nombre = "Misión 100"
+name = "Mission 100"
+descripcion = "100 oleadas con todo el plantel. Empiezas con 7 barras, la vida se arrastra y recuperas media barra entre oleadas. Reto extremo, sin equilibrar."
+description = "100 waves with the whole roster. You start with 7 bars, your health carries over and you recover half a bar between waves. Extreme challenge, not balanced."
+vida = 7000
+vida_inicial = 0
+arrastra_vida = true
+recupera = 500
+pausa = false
+
+[[combate]]
+rival = 42
+escenario = 1
+vida = 1000
+
+[[combate]]
+rival = 43
+escenario = 2
+vida = 1050
+
+[[combate]]
+rival = 14
+escenario = 3
+vida = 1100
+
+[[combate]]
+rival = 15
+escenario = 4
+vida = 1200
+
+[[combate]]
+rival = 5
+escenario = 5
+vida = 1250
+
+[[combate]]
+rival = 13
+escenario = 6
+vida = 1300
+
+[[combate]]
+rival = 12
+escenario = 7
+vida = 1350
+
+[[combate]]
+rival = 10
+escenario = 8
+vida = 1400
+
+[[combate]]
+rival = 6
+escenario = 9
+vida = 1500
+
+[[combate]]
+rival = 9
+escenario = 10
+vida = 1550
+
+[[combate]]
+rival = 2
+escenario = 0
+vida = 1600
+
+[[combate]]
+rival = 1
+escenario = 1
+vida = 1650
+
+[[combate]]
+rival = 18
+escenario = 2
+vida = 1750
+
+[[combate]]
+rival = 19
+escenario = 3
+vida = 1800
+
+[[combate]]
+rival = 21
+escenario = 4
+vida = 1850
+
+[[combate]]
+rival = 20
+escenario = 5
+vida = 1900
+
+[[combate]]
+rival = 32
+escenario = 6
+vida = 1950
+
+[[combate]]
+rival = 29
+escenario = 7
+vida = 2050
+
+[[combate]]
+rival = 30
+escenario = 8
+vida = 2100
+
+[[combate]]
+rival = 28
+escenario = 9
+vida = 2150
+
+[[combate]]
+rival = 11
+escenario = 10
+vida = 2200
+
+[[combate]]
+rival = 3
+escenario = 0
+vida = 2250
+
+[[combate]]
+rival = 16
+escenario = 1
+vida = 2350
+
+[[combate]]
+rival = 17
+escenario = 2
+vida = 2400
+
+[[combate]]
+rival = 8
+escenario = 3
+vida = 2450
+
+[[combate]]
+rival = 39
+escenario = 4
+vida = 2500
+
+[[combate]]
+rival = 7
+escenario = 5
+vida = 2600
+
+[[combate]]
+rival = 0
+escenario = 6
+vida = 2650
+
+[[combate]]
+rival = 4
+escenario = 7
+vida = 2700
+
+[[combate]]
+rival = 27
+escenario = 8
+vida = 2750
+
+[[combate]]
+rival = 38
+escenario = 9
+vida = 2800
+
+[[combate]]
+rival = 33
+escenario = 10
+vida = 2900
+
+[[combate]]
+rival = 37
+escenario = 0
+vida = 2950
+
+[[combate]]
+rival = 34
+escenario = 1
+vida = 3000
+
+[[combate]]
+rival = 35
+escenario = 2
+vida = 3050
+
+[[combate]]
+rival = 36
+escenario = 3
+vida = 3100
+
+[[combate]]
+rival = 40
+escenario = 4
+vida = 3200
+
+[[combate]]
+rival = 41
+escenario = 5
+vida = 3250
+
+[[combate]]
+rival = 42
+escenario = 6
+vida = 3300
+
+[[combate]]
+rival = 43
+escenario = 7
+vida = 3350
+
+[[combate]]
+rival = 14
+escenario = 8
+vida = 3400
+
+[[combate]]
+rival = 15
+escenario = 9
+vida = 3500
+
+[[combate]]
+rival = 5
+escenario = 10
+vida = 3550
+
+[[combate]]
+rival = 13
+escenario = 0
+vida = 3600
+
+[[combate]]
+rival = 12
+escenario = 1
+vida = 3650
+
+[[combate]]
+rival = 10
+escenario = 2
+vida = 3750
+
+[[combate]]
+rival = 6
+escenario = 3
+vida = 3800
+
+[[combate]]
+rival = 9
+escenario = 4
+vida = 3850
+
+[[combate]]
+rival = 2
+escenario = 5
+vida = 3900
+
+[[combate]]
+rival = 1
+escenario = 6
+vida = 3950
+
+[[combate]]
+rival = 18
+escenario = 7
+vida = 4050
+
+[[combate]]
+rival = 19
+escenario = 8
+vida = 4100
+
+[[combate]]
+rival = 21
+escenario = 9
+vida = 4150
+
+[[combate]]
+rival = 20
+escenario = 10
+vida = 4200
+
+[[combate]]
+rival = 32
+escenario = 0
+vida = 4250
+
+[[combate]]
+rival = 29
+escenario = 1
+vida = 4350
+
+[[combate]]
+rival = 30
+escenario = 2
+vida = 4400
+
+[[combate]]
+rival = 28
+escenario = 3
+vida = 4450
+
+[[combate]]
+rival = 11
+escenario = 4
+vida = 4500
+
+[[combate]]
+rival = 3
+escenario = 5
+vida = 4600
+
+[[combate]]
+rival = 16
+escenario = 6
+vida = 4650
+
+[[combate]]
+rival = 17
+escenario = 7
+vida = 4700
+
+[[combate]]
+rival = 8
+escenario = 8
+vida = 4750
+
+[[combate]]
+rival = 39
+escenario = 9
+vida = 4800
+
+[[combate]]
+rival = 7
+escenario = 10
+vida = 4900
+
+[[combate]]
+rival = 0
+escenario = 0
+vida = 4950
+
+[[combate]]
+rival = 4
+escenario = 1
+vida = 5000
+
+[[combate]]
+rival = 27
+escenario = 2
+vida = 5050
+
+[[combate]]
+rival = 38
+escenario = 3
+vida = 5100
+
+[[combate]]
+rival = 33
+escenario = 4
+vida = 5200
+
+[[combate]]
+rival = 37
+escenario = 5
+vida = 5250
+
+[[combate]]
+rival = 34
+escenario = 6
+vida = 5300
+
+[[combate]]
+rival = 35
+escenario = 7
+vida = 5350
+
+[[combate]]
+rival = 36
+escenario = 8
+vida = 5400
+
+[[combate]]
+rival = 40
+escenario = 9
+vida = 5500
+
+[[combate]]
+rival = 41
+escenario = 10
+vida = 5550
+
+[[combate]]
+rival = 21
+escenario = 0
+vida = 5600
+
+[[combate]]
+rival = 20
+escenario = 1
+vida = 5650
+
+[[combate]]
+rival = 32
+escenario = 2
+vida = 5750
+
+[[combate]]
+rival = 29
+escenario = 3
+vida = 5800
+
+[[combate]]
+rival = 30
+escenario = 4
+vida = 5850
+
+[[combate]]
+rival = 28
+escenario = 5
+vida = 5900
+
+[[combate]]
+rival = 11
+escenario = 6
+vida = 5950
+
+[[combate]]
+rival = 3
+escenario = 7
+vida = 6050
+
+[[combate]]
+rival = 16
+escenario = 8
+vida = 6100
+
+[[combate]]
+rival = 17
+escenario = 9
+vida = 6150
+
+[[combate]]
+rival = 8
+escenario = 10
+vida = 6200
+
+[[combate]]
+rival = 39
+escenario = 0
+vida = 6250
+
+[[combate]]
+rival = 7
+escenario = 1
+vida = 6350
+
+[[combate]]
+rival = 0
+escenario = 2
+vida = 6400
+
+[[combate]]
+rival = 4
+escenario = 3
+vida = 6450
+
+[[combate]]
+rival = 27
+escenario = 4
+vida = 6500
+
+[[combate]]
+rival = 38
+escenario = 5
+vida = 6600
+
+[[combate]]
+rival = 33
+escenario = 6
+vida = 6650
+
+[[combate]]
+rival = 37
+escenario = 7
+vida = 6700
+
+[[combate]]
+rival = 34
+escenario = 8
+vida = 6750
+
+[[combate]]
+rival = 35
+escenario = 9
+vida = 6800
+
+[[combate]]
+rival = 36
+escenario = 10
+vida = 6900
+
+[[combate]]
+rival = 40
+escenario = 0
+vida = 6950
+
+[[combate]]
+rival = 41
+escenario = 1
+vida = 7000

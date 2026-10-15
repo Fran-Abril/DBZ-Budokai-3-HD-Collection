@@ -240,6 +240,25 @@ def load_settings():
         return {}
 
 
+def detect_lang(game_dir=""):
+    """Idioma inicial del Kit (si el jugador aun no ha elegido): el del juego (dbz3_language del dbz3_user.toml,
+    5 = espanol) y, si no hay juego, el de Windows. Antes salia siempre en espanol."""
+    try:
+        with open(os.path.join(game_dir, "dbz3_user.toml"), encoding="utf-8", errors="replace") as fh:
+            m = re.search(r"(?m)^\s*dbz3_language\s*=\s*(\d+)", fh.read())
+        if m:
+            return "es" if m.group(1) == "5" else "en"
+    except OSError:
+        pass
+    if IS_WIN:
+        try:
+            import ctypes  # noqa: PLC0415
+            return "es" if ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF == 0x0A else "en"
+        except (AttributeError, OSError):
+            pass
+    return "es" if os.environ.get("LANG", "").lower().startswith("es") else "en"
+
+
 def save_settings(data):
     try:
         os.makedirs(os.path.dirname(settings_path()), exist_ok=True)
@@ -584,6 +603,10 @@ class JobRunner:
                 import log_en  # noqa: PLC0415
                 text = log_en.traducir(text)
             self.app.log_text(text)
+            try:                # paso a paso: la ultima linea de la herramienta en la barra de abajo
+                self.app.status.job_progress(last_line(text))
+            except (tk.TclError, AttributeError):
+                pass
         if finished:
             job, rc = finished
             job.rc = rc
@@ -2012,8 +2035,8 @@ PAGE_DEFS = [
     ("mods", "Mis mods", "My mods",
      "Activa, desactiva y revisa los mods instalados.", "Enable, disable and inspect installed mods."),
     ("importer", "Importar personaje", "Import a character",
-     "Trae personajes de Budokai 1, 2, Infinite World o de la comunidad.",
-     "Bring characters from Budokai 1, 2, Infinite World or the community."),
+     "Trae personajes de Budokai 1, 2, Infinite World o de la comunidad, y los ports del proyecto.",
+     "Bring characters from Budokai 1, 2, Infinite World or the community, and the project's ports."),
     ("characters", "Personajes nuevos", "New characters",
      "Nombre, plaza en la rueda, imágenes y cápsulas de tus personajes.",
      "Name, wheel slot, images and capsules of your characters."),
@@ -2021,8 +2044,8 @@ PAGE_DEFS = [
      "Un personaje nuevo a partir de tus propios archivos de modelo.",
      "A new character from your own model files."),
     ("stories", "Historias", "Stories",
-     "Crea tu campaña: capítulos con sus combates, rivales y retratos, y monta el mod.",
-     "Create your campaign: chapters with their fights, rivals and portraits, then build the mod."),
+     "Crea tu campaña o un modo de reto (torre, supervivencia, kumite) y móntalo en tus mods.",
+     "Create your campaign or a challenge mode (tower, survival, kumite) and build it into your mods."),
     ("textures", "Texturas", "Textures",
      "Saca las texturas de un personaje a PNG, edítalas y vuelve a montarlas.",
      "Export a character's textures to PNG, edit them and rebuild."),
@@ -2345,7 +2368,9 @@ def collect_checks(app):
                              "All in place: you can import and create characters.")
                            if tools_ok and xdk_ok else T("Falta: ", "Missing: ") + ", ".join(
                                x for x, ok in (("importar.py / roster_build.py", tools_ok),
-                                               ("mod center hd\\tools\\xbcompress.exe", xdk_ok)) if not ok))})
+                                               ("mod center hd\\tools\\xbcompress.exe", xdk_ok)) if not ok) +
+                           T(". Descomprime otra vez el Kit de modding completo junto a dbz3.exe.",
+                             ". Unzip the full modding kit again next to dbz3.exe."))})
     srcs = app.cache.get("sources") or []
     ready = [s for s in srcs if s["state"] == "listo"]
     out.append({"key": "ps2", "title": T("Juegos para importar (opcional)", "Games to import from (optional)"),
@@ -2997,6 +3022,7 @@ class ImporterPage(Page):
         self.preset_cb = ttk.Combobox(g, textvariable=self.preset, values=[preset_label(k) for k in self.preset_keys],
                                       state="readonly", width=40)
         self.preset_cb.grid(row=4, column=1, sticky="w", pady=4)
+        self.preset_cb.bind("<<ComboboxSelected>>", self.preset_sync)
         self.v_ground = tk.BooleanVar(value=True)
         self.v_pose = tk.BooleanVar(value=True)
         self.v_combo_tech = tk.BooleanVar(value=True)
@@ -3077,54 +3103,92 @@ class ImporterPage(Page):
                         "The project's ported characters with their standard recipe, faithful to the source "
                         "game. They are built from your games in ps2_games; an existing one is moved to "
                         "mods_respaldo."), bg=C["card"]).pack(anchor="w")
-        self.off_list = tk.Frame(c4.body, bg=C["card"])
-        self.off_list.pack(fill="x", pady=(6, 0))
-        self.off_status = self.status_label(c4.body)
-        self.off_status.pack(fill="x", pady=(6, 0))
+        self.off_list, self.off_status = {}, {}
+        self.off_list["oficiales"] = tk.Frame(c4.body, bg=C["card"])
+        self.off_list["oficiales"].pack(fill="x", pady=(6, 0))
+        self.off_status["oficiales"] = self.status_label(c4.body)
+        self.off_status["oficiales"].pack(fill="x", pady=(6, 0))
 
-    def load_official(self, force=False):
+        # 5. personajes de la vision (ports_vision.toml): propuestas, mismas recetas y mismos botones
+        c5 = Card(body, "5. " + T("Personajes de la visión (beta)", "Vision characters (beta)"))
+        c5.pack(fill="x", pady=(0, 12))
+        hint(c5.body, T("Propuestas de personajes nuevos: trajes de otras épocas, fusiones de Budokai 2 y Goku de "
+                        "Heroes. No son oficiales y pueden tener fallos. Se crean desde tus juegos de ps2_games.",
+                        "Proposed new characters: costumes from other eras, Budokai 2 fusions and Heroes Goku. "
+                        "They are not official and may have bugs. Built from your games in ps2_games."),
+             bg=C["card"]).pack(anchor="w")
+        self.off_list["vision"] = tk.Frame(c5.body, bg=C["card"])
+        self.off_list["vision"].pack(fill="x", pady=(6, 0))
+        self.off_status["vision"] = self.status_label(c5.body)
+        self.off_status["vision"].pack(fill="x", pady=(6, 0))
+
+    # catalogo -> --recetas de importar.py oficial(es) (None = ports_oficiales.toml)
+    CATALOGS = {"oficiales": None, "vision": "ports_vision.toml"}
+
+    def _recetas(self, cat):
+        return ["--recetas", self.CATALOGS[cat]] if self.CATALOGS[cat] else []
+
+    def load_official(self, force=False, cat="oficiales"):
         if not self.env.tools_installed():
             return
-        if not force and "oficiales" in self.app.cache:
-            self.render_official()
+        nxt = "vision" if cat == "oficiales" else None       # las dos listas, una detras de otra
+        if not force and cat in self.app.cache:
+            self.render_official(cat)
+            if nxt:
+                self.load_official(False, nxt)
             return
 
         def done(job):
             rows = [ln.split("\t") for ln in job.text.splitlines() if ln.startswith("oficial\t")]
-            self.app.cache["oficiales"] = [dict(mod=r[1], name=r[2], src=r[3], ready=r[4] == "listo", have=r[5] == "1")
-                                           for r in rows if len(r) >= 6]
+            self.app.cache[cat] = [dict(mod=r[1], name=r[2], src=r[3], ready=r[4] == "listo") for r in rows if len(r) >= 6]
             if self.alive:
-                self.render_official()
-        self.run(cmd_importer(self.env, ["oficiales"]), T("Ports oficiales", "Official ports"), done, quiet=True)
+                self.render_official(cat)
+                if job.rc != 0:
+                    self.set_status(self.off_status[cat], "err", T("No se pudo leer la lista: ", "Could not read the "
+                                                                   "list: ") + last_line(job.text))
+                if nxt and not force:
+                    self.load_official(False, nxt)
+        self.run(cmd_importer(self.env, ["oficiales"] + self._recetas(cat)),
+                 T("Ports oficiales", "Official ports") if cat == "oficiales" else
+                 T("Personajes de la visión", "Vision characters"), done, quiet=True)
 
-    def render_official(self):
-        for w in self.off_list.winfo_children():
+    def render_official(self, cat="oficiales"):
+        box = self.off_list[cat]
+        for w in box.winfo_children():
             w.destroy()
-        rows = self.app.cache.get("oficiales") or []
+        rows = self.app.cache.get(cat) or []
         names = {"iw": "Infinite World", "sb1": "Shin Budokai", "sb2": "Another Road", "b1": "Budokai 1",
                  "b2": "Budokai 2", "sdbh": "Heroes"}
         for i, r in enumerate(rows):
-            label(self.off_list, r["name"], bg=C["card"]).grid(row=i, column=0, sticky="w", padx=(0, 12), pady=2)
-            hint(self.off_list, names.get(r["src"], r["src"]) + ("" if r["ready"] else T("  (falta el juego)",
-                                                                                         "  (game missing)")),
+            have = os.path.isdir(os.path.join(self.env.mods, r["mod"]))    # en TU carpeta de mods
+            label(box, r["name"], bg=C["card"]).grid(row=i, column=0, sticky="w", padx=(0, 12), pady=2)
+            hint(box, names.get(r["src"], r["src"]) + ("" if r["ready"] else T("  (falta el juego)",
+                                                                               "  (game missing)")),
                  bg=C["card"]).grid(row=i, column=1, sticky="w", padx=(0, 12))
-            b = ttk.Button(self.off_list, text=T("Rehacer", "Rebuild") if r["have"] else T("Crear", "Create"),
-                           command=lambda m=r["mod"]: self.make_official(m))
+            b = ttk.Button(box, text=T("Rehacer", "Rebuild") if have else T("Crear", "Create"),
+                           command=lambda m=r["mod"]: self.make_official(m, cat))
             b.grid(row=i, column=2, sticky="w", pady=2)
             if not r["ready"]:
                 b.state(["disabled"])
         if rows:
-            ttk.Button(self.off_list, text=T("Crear todos", "Create all"), command=lambda: self.make_official(None)).grid(
+            ttk.Button(box, text=T("Crear todos", "Create all"), command=lambda: self.make_official(None, cat)).grid(
                 row=len(rows), column=2, sticky="w", pady=(8, 0))
 
-    def make_official(self, mod):
-        args = ["oficial"] + ([mod] if mod else ["--todos"]) + ["--mods", self.env.mods] + self.env.us_args()
+    def make_official(self, mod, cat="oficiales"):
+        args = ["oficial"] + self._recetas(cat) + ([mod] if mod else ["--todos"]) + ["--mods", self.env.mods] + \
+            self.env.us_args()
 
         def done(job):
+            self.app.cache.pop("mods", None)
             if self.alive:
-                self.set_status(self.off_status, "ok" if job.rc == 0 else "err", last_line(job.text))
-                self.load_official(True)
-        self.run(cmd_importer(self.env, args), T("Creando ports oficiales", "Creating official ports"), done)
+                lvl, txt = self.app.outcome(job, last_line(job.text) + T(
+                    ".  Se añade al juego al pulsar JUGAR en el launcher.",
+                    ".  It is added to the game when you press PLAY in the launcher."))
+                self.set_status(self.off_status[cat], lvl, txt)
+                self.render_official(cat)
+        self.run(cmd_importer(self.env, args), T("Creando %s", "Creating %s") % (
+            T("ports oficiales", "official ports") if cat == "oficiales" else
+            T("personajes de la visión", "vision characters")), done, status=self.off_status[cat])
 
     def on_show(self):
         self.load_official()
@@ -3231,8 +3295,17 @@ class ImporterPage(Page):
                                                                       "No characters in the selected source; check the folder."))
                     detail = last_line(job.text) if job.rc != 0 else ""
                     self.set_status(self.c2_status, "err", help_text + ("  " + detail if detail else ""))
-        if not self.run(cmd_importer(self.env, args), T("Leyendo %s", "Reading %s") % s["name"], done, quiet=True):
-            self.count.configure(text="")
+        self.run(cmd_importer(self.env, args), T("Leyendo %s", "Reading %s") % s["name"], done, quiet=True)
+
+    PRESET_CHECKS = (("v_ground", "altura"), ("v_pose", "pose_select"), ("v_combo_tech", "combos_tecnica"))
+
+    def preset_sync(self, _event=None):
+        """Las casillas toman los valores del preset elegido (presets_importar.toml; sin clave = si)."""
+        i = max(0, self.preset_cb.current())
+        key = self.preset_keys[i] if i < len(self.preset_keys) else ""
+        vals = read_toml(os.path.join(HERE, "presets_importar.toml")).get(self.src or "", {}).get(key, {})
+        for var, k in self.PRESET_CHECKS:
+            getattr(self, var).set(vals.get(k, True) is not False)
 
     def _entries_key(self):
         extra = self.v_folder.get().strip() if self.adv and self.src == "b3" else ""
@@ -3244,6 +3317,7 @@ class ImporterPage(Page):
             self.preset_keys = pres
             self.preset_cb.configure(values=[preset_label(k) for k in pres])
             self.preset_cb.current(0)
+            self.preset_sync()
         self.tree.delete(*self.tree.get_children())
         lst = (self.app.cache.get("entries") or {}).get(self._entries_key()) or []
         needle = self.search.get().lower().strip()
@@ -3301,9 +3375,8 @@ class ImporterPage(Page):
         donor = donor_from_index(self.donor_cb.current(), True)
         i = max(0, self.preset_cb.current())
         extra = ["--preset", self.preset_keys[i]] if i < len(self.preset_keys) else []
-        for var, key in ((self.v_ground, "altura"), (self.v_pose, "pose_select"), (self.v_combo_tech, "combos_tecnica")):
-            if not var.get():
-                extra += ["--opcion", "%s=false" % key]
+        for var, key in self.PRESET_CHECKS:   # siempre explicito: la casilla manda sobre el preset
+            extra += ["--opcion", "%s=%s" % (key, "true" if getattr(self, var).get() else "false")]
         for cb, opts, key in ((self.moves_cb, self.moves_opts, "golpes"), (self.voice_cb, self.voice_opts, "voces"),
                               (self.physics_cb, self.physics_opts, "fisica")):
             v = opts[max(0, cb.current())][1]
@@ -4957,6 +5030,90 @@ DOCS = [
 ]
 
 
+# modos_reto.py: modo, opcion del numero de combates, por defecto, nombre es/en
+RETO_MODOS = [("torre", "--pisos", 10, "Torre", "Tower"), ("supervivencia", "--oleadas", 8, "Supervivencia", "Survival"),
+              ("kumite", "--jefes", 5, "Kumite", "Kumite")]
+
+
+def parse_fighters(text):
+    """'Goku, vegeta, 44, xx' -> ([0, 7, 44], ['xx']): nombres del juego (es/en) o IDs 0-63."""
+    names = {n.lower(): did for did, es, en in DONORS for n in (es, en)}
+    ids, bad = [], []
+    for tok in (t.strip() for t in text.split(",")):
+        if tok.isdigit() and int(tok) < 64:
+            ids.append(int(tok))
+        elif tok.lower() in names:
+            ids.append(names[tok.lower()])
+        elif tok:
+            bad.append(tok)
+    return ids, bad
+
+
+def _reto_mode_name(tipo):
+    return {m[0]: T(m[3], m[4]) for m in RETO_MODOS}.get(tipo, tipo)
+
+
+def predefined_challenges():
+    """Catalogo de retos_predefinidos.py ([{key, tipo, label}]), en el orden torre, supervivencia, kumite.
+    Sin la herramienta (Kit antiguo) o con un .toml roto, la lista sale vacia o sin ese reto: nunca falla."""
+    try:
+        import retos_predefinidos as rp  # noqa: PLC0415
+        cat = rp.catalogo()
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for tipo in rp.TIPOS:
+        # primero los retos con nombre (los del catalogo), el de serie al final de su modo
+        for key, (_, d) in sorted(cat.items(), key=lambda kv: ("nombre" not in kv[1][1], kv[0])):
+            if d.get("tipo") != tipo or rp.errores(key, d):
+                continue
+            name = d.get("name" if LANG == "en" else "nombre") or d.get("nombre") or T("de serie", "stock")
+            out.append({"key": key, "tipo": tipo, "label": "%s · %s  (%d %s)" % (
+                _reto_mode_name(tipo), name, len(d.get("combate", [])), T("combates", "fights"))})
+    return out
+
+
+def installed_challenges(game):
+    """Que reto tiene puesto cada modo en ese juego: {tipo: nombre} (el de serie si no hay ninguno)."""
+    try:
+        import retos_predefinidos as rp  # noqa: PLC0415
+        cat = rp.catalogo()
+    except Exception:  # noqa: BLE001
+        return {}
+    out = {}
+    for tipo in rp.TIPOS:
+        key = rp.puesto(game, tipo, cat)
+        if key in cat:
+            d = cat[key][1]
+            out[tipo] = d.get("name" if LANG == "en" else "nombre") or d.get("nombre") or T("de serie", "stock")
+        else:
+            out[tipo] = T("de serie", "stock") if key == "(reto por defecto)" else T("uno tuyo", "your own")
+    return out
+
+
+def wheel_of(cfg):
+    """[rueda] personajes de una campaña: lista en el .toml de origen, numero suelto en el campana.toml del mod."""
+    v = cfg.get("rueda", {}).get("personajes", [])
+    return set(v if isinstance(v, list) else [v])
+
+
+def campaign_rivals(mods_dir, mod, wheel):
+    """Otros mods de campaña ACTIVOS con un personaje de la rueda en comun (se pisan la casilla)."""
+    out = []
+    try:
+        names = sorted(os.listdir(mods_dir), key=str.lower)
+    except OSError:
+        return out
+    for name in names:
+        d = os.path.join(mods_dir, name)
+        if name == mod or name.endswith(".disabled") or os.path.exists(os.path.join(d, ".disabled")):
+            continue
+        ct = os.path.join(d, "campana.toml")
+        if os.path.isfile(ct) and wheel & wheel_of(read_toml(ct)):
+            out.append(name)
+    return out
+
+
 class StoriesPage(Page):
     """Historias: el editor de historias (editor_historias.py) incrustado en el Mod Kit, sin ventana propia."""
     key = "stories"
@@ -4970,6 +5127,77 @@ class StoriesPage(Page):
         ttk.Button(self.header_right, text=T("Ventana aparte", "Separate window"), style="Small.TButton",
                    command=lambda: self.app.open_story_editor(self.editor.path if self.editor else None)).pack(
             anchor="e")
+        # barra fija: modos de reto (modos_reto.py) y el resultado de «Montar mod» (campana.py)
+        bar = Card(self, pad=10)
+        bar.pack(fill="x", padx=22, pady=(0, 8))
+        row = tk.Frame(bar.body, bg=C["card"])
+        row.pack(fill="x")
+        label(row, T("Modos de reto", "Challenge modes"), font=F["bold"], bg=C["card"]).pack(side="left")
+        self.reto_cb = ttk.Combobox(row, values=[T(es, en) for _, _, _, es, en in RETO_MODOS], state="readonly",
+                                    width=14)
+        self.reto_cb.current(0)
+        self.reto_cb.pack(side="left", padx=(10, 6))
+        self.reto_n = tk.StringVar(value=str(RETO_MODOS[0][2]))
+        self.reto_cb.bind("<<ComboboxSelected>>", lambda _e: self.reto_n.set(str(RETO_MODOS[self.reto_cb.current()][2])))
+        ttk.Spinbox(row, from_=2, to=10, textvariable=self.reto_n, width=4).pack(side="left")
+        label(row, T("combates", "fights"), fg=C["dim"], bg=C["card"]).pack(side="left", padx=(4, 10))
+        ttk.Button(row, text=T("Crear y montar", "Create and build"), style="Accent.TButton",
+                   command=self.make_reto).pack(side="left")
+        ttk.Button(row, text=T("Poner en el HUB", "Use in the HUB"), command=self.make_nativo).pack(
+            side="left", padx=(6, 0))
+        hint(bar.body, T("«Crear y montar»: torre, supervivencia o kumite con Freezer en Dragon Universe (un mod; las "
+                         "campañas de Freezer comparten su casilla: deja activa solo una). «Poner en el HUB»: ese "
+                         "modo del HUB del juego con ese número de combates.",
+                         "'Create and build': tower, survival or kumite with Frieza in Dragon Universe (a mod; Frieza "
+                         "campaigns share his slot: keep only one enabled). 'Use in the HUB': that game HUB mode "
+                         "with that number of fights."), wrap=900,
+             bg=C["card"]).pack(fill="x", pady=(4, 0))
+        # Torneo Mundial con los rivales elegidos (modos_reto.py torneo --participantes ... --juego)
+        trow = tk.Frame(bar.body, bg=C["card"])
+        trow.pack(fill="x", pady=(8, 0))
+        label(trow, T("Torneo Mundial", "World Tournament"), font=F["bold"], bg=C["card"]).pack(side="left")
+        self.torneo = tk.StringVar()
+        ttk.Entry(trow, textvariable=self.torneo, width=46).pack(side="left", padx=(10, 6))
+        ttk.Button(trow, text=T("Poner rivales", "Set rivals"), command=self.make_torneo).pack(side="left")
+        hint(bar.body, T("Nombres o números separados por comas (p. ej. Goku, Vegeta, Cell, 44). Los que falten salen "
+                         "al azar, como siempre.",
+                         "Names or numbers separated by commas (e.g. Goku, Vegeta, Cell, 44). Missing ones are "
+                         "random, as usual."), wrap=900, bg=C["card"]).pack(fill="x", pady=(2, 0))
+        # Retos predefinidos (retos_predefinidos.py): el reto que juega cada modo del HUB (Torre, Supervivencia,
+        # Kumite). Solo copia un .toml a user_data/dbz3/modos/ del juego; lo que sustituye va a _respaldo.
+        tk.Frame(bar.body, bg=C["line"], height=1).pack(fill="x", pady=(10, 8))
+        prow = tk.Frame(bar.body, bg=C["card"])
+        prow.pack(fill="x")
+        label(prow, T("Retos predefinidos", "Ready-made challenges"), font=F["bold"], bg=C["card"]).pack(side="left")
+        self.pre = predefined_challenges()
+        self.pre_cb = ttk.Combobox(prow, values=[p["label"] for p in self.pre], state="readonly", width=44)
+        if self.pre:
+            self.pre_cb.current(0)
+        self.pre_cb.pack(side="left", padx=(10, 6))
+        ttk.Button(prow, text=T("Poner", "Use it"), command=self.pre_install).pack(side="left")
+        ttk.Button(prow, text=T("Quitar", "Remove"), command=self.pre_remove).pack(side="left", padx=(6, 0))
+        ttk.Button(prow, text="★  " + T("Torre de la semana", "Tower of the week"), style="Accent.TButton",
+                   command=self.pre_week).pack(side="left", padx=(12, 0))
+        self.pre_now = label(bar.body, "", fg=C["dim"], bg=C["card"], wrap=900)
+        self.pre_now.pack(fill="x", pady=(4, 0))
+        hint(bar.body, T("Para los modos del HUB del juego (Torre, Supervivencia, Kumite): el reto elegido se juega "
+                         "la próxima vez que entres en ese modo. «Torre de la semana» cambia cada semana; «Quitar» "
+                         "vuelve al reto de serie. No se borra nada: lo anterior se guarda aparte.",
+                         "For the game's HUB modes (Tower, Survival, Kumite): the chosen challenge is played the "
+                         "next time you enter that mode. 'Tower of the week' changes every week; 'Remove' goes "
+                         "back to the stock challenge. Nothing is deleted: the previous one is kept aside."),
+             wrap=900, bg=C["card"]).pack(fill="x", pady=(2, 0))
+        self.pre_refresh()
+        srow = tk.Frame(bar.body, bg=C["card"])
+        srow.pack(fill="x")
+        self.st = self.status_label(srow)
+        self.st.pack(side="left", fill="x", expand=True)
+        self.after_bar = tk.Frame(srow, bg=C["card"])
+        ttk.Button(self.after_bar, text=T("Abrir carpeta del mod", "Open mod folder"), style="Small.TButton",
+                   command=lambda: open_path(self.last_mod)).pack(side="left", padx=(6, 0))
+        self.solo_btn = ttk.Button(self.after_bar, text=T("Dejar solo esta activa", "Keep only this one enabled"),
+                                   style="Small.TButton", command=self.keep_only)
+        self.last_mod, self.rivals = "", []
         sf = ScrollFrame(self)               # ventana baja: la página se desplaza (no se recorta)
         sf.pack(fill="both", expand=True, padx=22, pady=(0, 10))
         host = sf.inner
@@ -4992,8 +5220,183 @@ class StoriesPage(Page):
             self.editor.open_path(path)
 
     def _run(self, cmd, title):
-        """Montar / Probar: se ejecutan con el registro y la barra de tareas del Mod Kit."""
+        """Montar / Probar: se ejecutan con el registro y la barra de tareas del Mod Kit. Montar va a la
+        carpeta de mods del Mod Kit (campana.py --mods), no a la de por defecto."""
+        if list(cmd[1:3]) == ["campana.py", "montar"]:
+            return self.build_campaign(cmd[3], title)
         return self.app.run([self.env.python] + list(cmd[1:]), title, cwd=HERE)
+
+    def make_reto(self):
+        key, flag = RETO_MODOS[max(0, self.reto_cb.current())][:2]
+        try:
+            n = int(self.reto_n.get())
+        except ValueError:
+            n = 0
+        if not 2 <= n <= 10:
+            self.set_status(self.st, "warn", T("Elige entre 2 y 10 combates.", "Pick between 2 and 10 fights."))
+            return
+        toml = os.path.join(HERE, "campanas", "retos", "reto_%s.toml" % key)
+
+        def done(job):
+            if job.rc == 0 and not job.cancelled:
+                self.build_campaign(toml, T("Modo de reto (2/2): montar", "Challenge mode (2/2): build"))
+            elif self.alive:
+                self.set_status(self.st, "err", T("No se pudo crear el modo: ", "Could not create the mode: ") +
+                                self.app.outcome(job)[1])
+        self.after_bar.pack_forget()
+        self.run(cmd_script(self.env, "modos_reto.py", [key, flag, n, "--salida", toml]),
+                 T("Modo de reto (1/2): crear", "Challenge mode (1/2): create"), done, self.st, cwd=HERE)
+
+    def _hub_run(self, tipo, args, title, ok_text):
+        """modos_reto.py ... --juego: lo que habia en user_data/dbz3/modos/<tipo>.toml va antes a _respaldo."""
+        if not self.env.game:
+            self.set_status(self.st, "warn", T("No encuentro la carpeta del juego: elígela en «Comprobar instalación».",
+                                               "Game folder not found: pick it in 'Check installation'."))
+            return
+        if not self.app.selftest:
+            try:
+                import retos_predefinidos as rp  # noqa: PLC0415
+                rp.mover_a_respaldo(rp.destino(self.env.game, tipo))
+            except (ImportError, OSError) as ex:
+                self.set_status(self.st, "err", T("No se pudo guardar aparte el reto anterior: %s",
+                                                  "The previous challenge could not be kept aside: %s") % ex)
+                return
+        self.after_bar.pack_forget()
+        self.run(cmd_script(self.env, "modos_reto.py", list(args) + ["--juego", self.env.game]), title,
+                 lambda _job: self.pre_refresh() if self.alive else None, self.st, ok_text=ok_text, cwd=HERE)
+
+    def make_nativo(self):
+        tipo, _, _, es, en = RETO_MODOS[max(0, self.reto_cb.current())]
+        try:
+            n = int(self.reto_n.get())
+        except ValueError:
+            n = 0
+        if not 2 <= n <= 10:
+            self.set_status(self.st, "warn", T("Elige entre 2 y 10 combates.", "Pick between 2 and 10 fights."))
+            return
+        import modos_reto as mr  # noqa: PLC0415
+        base = mr.NATIVO[tipo]["rivales"]     # los rivales de serie del juego, repetidos si hacen falta mas
+        rivales = ",".join(str(base[i % len(base)]) for i in range(n))
+        self._hub_run(tipo, ["nativo", tipo, "--rivales", rivales], T("Reto del HUB", "HUB challenge"),
+                      T("Listo: %s con %d combates. Entra en HUB > %s.", "Done: %s with %d fights. Go to HUB > %s.") %
+                      (T(es, en), n, T(es, en)))
+
+    def make_torneo(self):
+        ids, bad = parse_fighters(self.torneo.get())
+        if bad or not ids:
+            self.set_status(self.st, "warn", T("No conozco: %s. Escribe nombres del juego o números del 0 al 63.",
+                                               "Unknown: %s. Type game names or numbers from 0 to 63.") %
+                            (", ".join(bad) or "-"))
+            return
+        self._hub_run("torneo", ["torneo", "--participantes", ",".join(map(str, ids))],
+                      T("Torneo Mundial", "World Tournament"),
+                      T("Listo: %d rivales para el Torneo Mundial.", "Done: %d rivals for the World Tournament.") %
+                      len(ids))
+
+    def build_campaign(self, toml, title=None):
+        """campana.py montar en la carpeta de mods del Mod Kit; al terminar: activo, carpeta y choques."""
+        cfg = read_toml(toml)
+        mod = cfg.get("campana", {}).get("mod") or os.path.splitext(os.path.basename(toml))[0]
+        wheel = wheel_of(cfg)
+
+        def done(job):
+            self.app.cache.pop("mods", None)
+            if not self.alive:
+                return
+            if job.rc != 0 or job.cancelled:
+                self.set_status(self.st, "err", T("No se pudo montar: ", "Could not build: ") + self.app.outcome(job)[1])
+                return
+            set_mod_enabled(self.env.mods, mod, True)        # montar = instalar: queda activo
+            self.last_mod = os.path.join(self.env.mods, mod)
+            self.rivals = campaign_rivals(self.env.mods, mod, wheel)
+            who = ", ".join(donor_name(i) for i in sorted(wheel)) or T("su personaje", "its character")
+            msg = T("Montada en mods\\%s. En el juego: JUGAR > Dragon Universe > %s.",
+                    "Built into mods\\%s. In game: PLAY > Dragon Universe > %s.") % (mod, who)
+            if self.rivals:
+                msg += "  " + T("Ojo: también están activas %s (misma casilla).",
+                                "Careful: %s are also enabled (same slot).") % ", ".join(self.rivals)
+                self.solo_btn.pack(side="left", padx=(6, 0))
+            else:
+                self.solo_btn.pack_forget()
+            self.set_status(self.st, "warn" if self.rivals else "ok", msg)
+            self.after_bar.pack(side="right")
+        self.after_bar.pack_forget()
+        return self.run(cmd_script(self.env, "campana.py", ["--mods", self.env.mods] + self.env.us_args() +
+                                   ["montar", toml]), title or T("Montar campaña", "Build campaign"), done,
+                        self.st, cwd=HERE)
+
+    def keep_only(self):
+        for m in self.rivals:
+            set_mod_enabled(self.env.mods, m, False)       # reversible: «Mis mods» los vuelve a activar
+        self.app.cache.pop("mods", None)
+        self.set_status(self.st, "ok", T("Desactivadas: %s. Puedes volver a activarlas en «Mis mods».",
+                                         "Disabled: %s. You can enable them again in 'My mods'.") % ", ".join(self.rivals))
+        self.rivals = []
+        self.solo_btn.pack_forget()
+
+    # ------------------------------------------------------------ retos predefinidos (HUB)
+    def pre_refresh(self):
+        if not self.env.game:
+            text = T("No encuentro la carpeta del juego: elígela en «Comprobar instalación».",
+                     "Game folder not found: pick it in 'Check installation'.")
+        elif not self.pre:
+            text = T("No hay retos predefinidos en este Kit (falta retos_predefinidos.py o campanas/retos).",
+                     "No ready-made challenges in this kit (retos_predefinidos.py or campanas/retos is missing).")
+        else:
+            now = installed_challenges(self.env.game)
+            text = T("Ahora en el juego:", "Now in the game:") + "  " + "   ·   ".join(
+                "%s: %s" % (_reto_mode_name(t), n) for t, n in now.items())
+        try:
+            self.pre_now.configure(text=text)
+        except tk.TclError:
+            pass
+
+    def _pre_run(self, args, title, ok_text, done=None):
+        if not self.env.game:
+            self.set_status(self.st, "warn", T("No encuentro la carpeta del juego: elígela en «Comprobar instalación».",
+                                               "Game folder not found: pick it in 'Check installation'."))
+            return
+
+        def _done(job):
+            if done is not None:
+                done(job)
+            if self.alive:
+                self.pre_refresh()
+        self.after_bar.pack_forget()
+        self.run(cmd_script(self.env, "retos_predefinidos.py", list(args) + ["--juego", self.env.game]), title,
+                 _done, self.st, ok_text=ok_text, cwd=HERE)
+
+    def pre_selected(self):
+        i = self.pre_cb.current()
+        return self.pre[i] if 0 <= i < len(self.pre) else None
+
+    def pre_install(self):
+        p = self.pre_selected()
+        if p is None:
+            return
+        self._pre_run(["instalar", p["key"]], T("Reto predefinido: poner", "Ready-made challenge: use"),
+                      T("Listo: %s. Entra en HUB > %s para jugarlo.", "Done: %s. Go to HUB > %s to play it.") % (
+                          p["label"], _reto_mode_name(p["tipo"])))
+
+    def pre_remove(self):
+        p = self.pre_selected()
+        if p is None:
+            return
+        mode = _reto_mode_name(p["tipo"])
+        self._pre_run(["quitar", p["tipo"]], T("Reto predefinido: quitar", "Ready-made challenge: remove"),
+                      T("%s vuelve a su reto de serie (el anterior queda guardado aparte).",
+                        "%s goes back to its stock challenge (the previous one is kept aside).") % mode)
+
+    def pre_week(self):
+        def done(job):
+            # el nombre de la torre puesta, en el idioma del Kit, en la linea de estado
+            if job.rc == 0 and not job.cancelled and self.alive:
+                name = installed_challenges(self.env.game).get("torre", "")
+                self.set_status(self.st, "ok", T("Torre de la semana puesta: %s. Entra en HUB > Torre.",
+                                                 "Tower of the week set: %s. Go to HUB > Tower.") % name)
+        self._pre_run(["semana", "--tipo", "torre"], T("Torre de la semana", "Tower of the week"),
+                      T("Torre de la semana puesta. Entra en HUB > Torre.", "Tower of the week set. Go to HUB > Tower."),
+                      done)
 
 
 class HexPage(Page):
@@ -5101,7 +5504,10 @@ class DiagPage(Page):
             with open(path, encoding="utf-8", errors="replace") as f:
                 text = f.read()
         except OSError as e:
-            messagebox.showerror(T("Diagnóstico", "Diagnostics"), str(e))
+            messagebox.showerror(T("Diagnóstico", "Diagnostics"), T(
+                "No se pudo leer ese registro (puede que el juego aún lo esté usando: ciérralo y vuelve a "
+                "intentarlo).\n\n%s", "That log could not be read (the game may still be using it: close it and "
+                "try again).\n\n%s") % e)
             return
         findings = diagnostico.analizar(text, en=LANG == "en")
         self.report = diagnostico.informe(text, en=LANG == "en")
@@ -5426,7 +5832,12 @@ class StatusBar(tk.Frame):
         self.py.configure(text="Python %d.%d.%d" % sys.version_info[:3])
 
     def job_started(self, job):
+        self.title = job.title
         self.job.configure(text=T("Trabajando: %s…", "Working: %s…") % job.title, fg=C["warn"])
+
+    def job_progress(self, line):
+        if line and getattr(self, "title", None):
+            self.job.configure(text=T("Trabajando: %s…", "Working: %s…") % self.title + "  ·  " + line[:90])
         self.cancel.pack(side="right", padx=(4, 4), pady=3)
         self.pb.pack(side="right", padx=4)
         self.pb.start(12)
@@ -5462,9 +5873,9 @@ class App:
         global LANG
         self.root, self.selftest = root, selftest
         self.settings = load_settings()
-        LANG = lang or self.settings.get("lang") or "es"
-        self.adv = (mode or self.settings.get("mode") or "basic") == "advanced"
         self.env = Env(self.settings)
+        LANG = lang or self.settings.get("lang") or detect_lang(self.env.game)
+        self.adv = (mode or self.settings.get("mode") or "basic") == "advanced"
         self.jobs = JobRunner(self)
         self.cache, self.state, self.log_buffer, self.selftest_cmds = {}, {}, [], []
         self.pages = {}
@@ -5677,6 +6088,11 @@ class App:
             self.selftest_cmds.append((title, [str(c) for c in cmd]))
             return False
         if self.jobs.busy():
+            # consulta de fondo (listas), o lo que pulsa el jugador mientras corre una de ellas (p. ej. la
+            # busqueda de juegos del arranque): espera su turno en vez de un aviso emergente
+            if quiet or (self.jobs.job is not None and self.jobs.job.quiet):
+                self.root.after(500, lambda: self.run(cmd, title, done, quiet, cwd))
+                return not quiet
             self.info(T("Ya hay una tarea en marcha. Espera a que termine o pulsa «Cancelar» abajo.",
                         "A task is already running. Wait for it to finish or press 'Cancel' below."))
             return False
@@ -5731,8 +6147,25 @@ class App:
             return "err", T("Falta una librería de Python (numpy / Pillow / scipy). Ve a «Comprobar instalación» y "
                             "pulsa «Instalar requisitos».", "A Python library is missing (numpy / Pillow / scipy). "
                             "Go to 'Check installation' and press 'Install requirements'.")
-        return "err", T("Algo falló (código %s): %s", "Something failed (code %s): %s") % (job.rc,
-                                                                                        last_line(job.text)[:240])
+        # los fallos mas comunes, dichos con su solucion (antes solo "Algo falló (código N)" y la ultima linea)
+        text = job.text
+        if re.search(r"PermissionError|Permission denied|WinError (5|32)\b|being used by another process", text):
+            return "err", T("Un archivo está en uso o protegido. Cierra el juego (dbz3.exe) y cualquier programa que "
+                            "tenga abierta la carpeta de mods, y vuelve a intentarlo.",
+                            "A file is in use or protected. Close the game (dbz3.exe) and any program that has "
+                            "the mods folder open, then try again.")
+        if re.search(r"No space left|WinError 112\b|Errno 28\b", text):
+            return "err", T("No queda espacio en el disco. Libera espacio y vuelve a intentarlo.",
+                            "The disk is full. Free up some space and try again.")
+        if re.search(r"FileNotFoundError|No such file or directory|WinError [23]\b", text):
+            return "err", T("Falta un archivo que la herramienta necesita. Mira en «Comprobar instalación» que la "
+                            "carpeta del juego y los datos (us) estén bien. Detalle: %s",
+                            "A file the tool needs is missing. Check in 'Check installation' that the game "
+                            "folder and its data (us) are right. Detail: %s") % last_line(text)[:160]
+        return "err", T("Algo falló: %s. El detalle completo está en el registro de abajo (puedes copiarlo para "
+                        "pedir ayuda en el Discord).",
+                        "Something failed: %s. The full detail is in the log below (you can copy it to ask for "
+                        "help on Discord).") % last_line(text)[:200]
 
     def log_text(self, text, tag=None):
         text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -5924,6 +6357,18 @@ def selftest(lang=None):
         imp_page.tree.selection_set("0")
         imp_page.pick_entry()
         imp_page.do_import()
+        imp_page.make_official("vis_b2_fat_gotenks", "vision")        # tarjeta 5: personajes de la vision
+        stp = app.pages["stories"]
+        stp.make_reto()                                                # modos de reto: crear (1/2)
+        stp.pre_week()                                                 # retos predefinidos: torre de la semana
+        stp.make_nativo()                                              # modos de reto: poner en el HUB (torre 10)
+        stp.torneo.set("Goku, vegeta, 44")
+        stp.make_torneo()                                              # torneo mundial con rivales elegidos
+        if stp.pre:
+            stp.pre_cb.current(len(stp.pre) - 1)
+            stp.pre_install()                                          # retos predefinidos: poner (un kumite)
+            stp.pre_remove()
+        stp.build_campaign(os.path.join(HERE, "campanas", "historia_freezer.toml"))   # montar en env.mods
         cp = app.pages["create"]
         cp.name.set("Selftest Hero")
         cp.models.insert("end", os.path.join(env.kit, "modelo_de_prueba.amb"))
@@ -5964,6 +6409,51 @@ def selftest(lang=None):
                                            "--nombre", "Zarbon B1"]:
             ok = False
             say("FAIL: importer page command %s" % imp_cmd)
+        want = {"vision": lambda c: c[2:6] == ["oficial", "--recetas", "ports_vision.toml", "vis_b2_fat_gotenks"]
+                and c[6:8] == ["--mods", env.mods],
+                "retos": lambda c: c[1].endswith("modos_reto.py") and c[2:5] == ["torre", "--pisos", "10"],
+                "semana": lambda c: not env.game or (c[1].endswith("retos_predefinidos.py") and
+                                                     c[2:5] == ["semana", "--tipo", "torre"] and
+                                                     c[5:7] == ["--juego", env.game]),
+                "predefinido": lambda c: not env.game or (c[1].endswith("retos_predefinidos.py") and
+                                                          c[2] == "instalar" and c[3].startswith("nativo_kumite")),
+                "quitar": lambda c: not env.game or (c[1].endswith("retos_predefinidos.py") and
+                                                     c[2:4] == ["quitar", "kumite"]),
+                "hub": lambda c: not env.game or (c[1].endswith("modos_reto.py") and c[2:5] == ["nativo", "torre",
+                                                  "--rivales"] and len(c[5].split(",")) == 10 and
+                                                  c[6:8] == ["--juego", env.game]),
+                "torneo": lambda c: not env.game or (c[1].endswith("modos_reto.py") and
+                                                     c[2:4] == ["torneo", "--participantes"] and c[4] == "0,7,44"),
+                "campana": lambda c: c[1].endswith("campana.py") and c[2:4] == ["--mods", env.mods] and
+                c[-2] == "montar"}
+        for name, test in want.items():
+            if not any(test(c) for _, c in acts):
+                ok = False
+                say("FAIL: %s command not recorded" % name)
+        if parse_fighters("Goku, vegeta, Frieza, 63, xx, ") != ([0, 7, 27, 63], ["xx"]):
+            ok = False
+            say("FAIL: parse_fighters %s" % (parse_fighters("Goku, vegeta, Frieza, 63, xx, "),))
+        if len(stp.pre) < 12:
+            ok = False
+            say("FAIL: ready-made challenges: %d in the list (expected 12+)" % len(stp.pre))
+        else:
+            say("ready-made challenges: %d (%s ... %s)" % (len(stp.pre), stp.pre[0]["label"], stp.pre[-1]["label"]))
+        # choques de campañas: misma casilla, solo las activas
+        import tempfile  # noqa: PLC0415
+        tmp = tempfile.mkdtemp(prefix="modkit_selftest_")
+        for nm, txt, off in (("a", "[rueda]\npersonajes = 27\n", False), ("b", "[rueda]\npersonajes = 27\n", True),
+                             ("c", "[rueda]\npersonajes = 7\n", False), ("d", "", False)):
+            os.makedirs(os.path.join(tmp, nm))
+            if txt:
+                with open(os.path.join(tmp, nm, "campana.toml"), "w", encoding="utf-8") as fh:
+                    fh.write(txt)
+            if off:
+                set_mod_enabled(tmp, nm, False)
+        rivals = campaign_rivals(tmp, "x", {27})
+        shutil.rmtree(tmp, ignore_errors=True)      # carpeta temporal propia del autotest
+        if rivals != ["a"] or wheel_of({"rueda": {"personajes": [27, 7]}}) != {27, 7}:
+            ok = False
+            say("FAIL: campaign_rivals %s" % rivals)
         app.goto("studio", personaje=0)
         st_cmd = ([c for t, c in app.selftest_cmds if t == "studio"] or [None])[-1]
         if not st_cmd or not st_cmd[1].endswith("studio_gui.py") or st_cmd[-2:] != ["--personaje", "0"]:
@@ -6052,8 +6542,11 @@ if __name__ == "__main__":
         except OSError:
             pass
         try:
-            messagebox.showerror("DBZ3 HD Mod Kit", "Error al abrir / startup error:\n\n%s\n\n(%s)" % (
-                err[-1500:], log))
+            messagebox.showerror("DBZ3 HD Mod Kit", (
+                "El Mod Kit no ha podido abrirse. Prueba a descomprimir otra vez el Kit completo junto a dbz3.exe. "
+                "Si sigue fallando, comparte este archivo en el Discord de la comunidad:\n"
+                "The Mod Kit could not start. Try unzipping the full kit again next to dbz3.exe. If it keeps "
+                "failing, share this file on the community Discord:\n\n%s\n\n%s") % (log, err[-1200:]))
         except Exception:  # noqa: BLE001
             print(err, file=sys.stderr)
         sys.exit(1)

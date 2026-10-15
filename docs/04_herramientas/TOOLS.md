@@ -203,3 +203,9 @@ python awo_tools/parse_ps2_mesh.py entrada.amb 0 salida
 opening (~90-100 s) → pulsar `Return` (Start) → titulo/menu → idle ~2-2,5 min →
 salta la attract demo battle 3D.
 
+## Herramientas nuevas (2026-10-15)
+
+- `mod center hd/pasarela/pasarela.py` (`info`, `extraer --salida DIR`, `prueba`): lee de la ISO de Budokai 1 del jugador la Leyenda de Mr. Satan (misma logica que `src/pasarela_b1.cpp`); lo extraido no va al repo.
+- `mod center hd/retos_predefinidos.py`: pone o quita un reto de `campanas/retos/` (torre, supervivencia, kumite) y la torre de la semana; tambien desde el Mod Kit (Historias > Retos predefinidos).
+- `tools/compilar.py`: compila el exe dual con candado compartido y copia las DLL canonicas.
+- `tools/pruebas.py`: pruebas en el juego por escenarios (.toml de pasos), hasta 3 copias a la vez; ver `docs/14_frentes/pruebas.md`.

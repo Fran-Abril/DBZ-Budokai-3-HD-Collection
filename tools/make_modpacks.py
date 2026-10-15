@@ -13,15 +13,17 @@
       DBZ3 HD Mod Kit window (mod center hd/modkit_gui.py, opened with DBZ3_ModKit.bat at
       the kit root) plus the standalone modder tools it exposes (KIT_EXTRA_TOOLS).
 
-Usage:  python tools/make_modpacks.py [--version 1.4.1] [--solo kit|personajes]
+Usage:  python tools/make_modpacks.py [--version 1.4.1] [--solo kit|personajes] [--dry-run]
         (v1.4.1: the characters pack stays the 1.4.0 one on Google Drive -> --solo kit)
 """
 import argparse
 import ast
+import glob
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -34,7 +36,10 @@ KIT_ENTRIES = ["roster_build", "importar", "swap_b3", "texture_b3", "texture_dum
                "modkit_gui",      # DBZ3 HD Mod Kit: the no-console window over all of these
                "diagnostico",     # its Diagnostics page (reads a game log, explains it)
                "hexedit",         # its Hex page (expert byte editor that knows #AMB/#AMO)
-               "log_en"]          # English log of the tools when the Mod Kit is in EN
+               "log_en",          # English log of the tools when the Mod Kit is in EN
+               "campana", "editor_historias",   # Historias page (montar) and its story editor
+               "modos_reto",      # challenge modes card (run as a subprocess: no import reaches it)
+               "retos_predefinidos"]   # "Retos predefinidos" row (HUB challenges, tower of the week)
 # Standalone modder tools the Mod Kit window also exposes (advanced mode > Tools), with the
 # local modules they import (kit_modules follows them).
 KIT_EXTRA_TOOLS = ["name_banner", "portrait_hd", "extract_azt_afs", "awg_to_obj_b3", "awg0_export",
@@ -46,8 +51,12 @@ KIT_DATA = ["catalog_b3.cat", "roster_db.json", "b1_capsulas.txt",   # b1_capsul
             # y la lista de herramientas de la ventana
             "presets_importar.toml", "iw_modelos.json", "du_codigos.json", "texturas_etiquetas.json",
             "tools_manifest.json",
-            "ports_oficiales.toml"]   # recetas de la tarjeta "4. Ports oficiales" (importar.py oficial)
-KIT_CAMPAIGNS = ["plantilla_historia.toml", "ejemplo_freezer.toml", "historia_freezer.toml"]   # editor de historias (Freezer, sin sus imagenes)
+            "ports_oficiales.toml",   # recetas de la tarjeta "4. Ports oficiales" (importar.py oficial)
+            "ports_vision.toml"]      # tarjeta "5. Personajes de la vision" (importar.py oficial --recetas)
+# editor de historias y modos de reto: solo los .toml (globs valen). NUNCA las imagenes de campanas/imagenes
+# ni campanas/retratos (arte de terceros): campana.py usa el panel / retrato del juego si faltan.
+KIT_CAMPAIGNS = ["plantilla_historia.toml", "ejemplo_freezer.toml", "historia_freezer.toml", "retos/*.toml"]
+ART_EXT = (".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif", ".bmp", ".tga", ".dds", ".psd")
 AWO_DATA = ["psp_ramp.npy"]      # rampa toon de PSP: la carga psp_amo.py (importar de Shin Budokai)
 KIT_ROOT_FILES = ["LEEME_KIT.txt", "LEEME_KIT_EN.txt", "requirements.txt", "instalar_requisitos.bat", "DBZ3_ModKit.bat"]
 KIT_FORMAT_DOCS = ["CAPSULAS_B3.md", "MAPA_ROSTER_HD.md", "ACM_FORMAT.md", "AMO_AWO.md", "BIN_LAYOUT.md",
@@ -115,7 +124,15 @@ def characters_pack(ver, stage):
     return out
 
 
-def kit_pack(ver, stage):
+def no_third_party_art(mch):
+    """Fails the build if any image reached the staged campanas/ (third-party art never ships)."""
+    bad = [os.path.relpath(os.path.join(dp, f), mch) for dp, _, fs in os.walk(os.path.join(mch, "campanas"))
+           for f in fs if f.lower().endswith(ART_EXT)]
+    if bad:
+        raise SystemExit("third-party art in the Kit: " + ", ".join(bad))
+
+
+def kit_pack(ver, stage, dry=False):
     mch = os.path.join(stage, "mod center hd")
     awo = os.path.join(stage, "awo_tools")
     os.makedirs(os.path.join(mch, "tools"))
@@ -131,9 +148,16 @@ def kit_pack(ver, stage):
         shutil.copytree(fonts, os.path.join(mch, "fonts"))
     for f in KIT_DATA:
         shutil.copyfile(os.path.join(ROOT, "mod center hd", f), os.path.join(mch, f))
-    os.makedirs(os.path.join(mch, "campanas"), exist_ok=True)
-    for f in KIT_CAMPAIGNS:
-        shutil.copyfile(os.path.join(ROOT, "mod center hd", "campanas", f), os.path.join(mch, "campanas", f))
+    camp = os.path.join(ROOT, "mod center hd", "campanas")
+    for pat in KIT_CAMPAIGNS:
+        found = glob.glob(os.path.join(camp, pat))
+        if not found:
+            raise SystemExit("missing campaign file: campanas/" + pat)
+        for src in found:
+            dst = os.path.join(mch, "campanas", os.path.relpath(src, camp))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(src, dst)
+    no_third_party_art(mch)
     for f in AWO_DATA:
         shutil.copyfile(os.path.join(ROOT, "awo_tools", f), os.path.join(awo, f))
     for f in os.listdir(XDK):
@@ -166,6 +190,11 @@ def kit_pack(ver, stage):
                     os.path.join(stage, "ps2_games", "LEEME.txt"))
     shutil.copyfile(os.path.join(ROOT, "tools", "modpacks", "LEEME_PS2_GAMES_EN.txt"),
                     os.path.join(stage, "ps2_games", "LEEME_EN.txt"))
+    if dry:     # --dry-run: what would ship, without the portable Python and without the zip
+        for dp, _, fs in os.walk(mch):
+            for f in fs:
+                print("  " + os.path.relpath(os.path.join(dp, f), stage).replace(os.sep, "/"))
+        return "(dry run: %d files staged, no zip)" % sum(len(fs) for _, _, fs in os.walk(stage))
     # Python portatil (python/ con numpy, Pillow, scipy y tkinter): el Kit, el launcher (texturas,
     # personajes) y DBZ3_ModKit.bat lo usan antes que el del sistema. Nadie instala nada.
     sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -183,7 +212,17 @@ def main():
     ap.add_argument("--version", default="1.4.2")
     ap.add_argument("--solo", choices=("kit", "personajes"),
                     help="build only one pack (the other one is reused from an earlier release)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="stage the Kit in a temp folder and list its mod center hd/ files (no python bundle, no zip, "
+                         "release_packs/ untouched); fails if third-party art would ship")
     a = ap.parse_args()
+    if a.dry_run:
+        tmp = tempfile.mkdtemp(prefix="kit_dry_")
+        try:
+            print("kit:", kit_pack(a.version, os.path.join(tmp, "kit"), dry=True))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)   # our own temp staging folder
+        return
     os.makedirs(OUT, exist_ok=True)
     stage = os.path.join(OUT, "_stage")
     if os.path.exists(stage):

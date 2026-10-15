@@ -1,0 +1,2 @@
+descripcion = "sin mods de escenario: el selector del Duelo es el de siempre y se pelea en uno de serie"
+pasos = ["esperar 2500", "tecla S 1200", "tecla Space 3000", "tecla Space 3000", "tecla Space 4000", "tecla Space 4000", "tecla Space 4000", "tecla Space 4000", "esperar 2500", "captura 01_selector", "tecla A 1500", "captura 02_izq", "tecla A 1500", "captura 03_izq", "tecla Space 3000", "log \"tag: empieza un combate\" 60", "esperar 3000", "tecla Space 1500", "tecla Space 1500", "esperar 5000", "captura 04_combate"]

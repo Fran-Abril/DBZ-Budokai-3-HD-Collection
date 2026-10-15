@@ -73,7 +73,7 @@ Copyright (c) 2026 **NovaPowers**. Released under the MIT License (see `LICENSE`
 - **Drag-and-drop mods:** drop a `.zip` on the launcher to install it.
 - **Broken-mod warning:** the launcher explains what is wrong with each mod and warns next to PLAY.
 - **Modding Kit with Python included:** nothing to install.
-- **Native mods translated** to the launcher language.
+- **Native mods** (today's **Game** tab) translated to the launcher language.
 - **Shin Budokai characters:** voices, Burning Attack and ki blasts fixed.
 - 1.4.2 brought **NVIDIA DLSS and AMD FSR 3 (beta)**, adjustable HD shine and the Shin Budokai importer.
 
@@ -175,7 +175,9 @@ From the [**Releases**](../../releases/latest) page:
      (or `eu\`) folder.
 3. **Open `dbz3.exe`**. The launcher checks what you have and tells you what is
    missing, if anything. You can also point it at your data with the folder or
-   ISO buttons.
+   ISO buttons. On the first start it follows your Windows language and a short
+   **First steps** window explains what to do (reopen it any time from the
+   button at the top).
 4. Pick region, language, video and sound, then press **PLAY** (or **START** on
    the controller).
 
@@ -227,10 +229,26 @@ use a tool such as `extract-xiso` (reads the Xbox 360 FATX filesystem).
 | **F3** | FPS counter (game and display). |
 | **F4** | All settings (the launcher, over the game). |
 | **LB / RB** or **Ctrl + Tab** | Switch launcher tabs. |
+| **A / B** | Select / go back in the launcher (B or Esc also closes its windows). |
 | **START** | PLAY from the launcher. |
 
 The launcher's hint bar shows keys or buttons (Xbox, PlayStation or Switch)
 depending on what you used last.
+
+### Launcher tabs
+
+| Tab | What you do there |
+|---|---|
+| **Video**, **Upscaling**, **Audio** | Picture, upscaling (FSR, DLSS...), sound and the launcher/game language. |
+| **Input** | Controller and keyboard. To change a key, press the keyboard button next to its box and then the key. |
+| **Mods** | Your installed mods: tick to turn one on or off; drag a `.zip` onto the window to install it. |
+| **Nova's Mods** | The project's mods (characters, stories, HD textures): one-click download and update. |
+| **Game** | The new modes (HUB, Tag Team, Online, transformation selector; all beta), quick start, save backup and HD shine. |
+| **Model Swap**, **Textures** | Give a character another one's model, or retouch its textures (need the modding kit). |
+| **New characters** | Turn new characters on or off, edit them and import them from other games (importing needs the kit). |
+| **Advanced** | Diagnostics only: nothing here is needed to play. |
+
+The **First steps** button at the top sums it all up in four steps.
 
 ---
 
@@ -264,14 +282,15 @@ The tools behind the launcher's modding tabs: create and **import characters**
 (Budokai 1, Budokai 2, Infinite World and community models), custom capsules,
 voices and yells, textures and model swap.
 
-1. Install [Python 3.11 or newer](https://www.python.org/downloads/) and tick
-   *Add python.exe to PATH*.
-2. Copy the whole ZIP content into the game folder (`mod center hd` and
-   `awo_tools` must end up next to `dbz3.exe`).
-3. Double-click `instalar_requisitos.bat` (only once).
-4. Open `dbz3.exe` → **New characters → Import a character from another game**:
+1. Copy the whole ZIP content into the game folder (`mod center hd` and
+   `awo_tools` must end up next to `dbz3.exe`). Python and its libraries come
+   inside the kit: there is nothing else to install.
+2. Open `dbz3.exe` → **New characters → Import a character from another game**:
    pick the game, search the character, check the name (you see live how it will
    look on the select screen) and press **Import**.
+3. Or open the **Mod Kit** window (`DBZ3_ModKit.bat`): characters, stories,
+   textures, model swaps and, in **Stories**, the **ready-made HUB challenges**
+   and the **tower of the week**.
 
 To import from other games, use **your own copies** in the `ps2_games` folder
 (read its `LEEME.txt`). Super Dragon Ball Heroes and Shin Budokai 1/2 are
@@ -288,8 +307,8 @@ mods/<mod>/manifest.txt                       # metadata (name, author...)
 mods/<mod>/.disabled                          # if present, the mod is OFF
 ```
 
-They are managed from the launcher (**Mods**, **Textures**, **Model Swap** and
-**New characters** tabs) or with the tools in `mod center hd/`. Guides in
+They are managed from the launcher (**Mods**, **Nova's Mods**, **Textures**,
+**Model Swap** and **New characters** tabs) or with the tools in `mod center hd/`. Guides in
 [`docs/02_mods/`](docs/02_mods/) and the capsule format in
 [`docs/03_formatos/CAPSULAS_B3.md`](docs/03_formatos/CAPSULAS_B3.md).
 
@@ -340,8 +359,10 @@ rebuilds it automatically when you press PLAY.
 - New design with cards and icons, a big **PLAY** button and **startup in under
   a second**.
 - **Controller navigation** with a device-aware hint bar.
-- **5 languages** (ES/EN/IT/DE/FR), clear messages when the executable is the
-  wrong one, one-click **Repair installation** and an update check.
+- **5 languages** (ES/EN/IT/DE/FR, the Windows one on first start), clear
+  messages when the executable is the wrong one, one-click **Repair
+  installation** with a plain-language result, a **First steps** guide and an
+  update check.
 - **Portable, self-repairing** settings.
 
 **Mods**
@@ -358,8 +379,8 @@ rebuilds it automatically when you press PLAY.
 
 **Diagnostics (optional)**
 
-- Dev tab: I/O and performance logging and GPU diagnostic knobs. All **off by
-  default**.
+- **Advanced** tab: I/O and performance logging and GPU diagnostic knobs. All
+  **off by default**.
 
 ---
 

@@ -1,0 +1,36 @@
+// dbz3 - ESCENARIOS NUEVOS (altas): escenarios de mods como casillas NUEVAS del juego (solo US).
+//
+// Un mod declara en mods/<mod>/stage.toml uno o mas escenarios nuevos:
+//   [[escenario]]
+//   nombre  = "B2 ISLAS"   # nombre del registro (<= 15 letras)
+//   titulo  = "Islas de B2" # nombre para pantallas propias (UTF-8; si falta, `nombre`)
+//   entrada = 5002         # data_cmn.afs: bin del escenario (entrada NUEVA, >= 5000)
+//   id_se   = 45           # data_cmn.afs: sonido/ambiente (el de un escenario de serie)
+//   tema    = 16           # luz y cielo: la funcion de tema del registro N de serie
+// Cada alta es el registro 17, 18... El juego solo tiene 17 registros (tabla 0x82323760 pegada a
+// la de temas): el alta se carga en el hueco de un registro ANFITRION (16, R&R BASE) solo mientras
+// ese escenario esta cargado, y se devuelve el original en cuanto se carga otro. El indice de
+// escenario del combate (CFG+340) lleva el numero del alta (17+), asi "otra vez" vuelve a cargarla
+// y dbz3::hub::RequestBattle(id1, id2, 17, ...) la lanza igual que una de serie.
+#pragma once
+
+#include <string>
+
+namespace rex::memory {
+class Memory;
+}
+
+namespace dbz3::escenarios {
+
+constexpr int kSerie = 17;   // registros de serie (0..16)
+
+// Lee las altas de los mods activos (lo llama stages::ApplyAtLaunch).
+void CargarDeMods(rex::memory::Memory* memory);
+// Registros disponibles: 17 de serie + altas de mods.
+int Total();
+// Nombre para pantallas propias (HUB, retos), en el idioma del juego (id de idioma de Xbox, como
+// dbz3_language: 1 ingles, 3 aleman, 4 frances, 5 espanol, 6 italiano; otro = ingles), en UTF-8: los de
+// serie son los oficiales del selector; las altas dan su `titulo` (o `nombre`). Fuera de rango: "".
+std::string Nombre(int registro, int idioma);
+
+}  // namespace dbz3::escenarios

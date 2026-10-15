@@ -52,6 +52,8 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #include "launcher/settings.h"
 #if REX_PLATFORM_WIN32
 #include <commdlg.h>
+#include <shobjidl.h>
+#pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "comdlg32.lib")
 #endif
 #include "launcher/launcher_state.h"
@@ -86,6 +88,10 @@ namespace dbz3 {
 // Pantalla "juego en segundo plano" activa: las pantallas propias (TAG TEAM, ONLINE) no se dibujan
 // encima de ella.
 bool GameDimmed() { return dbz3::settings::DimUnfocused() && !g_window_focused.load(); }
+// Launcher (F4), menu rapido (F1) o menu de desarrollo (F10) abiertos sobre el juego: las entradas
+// propias del menu (TAG TEAM, ONLINE) y sus pantallas no se pintan encima.
+std::atomic<bool> g_overlay_open{false};
+bool OverlayOpen() { return g_overlay_open.load() || rex::ui::QuickMenuDialog::IsOpen(); }
 }  // namespace dbz3
 
 #include <atomic>
@@ -104,6 +110,50 @@ bool GameDimmed() { return dbz3::settings::DimUnfocused() && !g_window_focused.l
 #include <dbghelp.h>
 #pragma comment(lib, "dbghelp.lib")
 #endif
+
+namespace dbz3 {
+std::atomic<void*> g_hwnd{nullptr};
+// Icono de la ventana con una imagen del propio juego (leida de los ficheros del jugador, no se reparte)
+void SetWindowIconRgba(const uint8_t* rgba, int w, int h) {
+#if REX_PLATFORM_WIN32
+  HWND hwnd = static_cast<HWND>(g_hwnd.load());
+  if (!hwnd || !rgba || w <= 0 || h <= 0) return;
+  BITMAPV5HEADER bi{};
+  bi.bV5Size = sizeof(bi);
+  bi.bV5Width = w;
+  bi.bV5Height = -h;
+  bi.bV5Planes = 1;
+  bi.bV5BitCount = 32;
+  bi.bV5Compression = BI_BITFIELDS;
+  bi.bV5RedMask = 0x00FF0000;
+  bi.bV5GreenMask = 0x0000FF00;
+  bi.bV5BlueMask = 0x000000FF;
+  bi.bV5AlphaMask = 0xFF000000;
+  void* bits = nullptr;
+  HDC dc = GetDC(nullptr);
+  HBITMAP color = CreateDIBSection(dc, reinterpret_cast<BITMAPINFO*>(&bi), DIB_RGB_COLORS, &bits, nullptr, 0);
+  ReleaseDC(nullptr, dc);
+  if (!color || !bits) return;
+  auto* p = static_cast<uint8_t*>(bits);
+  for (int i = 0; i < w * h; ++i) {   // RGBA -> BGRA
+    p[4 * i] = rgba[4 * i + 2];
+    p[4 * i + 1] = rgba[4 * i + 1];
+    p[4 * i + 2] = rgba[4 * i];
+    p[4 * i + 3] = rgba[4 * i + 3];
+  }
+  HBITMAP mask = CreateBitmap(w, h, 1, 1, nullptr);
+  ICONINFO ii{TRUE, 0, 0, mask, color};
+  HICON icon = CreateIconIndirect(&ii);
+  DeleteObject(mask);
+  DeleteObject(color);
+  if (!icon) return;
+  SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(icon));
+  SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon));
+#else
+  (void)rgba; (void)w; (void)h;
+#endif
+}
+}  // namespace dbz3
 
 namespace {
 // Startup timing helper: logs the elapsed milliseconds since first call so the
@@ -216,52 +266,115 @@ public:
             boot.xex.empty() ? (game_root / "default.xex") : boot.xex;
         if (!std::filesystem::is_regular_file(xex_probe)) {
           REXLOG_ERROR("dbz3: no executable found (probed '{}')", xex_probe.string());
+          // lo tecnico va al log; el aviso habla como un jugador (propuesta del frente QoL, 2026-10-15)
+          REXLOG_INFO("dbz3: se busca default.xex, yae3_xenon.xex o DBZ3/yae3_xenon.xex con us/ (o eu/) al lado, "
+                      "tambien en assets/; un .zip/.rar sin extraer o una copia 'Games on Demand' (Content/0000...) "
+                      "no sirven");
+          dbz3::i18n::SetLanguage(dbz3::settings::Language());
+          using dbz3::i18n::T;
           const std::string msg =
-              "No se encontro el ejecutable de Budokai 3.\n\n"
-              "Pon tu copia del juego junto a dbz3.exe: el ejecutable (default.xex,\n"
-              "o yae3_xenon.xex / DBZ3/yae3_xenon.xex si lo copiaste del disco) y la\n"
-              "carpeta us/ (y/o eu/). Tambien vale dentro de una subcarpeta 'assets/',\n"
-              "o elegir una imagen de disco (.iso) en el launcher.\n\n"
-              "Si el juego esta en un .zip, .rar o .7z, extraelo antes. Una copia\n"
-              "en formato 'Games on Demand' (carpeta Content/0000...) no sirve:\n"
-              "hace falta la imagen de disco (.iso) o sus archivos extraidos.\n\n"
-              "Carpeta buscada:\n" +
+              std::string(T("No encuentro tu copia de Budokai 3 HD.\n\n"
+                            "Pon la imagen del disco (ISO de Xbox 360) junto a dbz3.exe, o elígela ahora. "
+                            "Si tienes el juego extraído en una carpeta, elige esa carpeta (la que tiene "
+                            "DBZ3, o default.xex y us/).\n\n"
+                            "Sí: elegir la imagen del disco (.iso)\n"
+                            "No: elegir la carpeta del juego extraído\n"
+                            "Cancelar: salir\n\n"
+                            "Carpeta buscada:\n",
+                            "I can't find your copy of Budokai 3 HD.\n\n"
+                            "Put the disc image (Xbox 360 ISO) next to dbz3.exe, or pick it now. "
+                            "If you have the game extracted in a folder, pick that folder (the one with "
+                            "DBZ3, or default.xex and us/).\n\n"
+                            "Yes: pick the disc image (.iso)\n"
+                            "No: pick the folder with the extracted game\n"
+                            "Cancel: quit\n\n"
+                            "Folder searched:\n")) +
               game_root.string();
 #if REX_PLATFORM_WIN32
-          // el launcher aun no existe aqui: se ofrece elegir la imagen de disco ya (un jugador se quedo
-          // sin forma de llegar al boton del launcher, 2026-10-12) y se reinicia con ella
-          const std::string ask = msg + "\n\nQuieres elegir ahora la imagen de disco del juego (.iso)?";
-          if (!std::getenv("DBZ3_NO_DIALOGS") &&   // pruebas automaticas: solo el log
-              MessageBoxA(nullptr, ask.c_str(), "DBZ Budokai 3 - Datos del juego",
-                          MB_YESNO | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST) == IDYES) {
-            wchar_t file[MAX_PATH] = {};
-            OPENFILENAMEW ofn = {};
-            ofn.lStructSize = sizeof(ofn);
-            ofn.lpstrFilter = L"Imagen de disco (*.iso)\0*.iso;*.xiso\0Todos los archivos\0*.*\0";
-            ofn.lpstrFile = file;
-            ofn.nMaxFile = MAX_PATH;
-            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-            if (GetOpenFileNameW(&ofn)) {
+          // El launcher no puede abrirse sin el ejecutable del juego (Runtime::Setup lo necesita): aqui se
+          // ofrecen sus dos botones (imagen de disco / carpeta extraida) y se reinicia con lo elegido. Antes,
+          // con "No" el programa se cerraba sin mas (un jugador se quedo sin forma de llegar, 2026-10-12).
+          const char* caption = T("DBZ Budokai 3 - Datos del juego", "DBZ Budokai 3 - Game data");
+          auto restart = [](bool same_args) {
+            wchar_t self[MAX_PATH] = {};
+            GetModuleFileNameW(nullptr, self, MAX_PATH);
+            STARTUPINFOW si = {};
+            si.cb = sizeof(si);
+            PROCESS_INFORMATION pi = {};
+            // ISO: con los mismos argumentos (antes se perdian). Carpeta: sin ellos, o un --game_directory
+            // le ganaria a la carpeta elegida y el aviso volveria a salir
+            std::wstring cmd = same_args ? std::wstring(GetCommandLineW()) : std::wstring();
+            if (CreateProcessW(self, same_args ? cmd.data() : nullptr, nullptr, nullptr, FALSE, 0, nullptr, nullptr,
+                               &si, &pi)) {
+              CloseHandle(pi.hThread);
+              CloseHandle(pi.hProcess);
+            }
+            rex::FlushLogging();
+            std::_Exit(0);
+          };
+          auto warn = [&](const char* text) {
+            MessageBoxA(nullptr, text, caption, MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+          };
+          while (!std::getenv("DBZ3_NO_DIALOGS")) {   // pruebas automaticas: solo el log
+            const int pick = MessageBoxA(nullptr, msg.c_str(), caption,
+                                         MB_YESNOCANCEL | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
+            if (pick == IDYES) {
+              wchar_t file[MAX_PATH] = {};
+              OPENFILENAMEW ofn = {};
+              ofn.lStructSize = sizeof(ofn);
+              ofn.lpstrFilter = std::strcmp(dbz3::i18n::LangCode(), "es") == 0
+                                    ? L"Imagen de disco (*.iso)\0*.iso;*.xiso\0Todos los archivos\0*.*\0"
+                                    : L"Disc image (*.iso)\0*.iso;*.xiso\0All files\0*.*\0";
+              ofn.lpstrFile = file;
+              ofn.nMaxFile = MAX_PATH;
+              ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+              if (!GetOpenFileNameW(&ofn)) continue;   // cancelado: otra vez la pregunta
               if (dbz3::settings::IsValidIso(std::filesystem::path(file))) {
-                char utf8[MAX_PATH * 4] = {};
-                WideCharToMultiByte(CP_UTF8, 0, file, -1, utf8, sizeof(utf8), nullptr, nullptr);
-                dbz3::settings::SetIsoPath(utf8);
+                dbz3::settings::SetIsoPath(rex::path_to_utf8(std::filesystem::path(file)));
                 dbz3::settings::SaveUserSettings();
-                wchar_t self[MAX_PATH] = {};
-                GetModuleFileNameW(nullptr, self, MAX_PATH);
-                STARTUPINFOW si = {};
-                si.cb = sizeof(si);
-                PROCESS_INFORMATION pi = {};
-                if (CreateProcessW(self, nullptr, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
-                  CloseHandle(pi.hThread);
-                  CloseHandle(pi.hProcess);
-                }
-                rex::FlushLogging();
-                std::_Exit(0);
+                REXLOG_INFO("dbz3: imagen de disco elegida en el aviso de arranque; se reinicia");
+                restart(true);
               }
-              MessageBoxA(nullptr, "Ese archivo no es una imagen de disco de Xbox 360 (tiene que ser el disco de\n"
-                          "Budokai 3 o de la HD Collection, completo).", "DBZ Budokai 3 - Datos del juego",
-                          MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+              warn(T("Ese archivo no es una imagen de disco de Xbox 360 (tiene que ser el disco de\n"
+                     "Budokai 3 o de la HD Collection, completo).",
+                     "That file is not an Xbox 360 disc image (it has to be the full Budokai 3\n"
+                     "or HD Collection disc)."));
+            } else if (pick == IDNO) {
+              std::filesystem::path folder;
+              const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+              IFileOpenDialog* dlg = nullptr;
+              if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) {
+                DWORD opts = 0;
+                dlg->GetOptions(&opts);
+                dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+                IShellItem* res = nullptr;
+                PWSTR path = nullptr;
+                if (SUCCEEDED(dlg->Show(nullptr)) && SUCCEEDED(dlg->GetResult(&res)) &&
+                    SUCCEEDED(res->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+                  folder = std::filesystem::path(std::wstring(path));
+                  CoTaskMemFree(path);
+                }
+                if (res) res->Release();
+                dlg->Release();
+              }
+              if (SUCCEEDED(com)) CoUninitialize();
+              if (folder.empty()) continue;   // cancelado: otra vez la pregunta
+              if (dbz3::settings::IsValidGameDataDir(folder)) {
+                dbz3::settings::SetGameDirOverride(rex::path_to_utf8(folder));
+                dbz3::settings::SetIsoPath("");   // la carpeta elegida gana (como en el launcher)
+                dbz3::settings::SaveUserSettings();
+                REXLOG_INFO("dbz3: carpeta del juego elegida en el aviso de arranque; se reinicia");
+                restart(false);
+              }
+              const std::string leaf = rex::path_to_utf8(folder.filename());
+              warn(leaf == "us" || leaf == "eu"
+                       ? T("Has elegido la carpeta us/ (o eu/). Elige la carpeta que la contiene.",
+                           "You picked the us/ (or eu/) folder itself. Pick the folder that contains it.")
+                       : T("Esa carpeta no tiene el juego. Elige la que contiene DBZ3, o default.xex y us/.",
+                           "That folder does not have the game. Pick the one that contains DBZ3, or "
+                           "default.xex and us/."));
+            } else {
+              break;   // Cancelar: salir
             }
           }
 #else
@@ -352,7 +465,8 @@ public:
     void OpenFullSettings() {
         if (!imgui_drawer_ || launcher_dialog_) return;
         launcher_dialog_ = new dbz3::launcher::LauncherDialog(
-            imgui_drawer_, [this]() { launcher_dialog_ = nullptr; });
+            imgui_drawer_, [this]() { launcher_dialog_ = nullptr; dbz3::g_overlay_open = ingame_menu_ != nullptr; });
+        dbz3::g_overlay_open = true;
         // Over the game: the game must not also read the pad meanwhile.
         launcher_dialog_->SetInGame(launched_.load(std::memory_order_acquire));
     }
@@ -364,6 +478,11 @@ public:
             debug_overlay_ = std::make_unique<DebugOverlayDialog>(drawer);
         }
         imgui_drawer_ = drawer;
+        // nombre del juego en la ventana (el SDK pone "dbz3" y su sello de compilacion)
+        if (window()) {
+            window()->SetTitle("Dragon Ball Z Budokai 3 HD");
+            dbz3::g_hwnd = window()->GetNativeWindowHandle();
+        }
         if (!drop_listener_added_ && window()) {
             window()->AddListener(&drop_listener_);
             drop_listener_added_ = true;
@@ -430,6 +549,7 @@ public:
             } else {
                 ingame_menu_ = std::make_unique<dbz3::ingame::InGameMenu>(imgui_drawer_);
             }
+            dbz3::g_overlay_open = ingame_menu_ != nullptr || launcher_dialog_ != nullptr;
         });
 
     }
@@ -471,6 +591,13 @@ public:
                 // panel ONLINE del Duelo: siempre creado, solo se dibuja al pedirlo (SELECT)
                 online_panel_ = std::make_unique<dbz3::ingame::OnlinePanel>(imgui_drawer_);
                 tagteam_panel_ = std::make_unique<dbz3::ingame::TagTeamPanel>(imgui_drawer_);
+                // PRUEBA (DBZ3_TEST_OVERLAY=N): abre el launcher sobre el juego a los N s (sin teclado real)
+                if (const char* t = std::getenv("DBZ3_TEST_OVERLAY")) {
+                    std::thread([this, sec = std::atoi(t)]() {
+                        std::this_thread::sleep_for(std::chrono::seconds(sec));
+                        app_context().CallInUIThreadDeferred([this]() { OpenFullSettings(); });
+                    }).detach();
+                }
             } else {
             }
         } else {
@@ -610,10 +737,15 @@ public:
                 for (auto [it_1, iec_1] = std::pair{std::filesystem::directory_iterator(shipped, ec), std::error_code{}}; !iec_1 && it_1 != std::filesystem::directory_iterator(); it_1.increment(iec_1)) {
     const auto& f = *it_1;
                     const auto dst = shareable / f.path().filename();
+                    // a .tmp y renombrar: un cierre a mitad de copia dejaba un fichero cortado que,
+                    // como ya existia, nunca se volvia a copiar
+                    auto tmp = dst;
+                    tmp += ".tmp";
                     if (f.is_regular_file(ec) && !std::filesystem::exists(dst, ec) &&
-                        std::filesystem::copy_file(f.path(), dst, ec)) {
-                        REXLOG_INFO("dbz3: cache de shaders inicial copiada: {}",
-                                    f.path().filename().string());
+                        std::filesystem::copy_file(f.path(), tmp, std::filesystem::copy_options::overwrite_existing, ec)) {
+                        std::filesystem::rename(tmp, dst, ec);
+                        REXLOG_INFO("dbz3: cache de shaders inicial copiada: {}{}",
+                                    f.path().filename().string(), ec ? " (ERROR al renombrar)" : "");
                     }
                 }
             }
@@ -729,6 +861,8 @@ public:
             REXLOG_INFO("Calling LaunchModule()....");
             if (auto main_thread = rt->LaunchModule()) {
                 REXLOG_INFO("Module relaunched successfully");
+                // una segunda transicion asignaba sobre un hilo aun "joinable": std::terminate (cierre)
+                if (transition_thread_.joinable()) transition_thread_.detach();
                 transition_thread_ = std::thread([this, main_thread = std::move(main_thread)]() mutable {
                     REXLOG_INFO("Waiting for relaunched module thread...");
                     main_thread->Wait(0, 0, 0, nullptr);
@@ -962,27 +1096,33 @@ private:
             }
             // Flush the log so the message box below points at a complete file.
             rex::FlushLogging();
+            // en el idioma del jugador (antes solo en espanol)
+            dbz3::i18n::SetLanguage(dbz3::settings::Language());
+            using dbz3::i18n::T;
             char msg[4096];
-            int len = snprintf(msg, sizeof(msg),
-                               "DBZ Budokai 3 HD Collection se cerro inesperadamente.\n\n"
-                               "Excepcion: 0x%08X en %p\n\n",
-                               code, addr);
+            int len = snprintf(msg, sizeof(msg), "%s\n\n%s: 0x%08X (%p)\n\n",
+                               T("DBZ Budokai 3 HD Collection se cerro inesperadamente.",
+                                 "DBZ Budokai 3 HD Collection closed unexpectedly."),
+                               T("Excepcion", "Exception"), code, addr);
+            if (len < 0 || len >= int(sizeof(msg))) len = 0;
             const std::string log_path = dbz3::settings::LatestLogPath().string();
             if (!log_path.empty()) {
-              snprintf(msg + len, sizeof(msg) - static_cast<size_t>(len),
-                       "El registro del juego esta en:\n%s\n", log_path.c_str());
+              snprintf(msg + len, sizeof(msg) - static_cast<size_t>(len), "%s\n%s\n",
+                       T("El registro del juego esta en:", "The game log is in:"), log_path.c_str());
             } else {
-              snprintf(msg + len, sizeof(msg) - static_cast<size_t>(len),
-                       "El registro no se pudo localizar (logs/ junto al juego).\n");
+              snprintf(msg + len, sizeof(msg) - static_cast<size_t>(len), "%s\n",
+                       T("El registro no se pudo localizar (logs/ junto al juego).",
+                         "The log could not be found (logs/ next to the game)."));
             }
             if (dump_path[0] != '\0') {
               size_t cur = strnlen(msg, sizeof(msg));
-              snprintf(msg + cur, sizeof(msg) - cur,
-                       "\nMinidump guardado en:\n%s\n", dump_path);
+              snprintf(msg + cur, sizeof(msg) - cur, "\n%s\n%s\n",
+                       T("Minidump guardado en:", "Minidump saved to:"), dump_path);
             }
             size_t end = strnlen(msg, sizeof(msg));
-            snprintf(msg + end, sizeof(msg) - end,
-                     "\nSi el problema persiste, comparte el registro para diagnostico.");
+            snprintf(msg + end, sizeof(msg) - end, "\n%s",
+                     T("Si el problema persiste, comparte el registro para diagnostico.",
+                       "If the problem persists, share the log so it can be diagnosed."));
             // pruebas automaticas (DBZ3_NO_DIALOGS): sin ventana encima del escritorio del usuario
             if (!std::getenv("DBZ3_NO_DIALOGS"))
                 MessageBoxA(nullptr, msg, "DBZ Budokai 3 - Error",
@@ -1002,10 +1142,14 @@ private:
             }
             rex::FlushLogging();
             if (!std::getenv("DBZ3_NO_DIALOGS"))
+            dbz3::i18n::SetLanguage(dbz3::settings::Language());
             MessageBoxA(nullptr,
-                        "DBZ Budokai 3 HD Collection se cerró inesperadamente "
-                        "(terminación del runtime). Consulta el registro en "
-                        "logs/ junto al juego.",
+                        dbz3::i18n::T("DBZ Budokai 3 HD Collection se cerro inesperadamente "
+                                      "(terminacion del runtime). Consulta el registro en "
+                                      "logs/ junto al juego.",
+                                      "DBZ Budokai 3 HD Collection closed unexpectedly "
+                                      "(runtime termination). See the log in logs/ next to "
+                                      "the game."),
                         "DBZ Budokai 3 - Error",
                         MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
             std::abort();

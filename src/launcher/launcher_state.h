@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -73,6 +74,23 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   void DrawImporter();
   void ParseImporterOutput();
   void DrawDevTab();
+  // "Novedades" (novedades.h): boton en la cabecera; se abre sola una vez tras actualizar.
+  void DrawNews();
+  bool news_pending_ = false;
+  bool news_checked_ = false;
+  // "Primeros pasos": 4 pasos para empezar (se abre solo la primera vez; boton en la cabecera).
+  void DrawFirstSteps();
+  bool first_steps_pending_ = false;
+  bool first_steps_checked_ = false;
+  double saved_flash_until_ = 0.0;   // "Guardado" en el boton de guardar durante 2 s
+  // Controles: tecla que se esta asignando ("a", "lstick_up"...; vacio = ninguna) y frames de espera
+  // (el clic que abre la escucha no cuenta como tecla).
+  std::string kb_listen_;
+  int kb_listen_wait_ = 0;
+  // Ficha de un mod (al pulsar su nombre en la pestana Mods).
+  void DrawModCard();
+  std::string mod_card_;    // pedida este frame
+  std::string card_mod_;    // la que esta abierta
   // Controller: feeds ImGui's gamepad navigation, LB/RB tabs, START = Play,
   // and remembers whether the last input came from the pad or the keyboard.
   void PollController(ImGuiIO& io);
@@ -176,7 +194,7 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   int ed_cap_form_ = 1;
   bool slots_expanded_ = false;
   // Cambio de pestana pedido desde otra (Mods <-> Personajes nuevos).
-  int request_tab_ = 0;              // 0 ninguno, 1 Mods, 2 Personajes nuevos
+  int request_tab_ = 0;              // 0 ninguno, 1 Mods, 2 Personajes nuevos, 3 Nova's Mods, 4 Video
   std::vector<std::string> pending_preview_;   // queued while another job runs
   std::string pending_preview_mod_;
   int nc_slot_choice_ = -1;          // -1 = automatica, si no el ID de la plaza
@@ -248,6 +266,15 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   // Mods center (P4.1): zip install + profiles.
   std::string mods_status_;  // transient status line shown in the Mods tab
   std::string native_mods_status_;
+  // Pestana Juego: guardados y catalogo leidos al abrirla y tras cada accion (no en cada frame).
+  struct SaveFile {
+    std::filesystem::path path;
+    bool supported = false;
+  };
+  std::vector<SaveFile> saves_;
+  std::vector<dbz3::NativeModInfo> native_catalog_;
+  bool saves_loaded_ = false;
+  bool save100_ok_ = false;
   std::string nova_last_status_;
   bool profile_name_dialog_ = false;
   char new_profile_buf_[64] = {};
@@ -256,7 +283,16 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   // a search filter. The cache is invalidated after toggles/installs/edits and
   // rebuilt lazily on the next draw.
   std::vector<dbz3::ModInfo> mods_cache_;
-  bool mods_loaded_ = false;
+  bool mods_loaded_ = false;   // false = hay que volver a leer la lista (PollModsScan la pide)
+  bool mods_ready_ = false;    // ya llego la primera lectura
+  struct ModsScan {            // lectura en otro hilo: 1 = lista lista, 2 = tambien los conflictos
+    std::atomic<int> stage{0};
+    bool taken = false;        // la lista ya se paso a mods_cache_ (hilo de la interfaz)
+    std::vector<dbz3::ModInfo> mods;
+    std::vector<dbz3::ModConflict> conflicts;
+  };
+  std::shared_ptr<ModsScan> mods_scan_;
+  void PollModsScan();
   char mods_search_buf_[128] = {};
   char profiles_search_[128] = {};
   char novas_search_[128] = {};

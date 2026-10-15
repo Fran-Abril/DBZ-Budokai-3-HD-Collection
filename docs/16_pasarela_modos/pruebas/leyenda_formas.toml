@@ -1,0 +1,15 @@
+# Formas iniciales del original (RequestBattleEx): Goku en SSJ (forma 2 de B3) y Gohan adolescente en SSJ (1),
+# con la vida de Mr. Satan que pasa de Goku a Gohan. Empieza en la tarjeta de Goku (paso 22).
+descripcion = "Pasarela: Goku SSJ, Gohan SSJ y vida que no se recupera"
+env = ["DBZ3_TEST_PASARELA=auto,desde=21", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games", "DBZ3_TEST_RINGOUT=1"]
+pasos = [
+  'log "pasarela: ronda 9 \(1/1\): id 14 contra id 0 \(B1 0, forma B1 4 -> 2\)" 60',
+  'log "pasarela: paso 22 estado del combate 4" 60',
+  'esperar 1500', 'captura 01_goku_ssj',
+  'log "pasarela: paso 22 estado del combate 7" 60',
+  'esperar 1000', 'tecla S 1200', 'tecla S 1200', 'tecla Space 1200', 'tecla W 1200', 'tecla Space 2500',
+  'log "pasarela: fin del combate \(paso 22\): gana el lado 1, vida de Mr. Satan" 20',
+  'log "pasarela: ronda 10 \(1/1\): id 14 contra id 3 \(B1 2, forma B1 1 -> 1\).*vida -[1-9][0-9]* / 0" 60',
+  'log "pasarela: paso 24 estado del combate 4" 60',
+  'esperar 1500', 'captura 02_gohan_ssj',
+]

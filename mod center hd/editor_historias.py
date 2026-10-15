@@ -55,6 +55,14 @@ FONT = {}                                                # se rellena con init_f
 THUMB, THUMB_BIG = 96, 200                               # tamaño de las vistas previas (px)
 
 
+MONTAR_ARGS = []   # --mods/--us de la linea de ordenes (Mod Kit, ventana aparte): se pasan a campana.py
+
+
+def mods_dir():
+    """Carpeta mods/ pasada con --mods (None = la del juego)."""
+    return MONTAR_ARGS[MONTAR_ARGS.index("--mods") + 1] if "--mods" in MONTAR_ARGS else None
+
+
 def T(es, en):
     """Texto en el idioma elegido. Solo se muestra uno, nunca los dos a la vez."""
     return en if LANG == "en" else es
@@ -699,6 +707,21 @@ def check(data, base):
                               "%s: without a fight it is the ending; the chapters after it are ignored.") % t)
             if c.get("saga"):
                 warn.append(T("%s: 'saga' no tiene efecto en el final.", "%s: 'saga' has no effect on the ending.") % t)
+    # la casilla de Dragon Universe (codigo % 100) es de una sola campana: dos en la misma no conviven
+    cp, code = _campana(), (data.get("historia") or {}).get("codigo")
+    if cp and _is_int(code) and re.fullmatch(r"[A-Za-z0-9_\-]+", mod):
+        try:
+            mods = mods_dir() or cp.rb.default_mods()
+            other = cp.other_campaigns(mods, os.path.join(mods, mod)).get(int(code) % 100)
+        except OSError:
+            other = None
+        if other:
+            err.append(T("La casilla %d de Dragon Universe ya la usa la campaña «%s»: elige otro protagonista.",
+                         "Dragon Universe slot %d is already used by the campaign '%s': pick another hero.")
+                       % (int(code) % 100, other))
+        elif (cp.NATIVE_DU >> (int(code) % 100)) & 1:
+            warn.append(T("La casilla %d ya tiene historia del juego: esta campaña la sustituye.",
+                          "Slot %d already has a game story: this campaign replaces it.") % (int(code) % 100))
     return err, warn
 
 
@@ -794,15 +817,15 @@ def put_style(data, name, stored):
         hist.pop("estilos", None)
 
 
-def style_preview(name, values, base):
-    """RGBA (numpy) de SAMPLE dibujada con `values` como estilo `name` (campana.render). Mientras dibuja,
-    pone esos valores en campana.STYLES y luego lo deja como estaba: lo guardado no cambia."""
+def style_preview(name, values, base, text=SAMPLE):
+    """RGBA (numpy) de `text` dibujada con `values` como estilo `name` (campana.render, la misma imagen que
+    va al juego). Mientras dibuja, pone esos valores en campana.STYLES y luego lo deja como estaba."""
     cp = _campana()
     old, old_dir = cp.STYLES.get(name), cp.TOML_DIR[0]
     try:
         cp.STYLES[name] = dict(values)
         cp.TOML_DIR[0] = base
-        return cp.render(SAMPLE, name)
+        return cp.render(text, name)
     finally:
         if old is None:
             cp.STYLES.pop(name, None)
@@ -1052,8 +1075,9 @@ def _mix(a, b, t):
     return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
 
-def scene_image(art):
-    """Dialogo aproximado (420x300): cielo y suelo, retrato abajo a la derecha y globo de texto a la izquierda."""
+def scene_image(art, line=None):
+    """Dialogo aproximado (420x300): cielo y suelo, retrato abajo a la derecha y globo de texto a la izquierda.
+    `line`: RGBA (numpy) de la frase tal como va al juego (campana.render); sin ella, un texto de muestra."""
     W, H = SCENE_W, SCENE_H
     im = Image.new("RGB", (W, H))
     d = ImageDraw.Draw(im)
@@ -1073,6 +1097,12 @@ def scene_image(art):
     x1, y1, x2, y2 = 12, 16, x0 - 16, 118
     d.rounded_rectangle([x1, y1, x2, y2], radius=12, fill=(255, 255, 255), outline=(40, 40, 40), width=2)
     d.polygon([(x2 - 30, y2 - 2), (x2 - 8, y2 - 2), (x2 + 4, y2 + 12)], fill=(255, 255, 255))
+    if line is not None:                               # la imagen real del texto, encajada en el globo
+        t = Image.fromarray(line)
+        k = min(1.0, (x2 - x1 - 16) / t.width, (y2 - y1 - 12) / t.height)
+        t = t.resize((max(1, round(t.width * k)), max(1, round(t.height * k))), Image.LANCZOS)
+        im.paste(t, ((x1 + x2 - t.width) // 2, (y1 + y2 - t.height) // 2), t)
+        return im
     try:                                               # letra del sistema (con acentos y ¡); si no, la de Pillow
         font = ImageFont.truetype("segoeui.ttf", 13)
     except OSError:
@@ -1841,8 +1871,25 @@ class App:
                 art = portrait_art(full, esc, dx, dy)
             except (OSError, ValueError):            # PNG roto: se ve el escenario sin arte
                 art = None
-        self.ret_scene_img = ImageTk.PhotoImage(scene_image(art), master=self.ret_scene)
+        self.ret_scene_img = ImageTk.PhotoImage(scene_image(art, self._scene_line()), master=self.ret_scene)
         self.ret_scene.configure(image=self.ret_scene_img, text="")
+
+    def _scene_line(self):
+        """La primera frase de diálogo de un capítulo con este retrato (o la de muestra), dibujada como en el
+        juego (fuente, tamaño y ancho del estilo «dialogo»). None sin numpy/Pillow."""
+        rs, i = self.data.get("retrato", []), self.sel_ret
+        ent = str(rs[i].get("entrada", "")) if i is not None and i < len(rs) else ""
+        text = SAMPLE
+        for c in self.data.get("capitulo", []):
+            lines = c.get("dialogo_" + LANG) or c.get("dialogo_es") or c.get("dialogo_en")
+            if ent and ent in [str(r) for r in c.get("retratos", [])] and lines and isinstance(lines[0], str):
+                text = lines[0]
+                break
+        try:
+            return style_preview("dialogo", style_effective(self.data, "dialogo"), self._base(), text) \
+                if _campana() else None
+        except (OSError, ValueError, KeyError):
+            return None
 
     def _on_ret(self, _e=None):
         sel = self.lst_ret.curselection()
@@ -2191,7 +2238,7 @@ class App:
         if self.running or not self._save():
             return
         self.log(T("Montando el mod…", "Building the mod…"))
-        self.run_cmd([sys.executable, "campana.py", "montar", self.path], T("Montar mod", "Build mod"))
+        self.run_cmd([sys.executable, "campana.py"] + MONTAR_ARGS + ["montar", self.path], T("Montar mod", "Build mod"))
 
     def probar(self):
         self.run_cmd([sys.executable, "campana.py", "prueba"], T("Probar", "Test"))
@@ -2519,6 +2566,8 @@ def selftest():
     assert d3 == pl and r3 == raw, "escala/desplazamiento no vuelven igual"
     if Image is not None:                                # la vista previa del diálogo tiene su tamaño
         assert scene_image(None).size == (SCENE_W, SCENE_H)
+        if _campana():   # la frase real (campana.render) encajada en el globo
+            assert scene_image(None, style_preview("dialogo", style_default("dialogo"), HERE, "¡Hola!")).size == (SCENE_W, SCENE_H)
         mecha = os.path.join(CAMPANAS, "retratos", "mecha_freezer.png")   # aportado: no va en el Kit
         assert not os.path.isfile(mecha) or portrait_art(mecha, 1.0, 0, 0).size == (541, 530)
     assert cap_label(0, {"combate": 654}) == "1 · Combate 654"
@@ -2535,7 +2584,10 @@ def main(argv=None):
     ap.add_argument("archivo", nargs="?", help="historia .toml a abrir (story .toml to open)")
     ap.add_argument("--lang", choices=("es", "en"), help="idioma: es o en (por defecto, el del Mod Kit)")
     ap.add_argument("--selftest", action="store_true", help="autocomprobacion sin ventana (self-check)")
+    ap.add_argument("--mods", help="carpeta mods/ donde se monta (por defecto la del juego); se pasa a campana.py")
+    ap.add_argument("--us", help="carpeta us/ del juego; se pasa a campana.py")
     a = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    MONTAR_ARGS[:] = [x for k in ("mods", "us") if getattr(a, k) for x in ("--" + k, os.path.abspath(getattr(a, k)))]
     if a.selftest:
         return selftest()
     LANG = a.lang or settings_lang() or "es"

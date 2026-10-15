@@ -1,0 +1,28 @@
+# La leyenda de Mr. Satan desde el principio: presentacion, retador 1 (Yamcha), charla y retador 2 (Ten Shin Han).
+# python tools\pruebas.py correr pasarela_test docs\16_pasarela_modos\pruebas\leyenda_inicio.toml
+# DBZ3_TEST_PASARELA=auto: el modo avanza solo (4 s por pantalla); RINGOUT: el rival cae del ring a los 5 s.
+descripcion = "Pasarela: leyenda de Mr. Satan, presentacion y dos retadores"
+env = ["DBZ3_TEST_PASARELA=auto,desde=0", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games", "DBZ3_TEST_RINGOUT=1"]
+pasos = [
+  'log "pasarela: .*leida en" 40',
+  'log "pasarela: paso 1/26 \(presentacion" 30',
+  'esperar 1500', 'captura 01_presentacion',
+  'log "pasarela: paso 2/26 \(combate ronda 1\)" 10',
+  'esperar 1500', 'captura 02_tarjeta_yamcha',
+  'log "hub: combate nativo: id 14 contra id 13" 15',
+  'log "pasarela: paso 2 estado del combate 4" 60',
+  'esperar 2500', 'captura 03_combate_yamcha',
+  'log "pasarela: paso 2 estado del combate 7" 60',
+  'esperar 1000', 'tecla S 1200', 'tecla S 1200', 'tecla Space 1200', 'tecla W 1200', 'tecla Space 2500',
+  'log "pasarela: fin del combate \(paso 2\): gana el lado 1" 20',
+  'log "pasarela: paso 3/26 \(charla ronda 2\)" 30',
+  'esperar 1500', 'captura 04_charla_tien',
+  'log "pasarela: paso 4/26 \(combate ronda 2\)" 10',
+  'esperar 1500', 'captura 05_tarjeta_tien',
+  'log "hub: combate nativo: id 14 contra id 12" 15',
+  'log "pasarela: paso 4 estado del combate 7" 90',
+  'esperar 1000', 'tecla S 1200', 'tecla S 1200', 'tecla Space 1200', 'tecla W 1200', 'tecla Space 2500',
+  'log "pasarela: fin del combate \(paso 4\): gana el lado 1" 20',
+  'log "pasarela: paso 5/26 \(charla ronda 3\)" 30',
+  'esperar 1500', 'captura 06_charla_krilin',
+]

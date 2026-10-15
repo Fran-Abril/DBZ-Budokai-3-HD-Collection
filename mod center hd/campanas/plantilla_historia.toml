@@ -22,11 +22,13 @@ personajes = [27]
 
 [historia]
 codigo = 5122                 # escenas del mapa: 5000 + 100*saga + casilla
+# La casilla es la del protagonista de [rueda] (ID < 22: la misma; 27-30: ID-5; 32+: ID-6) y es solo de esta
+# campana: dos campanas con la misma casilla no se montan. Libres: 1, 5, 6, 8, 9, 14-16, 18-33, 35-37.
 contenedor = 1820
 altura_mapa = 400            # altura a la que vuelas por el mapa al volver de un combate
 # idioma = "en"             # opcional: ese idioma en todos (si aun no hay traducciones)
 # musica_narracion = 135269   # opcional: musica de los paneles de narracion (135269 = la de las introducciones del juego)
-# imagenes_desde = 4510       # opcional: primera entrada libre de data_cmn para tus imagenes ("imagen", "cierre_imagen" y [[imagen]])
+# imagenes_desde = 4510       # opcional: sin el, tus imagenes van al bloque propio de la campana (recomendado)
 # textos: cada campana tiene su propio bloque de entradas de texto, elegido solo (sin pisar las del
 # juego ni las de otros mods). Solo si quieres fijarlo a mano: textos_desde = N aqui y en dialogos.
 fondo = 1411                  # panel de los textos de saga
@@ -88,6 +90,9 @@ cierre_es = ["Texto del final de la saga anterior."]
 cierre_en = ["End of the previous saga."]
 # imagen = "intro.png"          # opcional: imagen (.png, .webp, .jpg o .avif, junto a este archivo) en lugar del panel verde de la intro
 # cierre_imagen = "cierre.png"  # opcional: lo mismo para el cierre de la saga anterior
+# imagenes = [{ imagen = "a.png", paginas = 2 }, { imagen = 1549 }]   # opcional: varias imagenes en la intro, cada una
+#                                # con sus paginas (la ultima, las que queden); un numero = imagen del juego
+# cierre_imagenes = [...]       # lo mismo para el cierre
 es = ["Texto de la introduccion de la saga nueva."]
 en = ["Intro of the new saga."]
 dialogo_es = ["Frase del rival.", "Respuesta."]

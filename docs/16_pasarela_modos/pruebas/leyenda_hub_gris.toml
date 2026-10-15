@@ -1,0 +1,11 @@
+# SOLO con el parche del HUB aplicado (docs/16_pasarela_modos/parche_hub_satan.diff): sin ISO de Budokai 1 la
+# entrada "Leyenda de Mr. Satan" sale en gris en la pagina 2 del HUB, su bocadillo explica que falta y A no la abre.
+descripcion = "Pasarela: entrada del HUB en gris sin la ISO de Budokai 1 (requiere el parche del HUB)"
+env = ["DBZ3_PS2_GAMES=E:/DBZ3HD_trabajo/pasarela/sin_isos"]
+pasos = [
+  'esperar_pantalla 5 30', 'esperar 1500',
+  'tecla W 1200', 'tecla Space 2500',
+  'tecla W 1500', 'captura 01_hub_leyenda_gris',
+  'tecla Space 2000', 'captura 02_sigue_en_el_hub',
+  'log "pasarela: leyenda de Mr. Satan no disponible \(sin ISO de Budokai 1" 20',
+]

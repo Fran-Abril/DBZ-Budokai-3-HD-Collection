@@ -1,0 +1,25 @@
+# Reglas del original por el conector (RequestBattleEx): Vegeta con 60 s, Cell Jr. de 1000 de vida y la vida de
+# Mr. Satan que pasa de un Cell Jr. al siguiente. Empieza en la tarjeta de Vegeta (paso 12).
+descripcion = "Pasarela: reglas de Vegeta (60 s) y de los Cell Jr. (1000, vida que sigue)"
+env = ["DBZ3_TEST_PASARELA=auto,desde=11", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games", "DBZ3_TEST_RINGOUT=1"]
+pasos = [
+  'log "pasarela: ronda 6 \(1/1\): id 14 contra id 7 .*tiempo 60, vida 0 / 0" 60',
+  'log "pasarela: paso 12 estado del combate 4" 60',
+  'esperar 1500', 'captura 01_vegeta_60s',
+  'log "pasarela: paso 12 estado del combate 7" 60',
+  'esperar 1000', 'tecla S 1200', 'tecla S 1200', 'tecla Space 1200', 'tecla W 1200', 'tecla Space 2500',
+  'log "pasarela: fin del combate \(paso 12\): gana el lado 1" 20',
+  'log "pasarela: paso 14 estado del combate 7" 120',
+  'esperar 1000', 'tecla S 1200', 'tecla S 1200', 'tecla Space 1200', 'tecla W 1200', 'tecla Space 2500',
+  'log "pasarela: fin del combate \(paso 14\): gana el lado 1" 20',
+  'log "pasarela: ronda 8 \(1/5\): id 14 contra id 43 .*tiempo 0, vida 0 / 1000" 60',
+  'log "pasarela: paso 16 estado del combate 4" 60',
+  'esperar 1500', 'captura 02_cell_jr_1000',
+  'log "pasarela: paso 16 estado del combate 7" 60',
+  'esperar 1000', 'tecla S 1200', 'tecla S 1200', 'tecla Space 1200', 'tecla W 1200', 'tecla Space 2500',
+  'log "pasarela: fin del combate \(paso 16\): gana el lado 1, vida de Mr. Satan" 20',
+  'log "pasarela: paso 17/26 \(combate ronda 8 vez 2\)" 20',
+  'esperar 1500', 'captura 03_tarjeta_cell_jr_2de5',
+  'log "pasarela: ronda 8 \(2/5\): id 14 contra id 43 .*vida -[1-9][0-9]* / 1000" 20',
+  'log "pasarela: paso 1[78] estado del combate 4" 60', 'esperar 1500', 'captura 04_cell_jr_2_vida_que_sigue',
+]

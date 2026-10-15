@@ -36,7 +36,8 @@ mi_campana.toml:
   [[escena]]                         # eventos que se anaden a una entrada de un contenedor #LST
   contenedor = 1725                  # (p. ej. el paso de la intro al mapa que le falta a una historia)
   entrada = 22
-  anadir = [[22, 0, 0], [44, 0, 5930]]   # [evento, p1, p2]
+  anadir = [[22, 0, 0]]              # [evento, p1, p2]; los del mapa llevan mas valores
+                                     # (MAP_EVENT_WORDS): 44 = salida (44, 0, x, z, y)
 """
 import argparse
 import io
@@ -45,6 +46,8 @@ import os
 import struct
 import sys
 import tempfile
+import atexit
+import shutil
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -70,6 +73,174 @@ MAP_ANIMS = {}     # [animacion_mapa]: palabra -> ID cuyo vuelo del mapa se usa 
 MAP_SUITS = {}     # [traje_mapa]: palabra del combate -> traje en el mapa (Freezer 2 = en su nave)
 MAP_MODELS = {}    # [modelo_mapa] del campana.toml: palabra del combate -> modelo con el que vuelas hacia el
 TOML_DIR = [HERE]   # carpeta del .toml que se monta (las paginas .png van relativas a ella)
+
+
+def work_dir():
+    """Carpeta temporal de trabajo de esta ejecucion; se limpia al salir (antes cada montaje dejaba sus
+    entradas descomprimidas en %TEMP%, en el disco C)."""
+    d = tempfile.mkdtemp(prefix="campana_")
+    atexit.register(shutil.rmtree, d, ignore_errors=True)
+    return d
+WRITTEN = set()     # (afs, entrada) escritas en este montaje: lo que sobre en su data_cmn va a mods_respaldo
+CMN = {}            # bloque de contenedores propios de data_cmn (reservar_cmn): base, siguiente
+SHARED = {}         # contenedor compartido -> su copia en el bloque propio
+CMN_LO, CMN_HI, CMN_N = 6000, 8192, 64   # lejos de _roster (3990+) y de los escenarios (5000+)
+NATIVE_DU = 0x400023C9D   # casillas con historia del juego (Goku 0 ... Broly 34)
+
+
+def write_entry(mod_dir, afs, n, data, work):
+    WRITTEN.add((afs, int(n)))
+    rb.write_entry(mod_dir, afs, n, data, work)
+
+
+def old_toml(mod):
+    try:
+        return tomllib.load(open(os.path.join(mod, "campana.toml"), "rb"))
+    except (OSError, ValueError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def reservar_cmn(mods, mod):
+    """Bloque de CMN_N entradas de data_cmn de esta campana (copias de los contenedores que comparten todas
+    las historias, imagenes, eventos del mapa), sin pisar a otros mods (tambien desactivados). Estable al
+    rehacer: campana.toml [contenedores]. Depende del nombre del mod (crc32), como los textos."""
+    import zlib  # noqa: PLC0415
+    me = os.path.basename(mod)
+    taken = set()
+    for d in os.listdir(mods) if os.path.isdir(mods) else []:
+        p = os.path.join(mods, d, "us", "data_cmn.afs")
+        if d != me and os.path.isdir(p):
+            taken.update(int(e) for e in os.listdir(p) if e.isdigit())
+    slots = (CMN_HI - CMN_LO) // CMN_N
+    old = old_toml(mod).get("contenedores", {}).get("base")
+    cands = ([int(old)] if old else []) + [CMN_LO + CMN_N * ((zlib.crc32(me.encode("utf-8")) + i) % slots)
+                                           for i in range(slots)]
+    for b in cands:
+        if CMN_LO <= b <= CMN_HI - CMN_N and not any(b + k in taken for k in range(CMN_N)):
+            CMN.update(base=b, next=b)
+            return b
+    raise SystemExit("no quedan contenedores libres en data_cmn para %s (demasiadas campanas)" % me)
+
+
+def nueva_entrada():
+    """Siguiente entrada libre del bloque propio de data_cmn."""
+    if CMN["next"] >= CMN["base"] + CMN_N:
+        raise SystemExit("la campana usa mas de %d entradas propias de data_cmn" % CMN_N)
+    CMN["next"] += 1
+    return CMN["next"] - 1
+
+
+def shared_codes(cont_n):
+    """Codigos de historia que llevan al contenedor `cont_n` si lo comparten todas las historias (fuera de
+    los bloques por casilla 5000-6199: introducciones 100-106, finales 1, eventos del mapa 2100...)."""
+    reg = json.load(open(os.path.join(HERE, "du_codigos.json"), encoding="utf-8"))["codigos"]
+    codes = sorted(int(k) for k, v in reg.items() if int(v) == int(cont_n))
+    return codes if any(not 5000 <= c < 6200 for c in codes) else []
+
+
+def write_container(mod, cont_n, data, work):
+    """Un contenedor compartido no se cambia para todos: su copia va al bloque propio y el juego la usa
+    solo mientras se juega la casilla de esta campana ([codigos_historia]); asi conviven varias campanas.
+    Los de una sola casilla se escriben en su sitio."""
+    codes = shared_codes(cont_n)
+    if not codes:
+        write_entry(mod, "data_cmn.afs", int(cont_n), data, work)
+        return int(cont_n)
+    e = SHARED.setdefault(int(cont_n), nueva_entrada())
+    write_entry(mod, "data_cmn.afs", e, data, work)
+    for c in codes:
+        STORY_CODES[c] = e
+    return e
+
+
+def other_campaigns(mods, mod):
+    """{casilla: mod} de las otras campanas de la carpeta de mods (tambien desactivadas)."""
+    out = {}
+    for d in os.listdir(mods) if os.path.isdir(mods) else []:
+        p = os.path.join(mods, d)
+        if d != os.path.basename(mod) and os.path.isfile(os.path.join(p, "campana.toml")):
+            c = old_toml(p).get("rueda", {}).get("casilla")
+            if c is not None:
+                out[int(c)] = d
+    return out
+
+
+def validar(cfg, mods, mod):
+    """(errores, avisos) antes de montar: la casilla de DU de la historia (codigo % 100) no puede ser la de
+    otra campana ni la de una historia del juego."""
+    err, warn = [], []
+    for e in cfg.get("escena", []):
+        for ev in e.get("cambiar", []) + e.get("anadir", []):
+            try:
+                words = len(pack_event(tuple(ev))) // 4
+            except (TypeError, ValueError):
+                err.append("[[escena]] %s.%s: evento %r mal escrito" % (e.get("contenedor"), e.get("entrada"), ev))
+                continue
+            need = MAP_EVENT_WORDS.get(int(ev[0]), 3)
+            if words != need:
+                err.append("[[escena]] %s.%s: el evento %s ocupa %d palabras en el juego y %r da %d"
+                           % (e.get("contenedor"), e.get("entrada"), ev[0], need, ev, words))
+    h = cfg.get("historia")
+    if not h:
+        return err, warn
+    if "codigo" not in h:
+        return ["[historia] necesita `codigo` (5000 + 100*saga + casilla: Freezer 5122)"], warn
+    slot = int(h["codigo"]) % 100
+    if not cfg.get("rueda", {}).get("personajes"):
+        err.append("falta [rueda] personajes = [ID]: sin el, la historia no sale en la rueda de Dragon Universe")
+    # casilla de cada ID: la inversa de la formula del juego (sub_82156E88: casilla < 22 igual, 22-25 +5, >= 26 +6)
+    slot_of = lambda i: i if i < 22 else i - 5 if 27 <= i <= 30 else i - 6 if 32 <= i <= 43 else None
+    ids = cfg.get("rueda", {}).get("personajes") or []
+    ids = [int(i) for i in (ids if isinstance(ids, list) else [ids])]
+    if ids and slot not in [slot_of(i) for i in ids]:
+        err.append("[historia] codigo %d es de la casilla %d, pero [rueda] personajes = %s van a las casillas %s: el "
+                   "codigo es 5000 + 100*saga + casilla del protagonista" % (int(h["codigo"]), slot, ids,
+                                                                          [slot_of(i) for i in ids]))
+    for e in cfg.get("escena", []):
+        bad = sorted({int(ev[0]) for ev in e.get("cambiar", []) + e.get("anadir", []) if int(ev[0]) in BAD_OPS})
+        if bad:
+            err.append("[[escena]] %s.%s usa los eventos %s, que el juego lee mal (pila sin inicializar)"
+                       % (e.get("contenedor"), e.get("entrada"), bad))
+    if slot >= 38:
+        err.append("casilla %d: la rueda solo tiene 38 (0-37); no hay sitio en la partida para mas" % slot)
+    elif (NATIVE_DU >> slot) & 1:
+        warn.append("la casilla %d ya tiene historia del juego: esta campana la sustituye" % slot)
+    if slot in other_campaigns(mods, mod):
+        err.append("la casilla %d ya la usa la campana '%s': elige otro protagonista (otra casilla)"
+                   % (slot, other_campaigns(mods, mod)[slot]))
+    return err, warn
+
+
+def entry_conflicts(mods, mod):
+    """Entradas de data_cmn de este mod que otro mod tambien trae con otros datos (solo una ganaria)."""
+    import hashlib  # noqa: PLC0415
+    mine = os.path.join(mod, "us", "data_cmn.afs")
+    out = []
+    for d in os.listdir(mods) if os.path.isdir(mods) else []:
+        p = os.path.join(mods, d, "us", "data_cmn.afs")
+        if d == os.path.basename(mod) or d.startswith((".", "_")) or not os.path.isdir(p) or not os.path.isdir(mine):
+            continue
+        h = lambda f: hashlib.md5(open(f, "rb").read()).digest() if os.path.isfile(f) else None
+        for e in sorted(set(os.listdir(mine)) & set(os.listdir(p)), key=lambda x: int(x) if x.isdigit() else 0):
+            if h(os.path.join(mine, e, "geom.bin")) != h(os.path.join(p, e, "geom.bin")):
+                out.append((int(e) if e.isdigit() else e, d))
+    return out
+
+
+def move_stale(mods, mod):
+    """Entradas de data_cmn que este montaje ya no escribe (p. ej. contenedores compartidos que antes se
+    cambiaban en su sitio): a mods_respaldo, nunca se borran."""
+    import shutil  # noqa: PLC0415
+    import time  # noqa: PLC0415
+    d = os.path.join(mod, "us", "data_cmn.afs")
+    stale = [e for e in os.listdir(d) if e.isdigit() and ("data_cmn.afs", int(e)) not in WRITTEN] if os.path.isdir(d) else []
+    if stale:
+        bak = os.path.join(os.path.dirname(os.path.abspath(mods)), "mods_respaldo",
+                           "%s_cmn_%s" % (os.path.basename(mod), time.strftime("%Y%m%d_%H%M%S")), "data_cmn.afs")
+        os.makedirs(bak, exist_ok=True)
+        for e in stale:
+            shutil.move(os.path.join(d, e), os.path.join(bak, e))
+        rb.log("data_cmn que ya no usa (a %s): %s" % (bak, " ".join(sorted(stale, key=int))))
 
 
 # ---------------------------------------------------------------- texto -> imagen
@@ -129,7 +300,7 @@ def textures(b):
 
 
 def cmd_ver(a):
-    us, work = a.us or rb.default_us(), tempfile.mkdtemp()
+    us, work = a.us or rb.default_us(), work_dir()
     out = a.salida or os.path.join(HERE, "campanas_textos")
     os.makedirs(out, exist_ok=True)
     for lang, afss in LANG_AFS.items():
@@ -152,7 +323,7 @@ def cmd_ver(a):
 def cmd_escenas(a):
     reg = json.load(open(os.path.join(HERE, "du_codigos.json"), encoding="utf-8"))
     codes = {int(k): v for k, v in reg["codigos"].items()}
-    us, work = a.us or rb.default_us(), tempfile.mkdtemp()
+    us, work = a.us or rb.default_us(), work_dir()
     for code in range(a.bloque, a.bloque + 100):
         if code not in codes:
             continue
@@ -219,7 +390,9 @@ def lst_replace(b, entry, hdr, events):
     return bytes(out)
 
 
-MAP_EVENT_WORDS = {24: 9, 29: 7, 35: 4, 36: 5, 44: 5, 48: 10, 54: 3}   # u32 por evento (los demas, 3)
+# u32 por evento (los demas, 3); 3, 30, 31, 34, 41 y 49 medidos por el frente DU (docs/14_dragon_universe/02)
+MAP_EVENT_WORDS = {3: 4, 24: 9, 29: 7, 30: 7, 31: 6, 34: 4, 35: 4, 36: 5, 41: 9, 44: 5, 48: 10, 49: 4, 54: 3}
+BAD_OPS = {25, 26, 27, 28, 32, 33, 37}   # leen pila sin inicializar (frente DU): no se usan
 
 
 def lst_events(b, entry):
@@ -253,6 +426,20 @@ def lst_build(entries):
         data += e[2] if len(e) > 2 else b""
     out = b"#LST" + struct.pack("<3I", n, 0x10, doff) + b"".join(struct.pack("<2I", *t) for t in table)
     return out + b"\0" * (doff - len(out)) + data
+
+
+def lst_append(b, entries):
+    """#LST con `entries` [(cabecera, eventos)] anadidas al final; las suyas se copian byte a byte (sus
+    eventos del mapa son de tamano variable: no se releen)."""
+    n, toff, doff = struct.unpack_from("<3I", b, 4)
+    table = [struct.unpack_from("<2I", b, toff + 8 * i) for i in range(n)]
+    data = bytes(b[doff:])
+    for hdr, events in entries:
+        table.append((len(data), len(events)))
+        data += struct.pack("<%dI" % len(hdr), *hdr) + b"".join(pack_event(e) for e in events)
+    nd = (0x10 + 8 * len(table) + 15) & ~15
+    out = b"#LST" + struct.pack("<3I", len(table), 0x10, nd) + b"".join(struct.pack("<2I", *t) for t in table)
+    return out + bytes(nd - len(out)) + data
 
 
 def lst_entries(b):
@@ -317,7 +504,10 @@ def reservar_textos(mods, mod, need, us, keep=()):
     # las 1024 primeras tras las del juego quedan para _roster (nombres de personajes nuevos, crece al
     # anadir personajes); cada campana empieza en un hueco de 256 que depende de su nombre
     lo = native + 1024
-    free = lambda b: b >= lo and b + need <= native + 0x4000 and not any(b + k in taken for k in range(need))
+    # tope medido 2026-10-15: con el bloque en 14997 el juego leyo un #SPX en vez del texto y se cerro; hasta
+    # 5691 bien. Se queda por debajo de 8192 (ponytail: tope prudente; subirlo solo midiendo 8192..14996)
+    hi = min(native + 0x4000, 8192)
+    free = lambda b: b >= lo and b + need <= hi and not any(b + k in taken for k in range(need))
     b = None
     try:
         if int(old.get("entradas", 0)) >= need and free(int(old["base"])):
@@ -325,12 +515,13 @@ def reservar_textos(mods, mod, need, us, keep=()):
     except (ValueError, KeyError):
         pass
     if b is None:
-        b = lo + 256 * (zlib.crc32(me.encode("utf-8")) % 59)
-        for _ in range(60):
+        slots = max(1, (hi - lo) // 256)
+        b = lo + 256 * (zlib.crc32(me.encode("utf-8")) % slots)
+        for _ in range(slots + 1):
             if free(b):
                 break
             b += 256
-            if b + need > native + 0x4000:
+            if b + need > hi:
                 b = lo
         else:
             raise SystemExit("no quedan entradas de texto libres para %s (demasiados mods con textos)" % me)
@@ -369,14 +560,18 @@ def story(cfg, us, mod, work):
         narr, cierre = (lambda j: txt + j), (lambda j: txt + 200 + j)
         talk_b, vict_b, mapa_b, lleg_b = (lambda i: dtxt + i), (lambda i: dtxt + 40 + i), (lambda i: dtxt + 80 + i), \
             (lambda i: dtxt + 120 + i)
+        extra_b = lambda j: txt + 400 + j
     else:
         # automatico: un bloque propio de 6 grupos (narracion, cierre de saga, charla, victoria, vuelta al
         # mapa, llegada) de len(capitulos)+1 entradas cada uno, detras de las del juego
         st = len(chapters) + 1
         if "textos_desde" in h or "textos_desde" in dlg:
             rb.log("aviso: `textos_desde` va en [historia] y en dialogos a la vez; con uno solo se reparten solos")
-        base = reservar_textos(os.path.dirname(mod), mod, 6 * st, us, {int(t["entrada"]) for t in cfg.get("texto", [])})
-        TEXT_BLOCK.update(base=base, entradas=6 * st)
+        # y uno por cada imagen de mas de las narraciones con `imagenes` (cada parte lleva su banco)
+        xn = sum(max(0, len(c.get(k) or []) - 1) for c in chapters for k in ("imagenes", "cierre_imagenes"))
+        base = reservar_textos(os.path.dirname(mod), mod, 6 * st + xn, us, {int(t["entrada"]) for t in cfg.get("texto", [])})
+        TEXT_BLOCK.update(base=base, entradas=6 * st + xn)
+        extra_b = lambda j: base + 6 * st + j
         narr, cierre = (lambda j: base + j), (lambda j: base + st + j)
         talk_b, vict_b, mapa_b, lleg_b = (lambda i: base + 2 * st + i), (lambda i: base + 3 * st + i), \
             (lambda i: base + 4 * st + i), (lambda i: base + 5 * st + i)
@@ -398,7 +593,7 @@ def story(cfg, us, mod, work):
         pages = c.get(key + "paginas")
         for lang, afss in LANG_AFS.items():
             # `idioma` en [historia]: ese idioma en todos (p. ej. "en" mientras falten traducciones)
-            lines = c.get(key + h.get("idioma", lang)) or c.get(key + "en")
+            lines = c.get(key + h.get("idioma", lang)) or c.get(key + "en") or c.get(key + "es")
             for afs in afss:
                 if not os.path.exists(afs_path(us, afs)):
                     continue
@@ -413,12 +608,20 @@ def story(cfg, us, mod, work):
                     data = capsulas.build_bank(0, imgs, flag28=0x40, tall=True)
                 else:
                     data = text_bank(lines, style)
-                rb.write_entry(mod, afs, bank, data, work)
+                write_entry(mod, afs, bank, data, work)
                 n += 1
         return len(pages) if pages else len(c.get(key + "en") or c.get(key + "es"))
 
     music = int(h.get("musica_narracion", 135269))   # 2.4197, la de las introducciones del juego
-    pics = [int(h.get("imagenes_desde", 4510))]   # entradas libres de data_cmn para las imagenes propias
+    # imagenes propias: desde `imagenes_desde` (a mano) o en el bloque propio de data_cmn (conviven campanas)
+    pics = [int(h["imagenes_desde"])] if "imagenes_desde" in h else []
+    xb = [0]   # bancos de texto de mas ya usados (partes de las narraciones con `imagenes`)
+
+    def new_pic():
+        if not pics:
+            return nueva_entrada()
+        pics[0] += 1
+        return pics[0] - 1
 
     writer = []
 
@@ -436,25 +639,44 @@ def story(cfg, us, mod, work):
             return 0x20000 | writer[0].add(adx, adx)
         return word(v)
 
+    def picture(img):
+        """`imagen`: numero = imagen de data_cmn del juego (1411 panel verde, 1536 Namek, 1549 la Tierra);
+        texto = un .png/.webp/.jpg/.avif propio (660x420, recorte centrado); vacio = el panel de la historia."""
+        if img in (None, ""):
+            return panel
+        if isinstance(img, int) or str(img).strip().isdigit():
+            return int(img)
+        path = os.path.join(TOML_DIR[0], img)
+        if not os.path.isfile(path):   # sin la imagen (p. ej. el Kit no lleva arte de terceros): el panel del juego
+            rb.log("aviso: no encuentro %s; se usa el panel del juego" % img)
+            return panel
+        pic = new_pic()
+        write_entry(mod, "data_cmn.afs", pic, png2pic.build_picture(Image.open(path)), work)
+        return pic
+
     def narration(bank, c, key):
-        """Panel de narracion; `imagen` (o `cierre_imagen`) = un .png/.webp/.jpg propio en lugar del panel."""
-        pages = text(bank, c, key, "narracion")
-        pic = panel
-        if c.get(key + "imagen"):
-            path = os.path.join(TOML_DIR[0], c[key + "imagen"])
-            if os.path.isfile(path):
-                pic = pics[0]
-                pics[0] += 1
-                rb.write_entry(mod, "data_cmn.afs", pic, png2pic.build_picture(Image.open(path)), work)
-            else:   # sin la imagen (p. ej. el Kit no lleva arte de terceros): el panel del juego
-                rb.log("aviso: no encuentro %s; se usa el panel del juego" % c[key + "imagen"])
-        # locucion: `voz` (o `cierre_voz`), una por frase como las del juego (14, pagina, 2.N: la
-        # entrada N de adx_usa/adx_jpn; la intro de Namek trae 14,1..3 = 2.1231..1233). Vale un
-        # numero (entrada ADX del juego), "2.N" o un fichero de audio propio (.wav/.mp3/.ogg)
-        voices = [(14, k + 1, voice(v)) for k, v in enumerate(c.get(key + "voz", [])) if str(v).strip() not in ("", "-1")]
-        return ([9, 3, pages + 1, 2, 0, 0, s_narr],
-                [(10, 0, pic), (10, 1, 0x10000 | bank), (10, 2, 0x10000 | bank), (13, 0, music),
-                 (11, 0, 1414), (12, 0, 1415), (11, 1, 1414), (12, 1, 1415)] + voices)
+        """Panel de narracion: [(cabecera, eventos)], una escena por imagen. `imagen` (o `cierre_imagen`) = una
+        imagen para todas las paginas. `imagenes` (o `cierre_imagenes`) = [{imagen = ..., paginas = N}, ...]:
+        cada imagen con sus N paginas siguientes (y sus voces); el juego las encadena (op 20) como 101 -> 102."""
+        parts = c.get(key + "imagenes") or [{"imagen": c.get(key + "imagen")}]
+        out, a = [], 0
+        for j, p in enumerate(parts):
+            k = int(p.get("paginas", 1)) if j + 1 < len(parts) else 1 << 30   # la ultima: las que queden
+            sub = {"p_" + x: c[key + x][a:a + k] for x in list(LANG_AFS) + ["voz"] + ["paginas"] * (len(parts) == 1) if c.get(key + x)}
+            a += k
+            if j:
+                bank = extra_b(xb[0])
+                xb[0] += 1
+            pages = text(bank, sub, "p_", "narracion")
+            pic = picture(p.get("imagen"))
+            # locucion: `voz` (o `cierre_voz`), una por frase como las del juego (14, pagina, 2.N: la
+            # entrada N de adx_usa/adx_jpn; la intro de Namek trae 14,1..3 = 2.1231..1233). Vale un
+            # numero (entrada ADX del juego), "2.N" o un fichero de audio propio (.wav/.mp3/.ogg)
+            voices = [(14, n + 1, voice(v)) for n, v in enumerate(sub.get("p_voz", [])) if str(v).strip() not in ("", "-1")]
+            out.append(([9, 3, pages + 1, 2, 0, 0, s_narr],
+                        [(10, 0, pic), (10, 1, 0x10000 | bank), (10, 2, 0x10000 | bank), (13, 0, music),
+                         (11, 0, 1414), (12, 0, 1415), (11, 1, 1414), (12, 1, 1415)] + voices))
+        return out
 
     def talk(bank, c, key):
         """Dialogo en el escenario (cabecera de 16 B): retratos (izquierda, derecha; hablan por
@@ -537,7 +759,7 @@ def story(cfg, us, mod, work):
                 struct.pack_into(">I", new, r + 0x2c, form)
                 struct.pack_into(">I", new, r + 0x58, form)
                 struct.pack_into(">I", new, r + 0x38, 0)
-            rb.write_entry(mod, "data_cmn.afs", int(c["combate"]), bytes(new), work)
+            write_entry(mod, "data_cmn.afs", int(c["combate"]), bytes(new), work)
             n += 1
         talks.setdefault(s, []).append(talk(talk_b(i), c, "dialogo_"))
         fights.setdefault(s, []).append(([0, 0, 0, 0, 0, 0, s_fight],
@@ -567,23 +789,23 @@ def story(cfg, us, mod, work):
             tail = [(20, 0, (int(fin["codigo"]) << 16) | k)]
             b = lst_replace(b, k, hdr, [(10, 0, 0x10000 | narr(i + 1)), (10, 1, 0x10000 | narr(i + 1)),
                                         tuple(music), (11, 0, pic[0]), (12, 0, pic[1]), (11, 1, pic[0]), (12, 1, pic[1])])
-            rb.write_entry(mod, "data_cmn.afs", int(fin["contenedor"]), b, work)
+            write_container(mod, int(fin["contenedor"]), b, work)
             n += 1
         elif nxt.get("saga"):                           # cierre de saga -> guardar -> introduccion
             s2 = place[i + 1][0]
             intro, outro = 100 + 2 * s2, 99 + 2 * s2
-            hdr, ev = narration(cierre(i + 1), nxt, "cierre_")
-            intros[cont(outro)] = (hdr, ev + [(20, 0, (intro << 16) | slot), (50, 0, 0), (47, 0, int(nxt.get("planeta", 0)))])
-            hdr, ev = narration(narr(i + 1), nxt, "")
+            intros[outro] = (narration(cierre(i + 1), nxt, "cierre_"),
+                             [(20, 0, (intro << 16) | slot), (50, 0, 0), (47, 0, int(nxt.get("planeta", 0)))])
+            parts = narration(narr(i + 1), nxt, "")
             # `objetos_mapa_de` = "104.0": los objetos del mapa (op 29, por nombre) de una introduccion del
             # juego, como hace la de Namek a mano. Sin ellos R1 en la Tierra cerraba el juego (2026-10-12)
             objs = []
             if nxt.get("objetos_mapa_de"):
                 oc, oe = str(nxt["objetos_mapa_de"]).split(".")
                 objs = [e for e in lst_events(read_entry(us, "data_cmn.afs", cont(int(oc)), work), int(oe)) if e[0] == 29]
-            intros[cont(intro)] = (hdr, ev + [(22, 0, 0), tuple([44, 0] + list(nxt["salida"]))] + objs +
-                                   [(54, 0, 0), tuple(mark(i + 1)),
-                                    (20, 0, (code + 100 * (s2 - saga0)) << 16)])   # a su llegada al mapa
+            intros[intro] = (parts, [(22, 0, 0), tuple([44, 0] + list(nxt["salida"]))] + objs +
+                             [(54, 0, 0), tuple(mark(i + 1)),
+                              (20, 0, (code + 100 * (s2 - saga0)) << 16)])   # a su llegada al mapa
             tail = [(22, 0, 0), (20, 0, (outro << 16) | slot)]
         else:                                           # sigue la saga: la marca del combate siguiente
             # y, como el juego (2138.1 -> 5100.5), se vuelve al mapa por una escena del mapa: una frase
@@ -619,15 +841,22 @@ def story(cfg, us, mod, work):
             ev.append((19, 0, int(c["premio"])))
         fights[s].append(([4 + 2 * nl, 5, nl + 1, 5, 0, 0, s_after + 1], ev + tail))
     for s in fights:
-        rb.write_entry(mod, "data_cmn.afs", cont(bcode(s)), lst_build(fights[s]), work)
-        rb.write_entry(mod, "data_cmn.afs", cont(dcode(s)), lst_build(talks[s]), work)
+        write_entry(mod, "data_cmn.afs", cont(bcode(s)), lst_build(fights[s]), work)
+        write_entry(mod, "data_cmn.afs", cont(dcode(s)), lst_build(talks[s]), work)
         n += 2
     for s in maps:                       # escenas del mapa (vuelta tras ganar)
-        rb.write_entry(mod, "data_cmn.afs", cont(code + 100 * (s - saga0)), lst_build(maps[s]), work)
+        write_entry(mod, "data_cmn.afs", cont(code + 100 * (s - saga0)), lst_build(maps[s]), work)
         n += 1
-    for cn, (hdr, ev) in intros.items():
-        b = lst_replace(read_entry(us, "data_cmn.afs", cn, work), slot, hdr, ev)
-        rb.write_entry(mod, "data_cmn.afs", cn, b, work)
+    # introducciones y cierres de saga: la entrada de la casilla en una copia del contenedor (lo comparten
+    # todas las historias); las imagenes de mas van en entradas nuevas de la copia, encadenadas con op 20
+    for ic, (parts, tail) in intros.items():
+        b = read_entry(us, "data_cmn.afs", cont(ic), work)
+        n0 = struct.unpack_from("<I", b, 4)[0]
+        chain = [[(20, 0, (ic << 16) | (n0 + j))] for j in range(len(parts) - 1)] + [tail]
+        b = lst_replace(b, slot, parts[0][0], parts[0][1] + chain[0])
+        if len(parts) > 1:
+            b = lst_append(b, [(hdr, ev + ch) for (hdr, ev), ch in zip(parts[1:], chain[1:])])
+        write_container(mod, cont(ic), b, work)
         n += 1
     return n
 
@@ -677,7 +906,7 @@ def portraits(cfg, us, mod, work):
                     raise SystemExit("retrato %s: textura de %d bytes" % (c["entrada"], ss))
                 out[do:do + ds] = src[sd:sd + ss]
                 out[o + 0x08:o + 0x14] = src[so + 0x08:so + 0x14]    # caja del arte
-        rb.write_entry(mod, "data_cmn.afs", int(c["entrada"]), bytes(out), work)
+        write_entry(mod, "data_cmn.afs", int(c["entrada"]), bytes(out), work)
         n += 1
     return n
 
@@ -701,7 +930,7 @@ def clean_panel(cfg, us, mod, work):
             data = off + 128
             for by in range(src):
                 b[data + by * row:data + (by + 1) * row] = b[data + src * row:data + (src + 1) * row]
-        rb.write_entry(mod, "data_cmn.afs", int(c["cmn"]), bytes(b), work)
+        write_entry(mod, "data_cmn.afs", int(c["cmn"]), bytes(b), work)
         CLEANED[int(c["cmn"])] = bytes(b)
         n += 1
     return n
@@ -726,12 +955,31 @@ def map_events(cfg, us, mod, work):
             if struct.unpack_from("<3I", b, o) == (10, 1, old):
                 struct.pack_into("<I", b, o + 8, int(ev["retrato"]))
                 hits += 1
-        entry = int(ev.get("desde", 4600)) + i
-        rb.write_entry(mod, "data_cmn.afs", entry, bytes(b), work)
+        entry = int(ev["desde"]) + i if "desde" in ev else nueva_entrada()
+        write_entry(mod, "data_cmn.afs", entry, bytes(b), work)
         STORY_CODES[int(code)] = entry
         print("eventos del mapa %d: %d retratos cambiados (contenedor nuevo %d)" % (code, hits, entry))
         n += 1
     return n
+
+
+def _events_end(b, start, cnt, end):
+    """Fin de los eventos de una entrada que empieza en `start` (cabecera de 28 o 16 bytes); si detras de los
+    eventos hay datos propios (intros: posiciones del mapa), la cabecera es la de 28."""
+    def walk(hs):
+        p = start + hs
+        for _ in range(cnt):
+            if p + 4 > end:
+                return None
+            p += 4 * MAP_EVENT_WORDS.get(struct.unpack_from("<I", b, p)[0], 3)
+        return p if p <= end else None
+    for hs in (28, 16):
+        if walk(hs) == end:
+            return end
+    p = walk(28)
+    if p is None:
+        raise ValueError("no se pueden leer los eventos de la entrada")
+    return p
 
 
 def lst_add(b, entry, events):
@@ -746,9 +994,10 @@ def lst_add(b, entry, events):
     nxt = table[entry + 1][0] if entry + 1 < n else len(b) - doff
     # cabecera de 16 o 28 bytes, los eventos y, en las intros de los personajes jugables, datos
     # propios detras (posiciones del mapa): los eventos nuevos van justo tras los eventos
-    hsize = nxt - rel - 12 * cnt if nxt - rel - 12 * cnt in (16, 28) else 28
-    at = doff + rel + hsize + 12 * cnt
-    add = b"".join(struct.pack("<3I", *(int(v) & 0xFFFFFFFF for v in e)) for e in events)
+    # (los eventos del mapa son mas largos que 3 palabras: MAP_EVENT_WORDS; antes se contaban de 12 bytes y un
+    # 44 en la entrada dejaba el evento nuevo en medio de otro)
+    at = _events_end(b, doff + rel, cnt, doff + nxt)
+    add = b"".join(pack_event(e) for e in events)
     out = bytearray(b[:at] + add + b[at:])
     table[entry][1] += len(events)
     for i in range(entry + 1, n):
@@ -759,13 +1008,31 @@ def lst_add(b, entry, events):
 
 
 def cmd_montar(a):
-    cfg = tomllib.load(open(a.toml, "rb"))
+    try:
+        with open(a.toml, "rb") as f:
+            cfg = tomllib.load(f)
+    except OSError as e:
+        raise SystemExit("no se puede leer %s: %s" % (a.toml, e.strerror or e))
+    except tomllib.TOMLDecodeError as e:
+        raise SystemExit("%s esta mal escrito (TOML): %s" % (os.path.basename(a.toml), e))
     TOML_DIR[0] = os.path.dirname(os.path.abspath(a.toml))
     info = cfg.get("campana", {})
     mods = a.mods or rb.default_mods()
-    mod = os.path.join(mods, info.get("mod") or os.path.splitext(os.path.basename(a.toml))[0])
-    us, work = a.us or rb.default_us(), tempfile.mkdtemp()
+    name = info.get("mod") or os.path.splitext(os.path.basename(a.toml))[0]
+    # solo un nombre de carpeta: "..\\x" o una ruta absoluta escribian fuera de mods/
+    if not name or os.path.basename(name) != name or name in (".", "..") or os.path.isabs(name):
+        raise SystemExit("[campana] mod = %r: tiene que ser solo el nombre de la carpeta del mod" % name)
+    mod = os.path.join(mods, name)
+    us, work = a.us or rb.default_us(), work_dir()
+    err, warn = validar(cfg, mods, mod)
+    for w in warn:
+        rb.log("aviso: " + w)
+    if err:
+        for e in err:
+            rb.log("ERROR: " + e)
+        raise SystemExit("la campana no se monta: corrige lo de arriba")
     os.makedirs(mod, exist_ok=True)
+    rb.log("contenedores propios de data_cmn: %d-%d" % (reservar_cmn(mods, mod), CMN["base"] + CMN_N - 1))
     n = 0
     for t in cfg.get("texto", []):
         style = t.get("estilo", "dialogo")
@@ -776,14 +1043,14 @@ def cmd_montar(a):
             bank = text_bank(lines, style)
             for afs in afss:
                 if os.path.exists(afs_path(us, afs)):
-                    rb.write_entry(mod, afs, int(t["entrada"]), bank, work)
+                    write_entry(mod, afs, int(t["entrada"]), bank, work)
                     n += 1
     for c in cfg.get("combate", []):
         b = bytearray(read_entry(us, "data_cmn.afs", int(c["bpl"]), work))
         if b[:4] != b"#BPC":
             raise SystemExit("data_cmn %s no es un combate (#BPC)" % c["bpl"])
         struct.pack_into(">I", b, 0x10, int(c["rival"]))
-        rb.write_entry(mod, "data_cmn.afs", int(c["bpl"]), bytes(b), work)
+        write_entry(mod, "data_cmn.afs", int(c["bpl"]), bytes(b), work)
         n += 1
     by_cont = {}
     for e in cfg.get("escena", []):
@@ -794,8 +1061,8 @@ def cmd_montar(a):
             if "cambiar" in e:
                 b = lst_replace(b, int(e["entrada"]), e["cabecera"], e["cambiar"])
             else:
-                b = lst_add(b, int(e["entrada"]), [(op, p1, word(p2)) for op, p1, p2 in e["anadir"]])
-        rb.write_entry(mod, "data_cmn.afs", cont, b, work)
+                b = lst_add(b, int(e["entrada"]), [tuple(ev) for ev in e["anadir"]])
+        write_container(mod, cont, b, work)
         n += 1
     if "historia" in cfg:
         n += story(cfg, us, mod, work)
@@ -808,11 +1075,14 @@ def cmd_montar(a):
             fondo = int(cfg.get("historia", {}).get("fondo", 1411))
             rb.log("aviso: no encuentro %s; la entrada %s = el panel %d del juego" % (c["archivo"], c["entrada"], fondo))
             pic = CLEANED.get(fondo) or read_entry(us, "data_cmn.afs", fondo, work)   # el ya limpio
-        rb.write_entry(mod, "data_cmn.afs", int(c["entrada"]), pic, work)
+        write_entry(mod, "data_cmn.afs", int(c["entrada"]), pic, work)
         n += 1
     n += portraits(cfg, us, mod, work)
     n += map_events(cfg, us, mod, work)
     rb.flush_entries()
+    move_stale(mods, mod)
+    for e, other in entry_conflicts(mods, mod):
+        rb.log("aviso: data_cmn %s tambien lo cambia el mod '%s' (solo uno ganara)" % (e, other))
     codes = cfg.get("codigos", {})
     wheel = cfg.get("rueda", {}).get("personajes", [])
     with open(os.path.join(mod, "campana.toml"), "w", encoding="utf-8") as f:
@@ -820,7 +1090,9 @@ def cmd_montar(a):
         for k, v in sorted(codes.items(), key=lambda kv: int(kv[0])):
             f.write("%d = %d\n" % (int(k), int(v)))
         if wheel:
-            f.write("\n[rueda]\npersonajes = %s\n" % ", ".join(str(int(i)) for i in wheel))
+            f.write("\n[rueda]\npersonajes = [%s]\n" % ", ".join(str(int(i)) for i in wheel))   # TOML valido con varios
+            if "historia" in cfg:   # casilla de DU de la historia: dos campanas no pueden compartirla (validar)
+                f.write("casilla = %d\n" % (int(cfg["historia"]["codigo"]) % 100))
         if START_FORMS:
             f.write("\n[forma_jugador]\n" + "".join("%d = %d\n" % kv for kv in sorted(START_FORMS.items())))
         if RIVAL_SUITS:
@@ -833,6 +1105,8 @@ def cmd_montar(a):
             f.write("\n[animacion_mapa]\n" + "".join("%d = %d\n" % kv for kv in sorted(MAP_ANIMS.items())))
         if MAP_SUITS:
             f.write("\n[traje_mapa]\n" + "".join("%d = %d\n" % kv for kv in sorted(MAP_SUITS.items())))
+        if CMN.get("next", 0) > CMN.get("base", 0):   # contenedores propios: al rehacer se reusa el bloque
+            f.write("\n[contenedores]\nbase = %d\nentradas = %d\n" % (CMN["base"], CMN_N))
         if TEXT_BLOCK:   # bloque de textos automatico: al rehacer la campana se reusa (reservar_textos)
             f.write("\n[textos]\nbase = %d\nentradas = %d\n" % (TEXT_BLOCK["base"], TEXT_BLOCK["entradas"]))
     with open(os.path.join(mod, "manifest.txt"), "w", encoding="utf-8") as f:
@@ -866,7 +1140,27 @@ def selftest():
     assert lst_entries(tailed)[0][2] == b"MAPA" * 3 and lst_entries(lst_build(lst_entries(tailed))) == lst_entries(tailed)
     t2 = lst_add(tailed, 0, [(20, 0, 9)])
     assert lst_entries(t2)[0][1] == [(16, 0, 1), (20, 0, 9)] and lst_entries(t2)[0][2] == b"MAPA" * 3
+    # eventos del mapa (44 = 5 palabras): el nuevo va tras los de verdad, con su tamano
+    mapa = lst_build([([1, 2, 3, 4, 0, 0, 7], [(44, 0, 1, 2, 3), (20, 0, 9)]), ([1, 2, 3, 4], [])])
+    m2 = lst_add(mapa, 0, [(44, 0, 4, 5, 6)])
+    assert lst_events(m2, 0) == [(44, 0, 1, 2, 3), (20, 0, 9), (44, 0, 4, 5, 6)] and lst_events(m2, 1) == [], "lst_add 44"
+    assert validar({"escena": [{"contenedor": 1, "entrada": 0, "anadir": [[44, 0, 5930]]}]}, HERE, HERE)[0], "44 corto"
+    assert not validar({"escena": [{"contenedor": 1, "entrada": 0, "anadir": [[44, 0, 1, 2, 3], [22, 0, 0]]}]},
+                       HERE, HERE)[0], "44 bien"
     assert lst_entries(lst_build(back)) == back
+    ap = lst_append(rep, [([9, 3, 2, 2, 0, 0, 1], [(20, 0, "102.38")])])
+    od, nd = struct.unpack_from("<I", rep, 12)[0], struct.unpack_from("<I", ap, 12)[0]
+    assert struct.unpack_from("<I", ap, 4)[0] == 3 and ap[nd:nd + len(rep) - od] == rep[od:], "lst_append"
+    assert lst_events(ap, 2) == [(20, 0, (102 << 16) | 38)] and lst_events(ap, 1) == lst_events(rep, 1)
+    # dos campanas no comparten casilla; el codigo tiene que ser el de la casilla del protagonista
+    md = tempfile.mkdtemp()
+    os.makedirs(os.path.join(md, "otra"))
+    with open(os.path.join(md, "otra", "campana.toml"), "w") as f:
+        f.write("[rueda]\npersonajes = [27]\ncasilla = 22\n")
+    cfg = {"historia": {"codigo": 5122}, "rueda": {"personajes": [27]}}
+    assert validar(cfg, md, os.path.join(md, "mia"))[0] and not validar(cfg, md, os.path.join(md, "otra"))[0]
+    cfg["rueda"]["personajes"] = [28]
+    assert "casillas [23]" in " ".join(validar(cfg, md, os.path.join(md, "otra"))[0])
     print("campana.py: autocomprobacion OK")
 
 

@@ -20,3 +20,7 @@ Las ISOs se leen tal cual: no hace falta extraerlas.
 Probado con: Budokai 1 y 2 de Europa, Infinite World, Shin Budokai y Another Road
 de USA. Las otras regiones se buscan igual (por contenido), pero aun no se han
 probado: si una no funciona, avisa en el Discord.
+
+MODOS DEL HUB: con la ISO de Budokai 1 aqui, el HUB del menu principal (pagina 2)
+activa la "Leyenda de Mr. Satan": sus retadores, charlas e imagenes se leen de tu
+copia al jugar (no se copian ni se reparten). Sin la ISO la entrada sale en gris.

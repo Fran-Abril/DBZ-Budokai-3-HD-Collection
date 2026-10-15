@@ -1,0 +1,22 @@
+# Desde el HUB, como un jugador: la ISO de Budokai 1 en ps2_games junto al juego (en la copia de pruebas, un enlace
+# a D:\DBZ3HD\ps2_games), fila HUB, entrada "Leyenda de Mr. Satan", presentacion, tarjeta y B para salir.
+# Antes: user_data\dbz3\pasarela\progreso.toml con hercule = 0 (empieza por la presentacion).
+descripcion = "Pasarela: la leyenda de Mr. Satan desde el HUB y vuelta al HUB"
+env = []
+pasos = [
+  'esperar_pantalla 5 30', 'esperar 1500',
+  'tecla W 1200', 'captura 01_fila_hub',
+  'tecla Space 2500', 'captura 02_hub',
+  'tecla W 1200',
+  'log "pasarela: .*leida en" 20', 'esperar 500', 'captura 03_hub_leyenda',
+  'tecla Space 1500',
+  'log "hub: modo satan" 10',
+  'log "pasarela: paso 1/26 \(presentacion" 10',
+  'esperar 1500', 'captura 04_presentacion',
+  'tecla Space 1500',
+  'log "pasarela: paso 2/26 \(combate ronda 1\): pantalla" 10',
+  'esperar 1000', 'captura 05_tarjeta_yamcha',
+  'tecla Backspace 2000',
+  'log "pasarela: fuera del modo" 10',
+  'esperar 2500', 'captura 06_vuelta_hub',
+]

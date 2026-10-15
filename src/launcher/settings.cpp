@@ -1,6 +1,7 @@
 // dbz3 - User settings layer implementation.
 
 #include "settings.h"
+#include "i18n.h"
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
@@ -19,6 +20,7 @@
 #include <system_error>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -322,6 +324,10 @@ REXCVAR_DEFINE_BOOL(dbz3_occlusion_queries, true, "DBZ3/Dev",
                     "Let the guest use occlusion queries")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+// Grafica (fabricante:modelo:subsistema:revision:driver) en la que Direct3D 12 ya funciono: con la misma
+// grafica y el mismo driver no se repite la prueba al arrancar (cargaba el driver dos veces: 0,2-0,4 s).
+REXCVAR_DEFINE_STRING(dbz3_d3d12_ok, "", "DBZ3/Launcher", "Adapter key on which Direct3D 12 last worked");
+
 REXCVAR_DEFINE_BOOL(dbz3_skip_launcher, false, "DBZ3/Dev",
                     "Skip the pre-game launcher and boot straight into the game")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
@@ -465,10 +471,27 @@ bool EscapeTomlStrings(const std::filesystem::path& path) {
     out += '\n';
   }
   in.close();
-  std::ofstream os(path, std::ios::binary | std::ios::trunc);
-  if (!os) return false;
-  os << out;
-  return os.good();
+  // Escritura atomica (bugs.md P2): primero a .tmp y luego se cambia por el bueno; si el juego muere a mitad,
+  // el dbz3_user.toml anterior sigue entero.
+  auto tmp = path;
+  tmp += ".tmp";
+  {
+    std::ofstream os(tmp, std::ios::binary | std::ios::trunc);
+    if (!os) return false;
+    os << out;
+    os.close();
+    if (!os) return false;
+  }
+  std::error_code ec;
+  std::filesystem::rename(tmp, path, ec);
+  if (ec) {   // p. ej. un antivirus con el fichero abierto: se escribe directamente como antes (el .tmp
+              // se queda y se reescribe la proxima vez)
+    std::ofstream os(path, std::ios::binary | std::ios::trunc);
+    if (!os) return false;
+    os << out;
+    return os.good();
+  }
+  return true;
 }
 
 // True when `path` parses as TOML. Used to detect a settings file that an older
@@ -578,11 +601,38 @@ bool UserDataIsPortable() {
   return g_user_data_portable;
 }
 
+// Primer arranque (sin dbz3_user.toml): el launcher, los avisos previos y el texto del juego salen en el
+// idioma de Windows (es/it/de/fr; el resto, ingles). Nunca pisa un idioma elegido (entorno o linea de comandos).
+static void ApplyFirstRunLanguage() {
+  if (rex::cvar::HasNonDefaultValue("dbz3_language") || std::getenv("REX_DBZ3_LANGUAGE")) return;
+  int32_t id = 1;
+#if REX_PLATFORM_WIN32
+  switch (PRIMARYLANGID(GetUserDefaultUILanguage())) {
+    case LANG_SPANISH: id = 5; break;
+    case LANG_ITALIAN: id = 6; break;
+    case LANG_GERMAN: id = 3; break;
+    case LANG_FRENCH: id = 4; break;
+    default: break;
+  }
+#else
+  if (const char* l = std::getenv("LANG")) {
+    const std::string s(l);
+    id = s.rfind("es", 0) == 0 ? 5 : s.rfind("it", 0) == 0 ? 6 : s.rfind("de", 0) == 0 ? 3
+       : s.rfind("fr", 0) == 0 ? 4 : 1;
+  }
+#endif
+  if (id != 1) {
+    REXCVAR_SET(dbz3_language, id);
+    REXLOG_INFO("dbz3: primer arranque: idioma {} (el de Windows)", id);
+  }
+}
+
 void LoadUserSettings() {
   const auto path = UserSettingsPath();
   if (!std::filesystem::exists(path)) {
     g_config_load_state = ConfigLoadState::kMissing;
     REXLOG_INFO("dbz3: no user settings file at {}, using defaults", path.string());
+    ApplyFirstRunLanguage();
     return;
   }
   // Self-heal a file an older build left with an unescaped Windows path: it
@@ -672,7 +722,9 @@ std::string RepairInstallation() {
     report += '\n';
     REXLOG_INFO("dbz3 repair: {}", s);
   };
-  line("[OK] Reparacion del launcher iniciada");
+  line(i18n::T("[OK] Reparacion del launcher iniciada", "[OK] Launcher repair started"));
+  bool missing_required = false;      // falta una DLL imprescindible
+  bool settings_quarantined = false;  // los ajustes ilegibles se apartaron
 
   // 1. User settings: quarantine an unreadable file, then write a clean one.
   bool settings_ok_to_write = true;
@@ -686,7 +738,8 @@ std::string RepairInstallation() {
       } else {
         settings_ok_to_write = false;
         g_settings_write_blocked = true;
-        line("[!] No se pudo respaldar: se conservan los ajustes originales");
+        line(i18n::T("[!] No se pudo respaldar: se conservan los ajustes originales",
+                     "[!] Backup failed: the original settings are kept"));
       }
     }
     if (!parses && settings_ok_to_write) {
@@ -700,16 +753,19 @@ std::string RepairInstallation() {
       if (ec) {
         settings_ok_to_write = false;
         g_settings_write_blocked = true;
-        line("[!] No se pudo apartar el archivo de ajustes: " + ec.message());
+        line(std::string(i18n::T("[!] No se pudo apartar el archivo de ajustes: ",
+                                "[!] Could not move the settings file aside: ")) + ec.message());
       } else {
-        line("[i] Archivo de ajustes ilegible apartado en: " + quarantine.string());
+        settings_quarantined = true;
+        line(std::string(i18n::T("[i] Archivo de ajustes ilegible apartado en: ",
+                                "[i] Unreadable settings file moved to: ")) + quarantine.string());
       }
     }
   }
   if (settings_ok_to_write) {
     g_settings_write_blocked = false;
     SaveUserSettings();
-    line("[i] Guardado solicitado en: " + UserSettingsPath().string());
+    line(std::string(i18n::T("[i] Ajustes guardados en: ", "[i] Settings saved to: ")) + UserSettingsPath().string());
   }
 
   // 2. Runtime DLLs next to the executable.
@@ -730,31 +786,61 @@ std::string RepairInstallation() {
     if (exists && std::filesystem::is_regular_file(file, ec)) {
       const auto size = std::filesystem::file_size(file, ec);
       if (ec || size == 0) {
-        line(std::string("[!] ") + d.name + " no se puede leer (0 bytes)");
+        missing_required = missing_required || d.required;
+        line(std::string("[!] ") + d.name + i18n::T(" no se puede leer (0 bytes)", " cannot be read (0 bytes)"));
       } else {
         line(std::string("[OK] ") + d.name + " (" + std::to_string(size) + " B)");
       }
     } else {
-      line(std::string(d.required ? "[!] FALTA " : "[i] No encontrado (opcional): ") + d.name);
+      missing_required = missing_required || d.required;
+      line(std::string(d.required ? i18n::T("[!] FALTA ", "[!] MISSING ")
+                                   : i18n::T("[i] No encontrado (opcional): ", "[i] Not found (optional): ")) + d.name);
     }
   }
 
   // 3. SDL controller mappings (only used by the SDL backend).
   if (std::filesystem::exists(exe_dir / "gamecontrollerdb.txt")) {
-    line("[OK] gamecontrollerdb.txt presente");
+    line(i18n::T("[OK] gamecontrollerdb.txt presente", "[OK] gamecontrollerdb.txt present"));
   } else {
-    line("[i] gamecontrollerdb.txt no encontrado (solo afecta al backend SDL)");
+    line(i18n::T("[i] gamecontrollerdb.txt no encontrado (solo afecta al backend SDL)",
+                 "[i] gamecontrollerdb.txt not found (only matters for the SDL backend)"));
   }
 
   // 4. User-data folder (saves, xex/iso caches).
   const auto data_root = UserDataRoot();
   std::error_code ec;
   std::filesystem::create_directories(data_root, ec);
-  line(std::string(ec ? "[!] " : "[OK] ") + "Datos de usuario: " + data_root.string() +
-       (UserDataIsPortable() ? " (portable)" : " (fuera del ejecutable)"));
+  line(std::string(ec ? "[!] " : "[OK] ") + i18n::T("Datos de usuario: ", "User data: ") + data_root.string() +
+       (UserDataIsPortable() ? " (portable)" : i18n::T(" (fuera del ejecutable)", " (outside the game folder)")));
 
-  line("[OK] Reparacion completada.");
-  return report;
+  line(i18n::T("[OK] Reparacion completada.", "[OK] Repair finished."));
+
+  // Primero, en una frase, lo que entiende un jugador y que hacer; la lista de comprobaciones va
+  // detras de una linea en blanco (el launcher la pliega en "Detalle tecnico").
+  std::string summary;
+  if (missing_required) {
+    summary = i18n::T("Falta una parte del juego (archivos .dll). Descomprime otra vez el zip completo del "
+                      "juego en una carpeta nueva y copia ahí tus carpetas mods y user_data (tus partidas).",
+                      "A part of the game is missing (.dll files). Unzip the full game package again into a "
+                      "new folder and copy your mods and user_data folders (your saves) there.");
+  } else if (!settings_ok_to_write) {
+    summary = i18n::T("No se pudo arreglar el archivo de ajustes: puede que la carpeta del juego sea de solo "
+                      "lectura. Mueve el juego a una carpeta tuya (por ejemplo, Documentos) y vuelve a "
+                      "pulsar «Reparar instalación».",
+                      "The settings file could not be fixed: the game folder may be read-only. Move the game "
+                      "to a folder of your own (for example, Documents) and press 'Repair install' again.");
+  } else if (settings_quarantined) {
+    summary = i18n::T("Tus ajustes estaban dañados: se han apartado (no se borran) y ahora se usan los de "
+                      "fábrica. Ya puedes jugar.",
+                      "Your settings were damaged: they were moved aside (not deleted) and the defaults are "
+                      "now in use. You can play now.");
+  } else {
+    summary = i18n::T("Todo en orden: los archivos del juego están completos y tus ajustes se han guardado "
+                      "de nuevo. No se ha tocado ninguna partida ni ningún mod.",
+                      "All good: the game files are complete and your settings were saved again. No save "
+                      "or mod was touched.");
+  }
+  return summary + "\n\n" + report;
 }
 
 int32_t ResolutionScale() { return REXCVAR_GET(dbz3_resolution_scale); }
@@ -1834,6 +1920,31 @@ bool D3D12Usable() {
     return cached == 1;
   }
   cached = 0;
+  // Clave de todas las graficas de verdad, con su driver: una actualizacion, una grafica nueva o una que
+  // desaparece (portatil hibrido) vuelven a probar.
+  std::string key;
+  {
+    Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+      for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 desc{};
+        LARGE_INTEGER umd{};
+        if (SUCCEEDED(adapter->GetDesc1(&desc)) && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
+            SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd))) {
+          char buf[96];
+          std::snprintf(buf, sizeof(buf), "%04x:%04x:%08x:%02x:%llx;", desc.VendorId, desc.DeviceId, desc.SubSysId,
+                        desc.Revision, static_cast<unsigned long long>(umd.QuadPart));
+          key += buf;
+        }
+        adapter.Reset();
+      }
+    }
+  }
+  if (!key.empty() && REXCVAR_GET(dbz3_d3d12_ok) == key) {
+    cached = 1;
+    return true;
+  }
   HMODULE d3d12 = LoadLibraryW(L"d3d12.dll");
   if (!d3d12) {
     return false;
@@ -1859,6 +1970,7 @@ bool D3D12Usable() {
     }
   }
   FreeLibrary(d3d12);
+  if (cached == 1 && !key.empty()) REXCVAR_SET(dbz3_d3d12_ok, key);   // se guarda con los demas ajustes
   return cached == 1;
 }
 #endif  // REX_PLATFORM_WIN32
@@ -2283,7 +2395,9 @@ void RefreshTexturePacks() {
   }
   // Set through the registry by name: the plugin's own storage is the ignored
   // duplicate, so a plain REXCVAR_SET here would not reach the plugin.
-  rex::cvar::SetFlagByName("dbz3_texture_packs", list);
+  // Solo si cambia: cada escritura hace que el plugin rehaga el indice del pack (con un pack HD, un
+  // tiron de ~1,2 s en el launcher cada vez que se releia la lista de mods).
+  if (rex::cvar::GetFlagByName("dbz3_texture_packs") != list) rex::cvar::SetFlagByName("dbz3_texture_packs", list);
   REXLOG_INFO("dbz3: texture packs detected in '{}': {} -> '{}'", PathUtf8(mods_root), dirs.size(),
               list);
 }

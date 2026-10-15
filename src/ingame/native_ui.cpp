@@ -50,6 +50,7 @@ constexpr Piece kPieces[] = {
     {"anfitrion_tagteam_a", 2055, 0x356EB63B3D15A405ull, true},   // Kaio del Duelo
     {"anfitrion_tagteam_b", 2055, 0x44657FFB8C1D8B3Full, true},   // Kaio del Duelo
     {"anfitrion_online", 2055, 0x107B679B010365CDull, true},      // Kaio del Norte
+    {"icono", 2045, 0x7E84F2B3B86A667Dull, true},                 // bola de 1 estrella: icono de la ventana
 };
 // Cara del marcador: ID -> entrada de data_cmn (#AZT hud_face; textura 0 = forma normal).
 constexpr std::pair<int, int> kFaces[] = {

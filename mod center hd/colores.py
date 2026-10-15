@@ -321,7 +321,7 @@ def mod_nativo(cid, mods, mod, aura=None, ki=None, tecnicas=None):
     import roster_build as rb  # noqa: PLC0415
     db = json.load(open(os.path.join(HERE, "roster_db.json"), encoding="utf-8"))
     e = next(x for x in db["ids"] if x["id"] == cid)
-    work = tempfile.mkdtemp(prefix="colores_")
+    work = rb.work_dir("colores_")
     cmn = rb.Afs(os.path.join(rb.default_us(), "data_cmn.afs"), work)
     out = os.path.join(mods, mod)
     rep = []

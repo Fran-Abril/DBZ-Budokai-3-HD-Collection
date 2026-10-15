@@ -34,6 +34,8 @@
 #define ICON_DOWNLOAD "\xEE\xA2\x96"
 #define ICON_GLOBE "\xEE\x9D\xB4"
 #define ICON_SEARCH "\xEE\x9C\xA1"
+#define ICON_STAR "\xEE\x9C\xB5"
+#define ICON_KEYBOARD "\xEE\x9D\xA5"
 
 namespace dbz3::launcher::ui {
 

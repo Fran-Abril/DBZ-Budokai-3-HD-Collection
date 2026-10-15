@@ -26,6 +26,7 @@ class OnlinePanel : public rex::ui::ImGuiDialog {
   bool blocked_ = false;
   uint16_t last_buttons_ = 0;
   int last_link_ = 0;   // Link de la ultima vez (para abrir al perder la conexion)
+  bool lost_notice_ = false;   // se perdio en pleno combate: la pantalla sale al acabarlo
   int row_ = 0;
   bool editing_ = false;   // escribiendo la IP con el teclado
   bool wait_release_ = false;   // recien abierta: hasta soltar los botones no se lee el mando
@@ -47,6 +48,8 @@ class OnlinePanel : public rex::ui::ImGuiDialog {
 // de Duelo -> abre el panel (lo dibuja el hilo de la interfaz).
 void OnlineTick(uint8_t* base, uint16_t p1_buttons);
 bool OnlinePanelWanted();
+// Abre el panel ONLINE en cuanto se llegue al menu del Duelo (entrada Online del HUB). Cualquier hilo.
+void OnlineOpen();
 // Menu principal o de Duelo (no la rueda): sus filas se cuentan aqui (DuelMenuFilter).
 bool MenuRowsTracked();
 // Mando 1 en el menu de Duelo: la quinta fila ONLINE (devuelve los botones que ve el juego).

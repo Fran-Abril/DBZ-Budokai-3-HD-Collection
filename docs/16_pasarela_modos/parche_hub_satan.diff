@@ -1,0 +1,134 @@
+diff -ru orig/src/hub_menu.cpp nuevo/src/hub_menu.cpp
+--- orig/src/hub_menu.cpp	2026-10-15 03:43:23.938714600 +0200
++++ nuevo/src/hub_menu.cpp	2026-10-15 03:43:50.933769700 +0200
+@@ -72,6 +72,8 @@
+ struct Mode {
+   std::atomic<void (*)()> open{nullptr};
+   std::atomic<bool (*)()> busy{nullptr};
++  std::atomic<bool (*)()> ready{nullptr};          // RegisterGate: false = en gris
++  std::atomic<const char* (*)()> why{nullptr};     // ... y lo que dice el bocadillo
+ };
+ Mode g_modes[kEntries];
+ 
+@@ -404,12 +406,33 @@
+   return false;
+ }
+ 
++bool RegisterGate(const char* key, bool (*ready)(), const char* (*why)()) {
++  for (int e = kTower; e < kEntries; ++e) {
++    if (std::strcmp(key, kKeys[e]) == 0) {
++      g_modes[e].why = why;
++      g_modes[e].ready = ready;
++      return true;
++    }
++  }
++  return false;
++}
++
++const char* EntryWhy(int e) {
++  if (e <= kQuick || e >= kEntries) return nullptr;
++  const char* (*why)() = g_modes[e].why.load();
++  return why ? why() : nullptr;
++}
++
+ bool EntryReady(int e) {
+   switch (e) {
+     case kTagTeam: return REXCVAR_GET(dbz3_tag_team_enabled);
+     case kOnline: return REXCVAR_GET(dbz3_online_enabled);
+     case kQuick: return true;
+-    default: return e > kQuick && e < kEntries && g_modes[e].open.load() != nullptr;
++    default: {
++      if (e <= kQuick || e >= kEntries || g_modes[e].open.load() == nullptr) return false;
++      bool (*ready)() = g_modes[e].ready.load();
++      return !ready || ready();
++    }
+   }
+ }
+ 
+diff -ru orig/src/ingame/hub_panel.cpp nuevo/src/ingame/hub_panel.cpp
+--- orig/src/ingame/hub_panel.cpp	2026-10-15 03:43:24.323906300 +0200
++++ nuevo/src/ingame/hub_panel.cpp	2026-10-15 03:43:50.934769300 +0200
+@@ -329,8 +329,12 @@
+     } else {
+       body = T::T(kHelp[say].es, kHelp[say].en);
+       if (!EntryReady(say)) {
+-        body += " ";
+-        body += T::T(kSoon.es, kSoon.en);
++        if (const char* why = EntryWhy(say)) {   // gris por algo del jugador (RegisterGate): su explicacion
++          body = why;
++        } else {
++          body += " ";
++          body += T::T(kSoon.es, kSoon.en);
++        }
+       } else if (say == kTower || say == kSurvival || say == kKumite) {   // el reto puesto
+         const Reto& r = RetoOf(say, t);
+         if (!r.name.empty()) {
+diff -ru orig/src/ingame/hub_panel.h nuevo/src/ingame/hub_panel.h
+--- orig/src/ingame/hub_panel.h	2026-10-15 03:43:24.159174100 +0200
++++ nuevo/src/ingame/hub_panel.h	2026-10-15 03:43:43.559143900 +0200
+@@ -31,6 +31,12 @@
+ // busy: mientras devuelva true (su pantalla propia abierta) el HUB ni se dibuja ni lee el mando; al
+ // volver a false, el HUB se abre otra vez. Sin busy, se espera a que el menu principal vuelva a nacer.
+ bool RegisterMode(const char* key, void (*open)(), bool (*busy)() = nullptr);
++// Entrada que depende de algo del jugador (p. ej. su copia de otro juego): ready() false = en gris (se ve igual
++// si esta registrada) y el bocadillo dice why() (texto ya traducido) en lugar de "Muy pronto". Cualquier hilo;
++// las dos se llaman en cada fotograma: tienen que ser baratas.
++//   static const bool g = dbz3::hub::RegisterGate("satan", &Disponible, &Motivo);
++bool RegisterGate(const char* key, bool (*ready)(), const char* (*why)());
++const char* EntryWhy(int e);   // why() de una entrada en gris (nullptr = sin explicacion propia)
+ bool EntryReady(int e);     // se puede elegir (registrada, o Tag Team/Online con su interruptor)
+ bool EntryVisible(int e);   // sale en la lista
+ // Entradas visibles en orden (out con sitio para kEntries); devuelve cuantas.
+diff -ru orig/src/pasarela.cpp nuevo/src/pasarela.cpp
+--- orig/src/pasarela.cpp	2026-10-15 03:43:24.469262200 +0200
++++ nuevo/src/pasarela.cpp	2026-10-15 03:43:43.590039600 +0200
+@@ -4,7 +4,7 @@
+ // Datos: la ISO de Budokai 1 del jugador (ps2_games junto a dbz3.exe), leida en tiempo de ejecucion por
+ // pasarela_b1.cpp: combates (tabla del ELF), charlas y avisos (imagenes de texto en el idioma del juego), logo,
+ // fondo y dibujo de Mr. Satan. Nada del juego de origen va en la version. Entrada del HUB: "satan" (Leyenda de
+-// Mr. Satan); sin esa ISO no sale (con el parche del HUB de docs/14_frentes/pasarela.md, en gris con Motivo()).
++// Mr. Satan); sin esa ISO sale en gris y el bocadillo explica que falta (RegisterGate / Motivo).
+ // Pasos: presentacion -> por cada retador: charla de Mr. Satan (desde el 2.o) -> tarjeta del combate con el aviso del
+ // original -> combate (conector nativo dbz3::hub::RequestBattle, src/hub.cpp; Cell Jr: 5 seguidos) -> ... -> final.
+ // El resultado se lee sin ganchos: estado del combate mgr+35128 (4 pelea, 5 acabado, 6 pose, 7 menu final) y hueco
+@@ -52,6 +52,7 @@
+ bool RequestBattle(int id1, int id2, int stage, bool p2_com);   // hub.cpp
+ bool OwnBattle();
+ bool RegisterMode(const char* key, void (*open)(), bool (*busy)());   // hub_menu.cpp
++bool RegisterGate(const char* key, bool (*ready)(), const char* (*why)());
+ }  // namespace dbz3::hub
+ namespace dbz3 {
+ bool GameDimmed();
+@@ -647,28 +648,13 @@
+   if (!panel && rt && rt->imgui_drawer()) panel = new Panel(rt->imgui_drawer());
+ }
+ 
+-// HUB: entrada "satan" ("Leyenda de Mr. Satan", la reserva hub_panel.h). Se registra en cuanto hay datos de la ISO
+-// (sin ella no sale). Con el parche del HUB de docs/14_frentes/pasarela.md saldria siempre: en gris con Motivo().
++// HUB: entrada "satan" ("Leyenda de Mr. Satan", la reserva hub_panel.h): siempre a la vista; sin la ISO de
++// Budokai 1, en gris y el bocadillo dice Motivo() (RegisterGate).
+ void Abrir() {
+   if (!Start()) REXLOG_WARN("dbz3 pasarela: no se pudo empezar");
+ }
+-const bool g_hub = [] {
+-  std::thread([] {
+-    while (dbz3::ingame::GameScreen() != kMainScreen) {   // ajustes (ruta del juego) ya leidos
+-      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+-    }
+-    while (!dbz3::g_guest_eu) {
+-      Leer(false);   // como mucho una busqueda cada 10 s
+-      if (Datos()) {
+-        const bool ok = dbz3::hub::RegisterMode("satan", &Abrir, &Busy);
+-        REXLOG_INFO("dbz3 pasarela: entrada 'satan' del HUB {}", ok ? "registrada" : "no aceptada por el HUB");
+-        return;
+-      }
+-      std::this_thread::sleep_for(std::chrono::seconds(1));
+-    }
+-  }).detach();
+-  return true;
+-}();
++const bool g_hub = dbz3::hub::RegisterMode("satan", &Abrir, &Busy) &&
++                   dbz3::hub::RegisterGate("satan", &Disponible, &Motivo);
+ 
+ // PRUEBA: DBZ3_TEST_PASARELA=1 (o "auto": avanza solo; "auto,desde=N": empieza en el paso N) empieza el modo cuando
+ // el menu principal lleva 3 s en pantalla y escribe el avance en el log ("dbz3 pasarela: ...").

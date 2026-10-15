@@ -102,6 +102,9 @@ void Fetch() {
           e.mod.id = (*t)["id"].value_or(std::string());
           e.mod.version = (*t)["version"].value_or(std::string());
           e.mod.zip = (*t)["zip"].value_or(std::string());
+          // "archivo" = "zip" de los mods que necesitan este exe o uno posterior: los launchers de antes solo leen
+          // "zip" y no los ven (tools/novas_mods.py, exe_nuevo). Un id repetido: gana la entrada de despues.
+          if (std::string a = (*t)["archivo"].value_or(std::string()); !a.empty()) e.mod.zip = std::move(a);
           e.mod.tipo = (*t)["tipo"].value_or(std::string());
           e.mod.size = (*t)["size"].value_or(0LL);
           e.mod.autor = (*t)["autor"].value_or(std::string());
@@ -127,6 +130,8 @@ void Fetch() {
           };
           if (!e.mod.id.empty() && (!e.mod.zip.empty() || !e.mod.partes.empty()) && plain(e.mod.id) &&
               e.mod.zip.find_first_of("?#\\") == std::string::npos && e.mod.zip.find("..") == std::string::npos) {
+            list.erase(std::remove_if(list.begin(), list.end(), [&](const Entry& x) { return x.mod.id == e.mod.id; }),
+                       list.end());
             list.push_back(std::move(e));
           }
         }

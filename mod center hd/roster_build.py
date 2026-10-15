@@ -65,7 +65,9 @@ Un traje EXTRA para un personaje que ya existe es otro mod fuente, con `traje.to
     nombre = "Armadura Saiyan"
     modelos = ["modelos/base.amb", "modelos/kaioken.amb", ...]  # uno por forma, en el
                              # orden de sus transformaciones (Goku: base, Kaioken, SSJ, SSJ2,
-                             # SSJ3, SSJ4); si faltan, se repite el ultimo
+                             # SSJ3, SSJ4); si faltan, se repite el ultimo. "juego:418" = el
+                             # modelo del juego tal cual (forma sin modelo propio en el traje)
+    (importar.py traje <mod> --personaje ID lo crea desde un port importado)
 
 Los trajes se anaden detras de los del juego (el select los ofrece como uno mas). Las
 formas que el juego guarda como otro personaje (Goku SSJ4) reciben su modelo alli.
@@ -151,6 +153,17 @@ SELECT_POSES = (3881, 3882)    # data_cmn: poses del select (#ACM, una por ID; #
 ICON_TEX = 11                  # textura 1024x1024 del marco de la rueda (45 % libre)
 FONT = "C:/Windows/Fonts/comicbd.ttf"
 PORTRAIT_SCALE = 1.3
+
+
+def work_dir(prefix):
+    """Carpeta de trabajo temporal: fuera de C: si existe alguna de DBZ3_TMP, E:/DBZ3HD_trabajo/tmp o D:/tmp
+    (C: va lleno; antes quedaban carpetas importar_* de cientos de MB en %TEMP%) y se borra al salir del proceso."""
+    import atexit  # noqa: PLC0415
+    base = next((c for c in (os.environ.get("DBZ3_TMP"), "E:/DBZ3HD_trabajo/tmp", "D:/tmp")
+                 if c and os.path.isdir(c)), None)
+    d = tempfile.mkdtemp(prefix=prefix, dir=base)
+    atexit.register(shutil.rmtree, d, True)
+    return d
 
 
 def log(*a):
@@ -436,6 +449,35 @@ def to_hd(b, work):
     if struct.unpack(">I", b[0xC:0x10])[0] == 2:      # HD
         return bytes(b)
     raise ValueError("version de #AMB desconocida")
+
+
+def bsp_resources(bsp):
+    """Recursos que el juego apunta al procesar un BSP de tecnicas (sub_82126490): hijos de [0] y de [1] y hijos
+    de la raiz desde el 2. La ranura tiene sitio para 64."""
+    def kids(o):
+        n, tbl = struct.unpack_from(">II", bsp, o + 0x10)
+        return [struct.unpack_from(">I", bsp, o + tbl + 16 * k)[0] for k in range(n)]
+    try:
+        top = kids(0)
+        sub = sum(len(kids(top[g])) for g in (0, 1) if bsp[top[g]:top[g] + 4] == b"#AMB")
+        return sub + max(0, len(top) - 2)
+    except (struct.error, IndexError):
+        return 0
+
+
+def b3_ramps(hdb, name):
+    """Rampas de sombreado de Budokai 2 (sombra en el alfa, RGB negro y ultima columna blanca) -> estilo B3
+    (awo_tools/rampas.py). Sin esto la piel salia sin sombra (muy blanca) y con manchas negras (Tenshinhan B2).
+    Los modelos nativos, de IW, SB y SDBH no cambian (se detecta por el formato de la rampa)."""
+    try:
+        import rampas  # noqa: PLC0415
+        out, rep = rampas.convertir(hdb)
+    except Exception as e:  # noqa: BLE001
+        log("   %s: aviso: rampas sin convertir (%s)" % (name, e))
+        return hdb
+    if "convertidas" in rep:
+        log("   %s: %s" % (name, rep))
+    return out
 
 
 def skeleton(hd_bin, work):
@@ -790,6 +832,22 @@ def mr_hud_h():
     return mr.HUD_SIZE[1]
 
 
+def hud_dy(m):
+    """Bajada automatica de la cara de la barra de vida (fraccion del alto) para cabezas muy
+    altas: las oficiales dejan el hueso HEAD a 12-29 px sobre el menton (camara fija); Fat
+    Gotenks (45) con el menton en su sitio dejaba los ojos fuera de la barra y solo se veian
+    boca y barbilla. Se baja lo que pase de 28 px (las oficiales y los ports de antes, igual)."""
+    import model_render as mr  # noqa: PLC0415
+    try:
+        pose = m.arms_down()
+        pose.update(m.mouth_closed())
+        lo, _, hb = mr.head_info(m, pose, core=True)
+        up = (m.worlds(pose)[hb][1, 3] - lo[1]) * mr.HUD_PX_PER_UNIT if hb is not None else 0.0
+    except Exception:  # noqa: BLE001 (modelo raro: sin ajuste)
+        return 0.0
+    return float(np.clip(up - 28.0, 0.0, 30.0)) / mr.HUD_SIZE[1]
+
+
 def hud_images(c, ui, form_models, fetch=None):
     """Caras de la barra de vida, una por forma: ui/hud.png (o hud_1.png, hud_2.png... por
     forma) terminadas de 256x128, o render de cada modelo (hud_ajuste = [zoom, dx, dy, giro])."""
@@ -810,7 +868,7 @@ def hud_images(c, ui, form_models, fetch=None):
             acc = mr.native_accessory(m)
             if acc is not None and fetch is not None:
                 m.attach(fetch(acc[0]), acc[1])
-            cache[id(hd)] = mr.make_hud(m, yaw=yaw, zoom=z, dx=dx, dy=dy)
+            cache[id(hd)] = mr.make_hud(m, yaw=yaw, zoom=z, dx=dx, dy=dy if isinstance(v, list) else hud_dy(m))
         out.append(cache[id(hd)])
     return out
 
@@ -854,9 +912,15 @@ def build_trajes(trajes, cmn, out_dir, next_fid, work, toml, manifest):
             continue
         fids, cache = [], {}
         for rel in files:
+            # un numero (o "juego:N") = el modelo del juego tal cual: formas que son otro personaje (Vegeta
+            # SSJ4 = ID 92) para las que el traje no trae modelo propio
+            nat = rel if isinstance(rel, int) else (int(rel[6:]) if str(rel).startswith("juego:") else None)
+            if nat is not None:
+                fids.append(nat)
+                continue
             if rel not in cache:
                 write_entry(out_dir, "data_cmn.afs", next_fid,
-                            to_hd(open(os.path.join(d, rel), "rb").read(), work), work)
+                            b3_ramps(to_hd(open(os.path.join(d, rel), "rb").read(), work), name), work)
                 cache[rel] = next_fid
                 next_fid += 1
             fids.append(cache[rel])
@@ -1054,7 +1118,7 @@ def preview(a):
         edits["despues_de"] = str(a.despues_de) if a.despues_de >= 0 else None
     if a.guardar and edits:
         set_toml_keys(tf, edits)
-    work = tempfile.mkdtemp(prefix="roster_v_")
+    work = work_dir("roster_v_")
     try:
         cmn = Afs(os.path.join(a.us or default_us(), "data_cmn.afs"), work)
         dn = IDS[int(c.get("donante", 21))]
@@ -1067,12 +1131,12 @@ def preview(a):
         if files:   # cache del modelo convertido (la conversion PS2->HD es lo mas lento)
             src = os.path.join(d, files[0])
             st = os.stat(src)
-            key = "%s|%d|%d" % (files[0], st.st_size, int(st.st_mtime))
+            key = "%s|%d|%d|rampas2" % (files[0], st.st_size, int(st.st_mtime))   # rampas2: B2 con sombra
             cache, ckey = os.path.join(out, ".modelo_hd.bin"), os.path.join(out, ".modelo_hd.key")
             if os.path.exists(cache) and os.path.exists(ckey) and open(ckey).read() == key:
                 hd = open(cache, "rb").read()
             else:
-                hd = to_hd(open(src, "rb").read(), work)
+                hd = b3_ramps(to_hd(open(src, "rb").read(), work), a.mod)
                 open(cache, "wb").write(hd)
                 open(ckey, "w").write(key)
         want = ("icono", "retrato") if not a.solo else (a.solo,)
@@ -1112,7 +1176,8 @@ def inputs_hash(srcs):
     h.update(open(os.path.join(HERE, "voces.py"), "rb").read())
     h.update(open(os.path.join(HERE, "gritos.py"), "rb").read())
     h.update(open(os.path.join(HERE, "capsulas.py"), "rb").read())
-    for extra in (os.path.join(HERE, "colores.py"), os.path.join(ROOT, "awo_tools", "altura.py")):
+    for extra in (os.path.join(HERE, "colores.py"), os.path.join(ROOT, "awo_tools", "altura.py"),
+                  os.path.join(ROOT, "awo_tools", "rampas.py")):
         if os.path.isfile(extra):        # tambien cambian el resultado (efectos, pies al suelo)
             h.update(open(extra, "rb").read())
     for name, d, _ in srcs:
@@ -1649,7 +1714,7 @@ def build(a):
         return 0
     target_dir = out_dir
     txn = None
-    work = tempfile.mkdtemp(prefix="roster_")
+    work = work_dir("roster_")
     global _POOL
     from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
     _POOL = ThreadPoolExecutor(max_workers=max(2, (os.cpu_count() or 4)))
@@ -1727,7 +1792,7 @@ def build(a):
                     except Exception as e:  # noqa: BLE001
                         log("   %s: aviso: altura de las formas sin ajustar (%s)" % (name, e))
                 for rel, raw in zip(files, raws):
-                    hdbs.append(to_hd(raw, work))
+                    hdbs.append(b3_ramps(to_hd(raw, work), name))
             except Exception as e:  # noqa: BLE001
                 log("!! %s: modelo no valido (%s): personaje omitido" % (name, e))
                 continue
@@ -1837,6 +1902,14 @@ def build(a):
             except Exception as e:  # noqa: BLE001 (un BSP ilegible no tumba el montaje de todos)
                 log("   %s: aviso: tecnicas propias ilegibles (%s): las del donante" % (name, e))
                 bsp = None
+            if bsp:
+                nres = bsp_resources(bsp)
+                if nres > 64:
+                    # la ranura de tecnicas del juego guarda 64 recursos (los nativos llegan a 52): con mas, el
+                    # ultimo pisa la lista de instancias y al acabar el combate el juego liberaba un bloque del
+                    # fichero y se cerraba (Vegeta GT de IW: 65). src/ports_guard.cpp lo evita desde 2026-10-15.
+                    log("   %s: aviso: tecnicas con %d recursos (el juego admite 64); necesita el exe con la "
+                        "guarda de ports (2026-10-15 o posterior)" % (name, nres))
             if anm_bins and c.get("moveset"):
                 # efectos del banco de grupo (AP7 clase 4 >= 300) que el donante no carga: puntero
                 # nulo y el juego se cerraba (Final Flash de Vegeta GT pedia 352, del banco de
@@ -2518,7 +2591,7 @@ def import_caps(a, path, c, d):
     if not c.get("camara"):
         log("!! este personaje usa el moveset del donante: ya lleva sus capsulas (no hay nada que importar)")
         return None
-    work = tempfile.mkdtemp(prefix="caps_")
+    work = work_dir("caps_")
     try:
         cam = load_bin(os.path.join(d, c["camara"]), work)
     finally:
@@ -2619,7 +2692,7 @@ def make_team(a):
     if len(members) < 2 or any(m not in IDS or not IDS[m].get("models") or not IDS[m].get("cam")
                                for m in members):
         raise SystemExit("ERROR: equipo de 2 a 4 personajes de B3 con modelo y moveset (IDs 0-43)")
-    work = tempfile.mkdtemp(prefix="equipo_")
+    work = work_dir("equipo_")
     try:
         cmn = Afs(os.path.join(us, "data_cmn.afs"), work)
         anm_by_id = {m: next((x for x in IDS[m].get("anm", []) if 0 <= x < len(cmn.index)), None)

@@ -72,7 +72,7 @@ Copyright (c) 2026 **NovaPowers**. Licencia MIT (ver `LICENSE`).
 - **Arrastrar y soltar mods:** suelta un `.zip` sobre el launcher y se instala.
 - **Aviso de mods rotos:** el launcher explica qué falla en cada mod y avisa junto a JUGAR.
 - **Kit de modding con Python incluido:** ya no hay que instalar nada.
-- **Mods nativos traducidos** al idioma del launcher.
+- **Mods nativos** (hoy la pestaña **Juego**) traducidos al idioma del launcher.
 - **Personajes de Shin Budokai:** voces, Burning Attack y ráfagas de ki arreglados.
 - La 1.4.2 trajo **NVIDIA DLSS y AMD FSR 3 (beta)**, brillo HD regulable y el importador de Shin Budokai.
 
@@ -175,6 +175,9 @@ En la página de [**Releases**](../../releases/latest):
      `us\` (o `eu\`).
 3. **Abre `dbz3.exe`**. El launcher comprueba qué tienes y, si falta algo, te
    dice qué es. También puedes buscar los datos con los botones de carpeta o ISO.
+   La primera vez sale en el idioma de tu Windows y una ventana corta de
+   **Primeros pasos** te dice qué hacer (vuelve a abrirla con el botón de
+   arriba cuando quieras).
 4. Elige región, idioma, vídeo y sonido, y pulsa **JUGAR** (o **START** en el
    mando).
 
@@ -227,10 +230,26 @@ una herramienta tipo `extract-xiso` (lee el sistema de archivos FATX de Xbox
 | **F3** | Contador de FPS (del juego y de la pantalla). |
 | **F4** | Todos los ajustes (el launcher, encima del juego). |
 | **LB / RB** o **Ctrl + Tab** | Cambiar de pestaña en el launcher. |
+| **A / B** | Elegir / volver en el launcher (B o Esc también cierran sus ventanas). |
 | **START** | JUGAR desde el launcher. |
 
 La barra de ayudas del launcher muestra teclas o botones (Xbox, PlayStation o
 Switch) según lo último que hayas usado.
+
+### Pestañas del launcher
+
+| Pestaña | Para qué sirve |
+|---|---|
+| **Video**, **Escalado**, **Audio** | Imagen, escalado (FSR, DLSS...), sonido e idioma del launcher y del juego. |
+| **Controles** | Mando y teclado. Para cambiar una tecla, pulsa el botón del teclado junto a su casilla y después la tecla. |
+| **Mods** | Tus mods instalados: marca o desmarca para activarlos; arrastra un `.zip` a la ventana para instalarlo. |
+| **Nova's Mods** | Los mods del proyecto (personajes, historias, texturas HD): se descargan y actualizan con un clic. |
+| **Juego** | Los modos nuevos (HUB, Tag Team, Online, selector de transformación; todos beta), arranque rápido, copia de tu partida y brillo HD. |
+| **Modelos**, **Texturas** | Ponerle a un personaje el modelo de otro o retocar sus texturas (necesitan el kit de modding). |
+| **Personajes** | Activar, editar e importar personajes nuevos de otros juegos (importar necesita el kit). |
+| **Avanzado** | Solo diagnóstico: para jugar no hace falta nada de aquí. |
+
+El botón **Primeros pasos** de arriba lo resume en cuatro pasos.
 
 ---
 
@@ -253,9 +272,9 @@ gritos de su versión de Budokai 1, y Zarbon, Dodoria y Androide 19 su definitiv
 2. Descarga el ZIP desde [Google Drive](https://drive.google.com/file/d/1jDRwzd_idmeIxwAMN4q4bC89JKFiGXX7/view?usp=sharing) y copia su carpeta
    `mods` junto a `dbz3.exe` (si Windows pregunta, acepta combinar carpetas: no
    se borra nada tuyo).
-3. Abre `dbz3.exe`, mira la pestaña **Personajes nuevos** y pulsa **JUGAR**.
+3. Abre `dbz3.exe`, mira la pestaña **Personajes** y pulsa **JUGAR**.
 
-Para quitar uno, desmárcalo en **Personajes nuevos → Instalados**. Tus partidas
+Para quitar uno, desmárcalo en **Personajes → Instalados**. Tus partidas
 guardadas no se tocan.
 
 ### Kit de modding (`DBZ3HD-1.4.3.1-Kit-Modding.zip`)
@@ -264,14 +283,15 @@ Las herramientas que hay detrás de las pestañas de modding del launcher: crear
 e **importar personajes** (Budokai 1, Budokai 2, Infinite World y modelos de la
 comunidad), cápsulas propias, voces y gritos, texturas y cambio de modelo.
 
-1. Instala [Python 3.11 o superior](https://www.python.org/downloads/) y marca
-   *Add python.exe to PATH*.
-2. Copia todo el contenido del ZIP en la carpeta del juego (deben quedar
-   `mod center hd` y `awo_tools` junto a `dbz3.exe`).
-3. Haz doble clic en `instalar_requisitos.bat` (una sola vez).
-4. Abre `dbz3.exe` → **Personajes nuevos → Importar personaje de otro juego**:
+1. Copia todo el contenido del ZIP en la carpeta del juego (deben quedar
+   `mod center hd` y `awo_tools` junto a `dbz3.exe`). Python y sus librerías
+   vienen dentro del kit: no hay que instalar nada más.
+2. Abre `dbz3.exe` → **Personajes → Importar personaje de otro juego**:
    elige el juego, busca el personaje, revisa el nombre (se ve en directo cómo
    quedará en el select) y pulsa **Importar**.
+3. O abre la ventana del **Mod Kit** (`DBZ3_ModKit.bat`): personajes, historias,
+   texturas, cambios de modelo y, en **Historias**, los **retos predefinidos**
+   del HUB y la **torre de la semana**.
 
 Para importar desde otros juegos usa **tus copias** en la carpeta `ps2_games`
 (lee el `LEEME.txt` que trae). Super Dragon Ball Heroes y Shin Budokai 1/2 se
@@ -288,8 +308,8 @@ mods/<mod>/manifest.txt                         # metadatos (nombre, autor...)
 mods/<mod>/.disabled                            # si existe, el mod está OFF
 ```
 
-Se gestionan desde el launcher (pestañas **Mods**, **Texturas**, **Model Swap**
-y **Personajes nuevos**) o con las herramientas de `mod center hd/`. Guías en
+Se gestionan desde el launcher (pestañas **Mods**, **Nova's Mods**, **Texturas**,
+**Modelos** y **Personajes**) o con las herramientas de `mod center hd/`. Guías en
 [`docs/02_mods/`](docs/02_mods/) y formato de cápsulas en
 [`docs/03_formatos/CAPSULAS_B3.md`](docs/03_formatos/CAPSULAS_B3.md).
 
@@ -341,8 +361,10 @@ launcher lo reconstruye solo al pulsar JUGAR.
 - Diseño nuevo con tarjetas e iconos, botón **JUGAR** grande y **arranque en
   menos de un segundo**.
 - **Navegable con el mando** y con barra de ayudas según el dispositivo.
-- **5 idiomas** (ES/EN/IT/DE/FR), mensajes claros si el ejecutable no es el
-  correcto, **Reparar instalación** en un clic y aviso de nueva versión.
+- **5 idiomas** (ES/EN/IT/DE/FR; el de Windows en el primer arranque), mensajes
+  claros si el ejecutable no es el correcto, **Reparar instalación** en un clic
+  con el resultado en palabras sencillas, guía de **Primeros pasos** y aviso de
+  nueva versión.
 - Ajustes **portables y autorreparables**.
 
 **Mods**
@@ -359,7 +381,7 @@ launcher lo reconstruye solo al pulsar JUGAR.
 
 **Diagnóstico (opcional)**
 
-- Pestaña Desarrollo: registro de E/S y de rendimiento y palancas de
+- Pestaña **Avanzado**: registro de E/S y de rendimiento y palancas de
   diagnóstico de GPU. Todo **desactivado por defecto**.
 
 ---

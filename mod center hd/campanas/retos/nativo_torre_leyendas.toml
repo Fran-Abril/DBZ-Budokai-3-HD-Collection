@@ -1,0 +1,37 @@
+# Reto predefinido 'nativo_torre_leyendas' (catalogo de la vision futura, 2026-10-15).
+# Lo lee el juego en user_data/dbz3/modos/torre.toml: instalalo con
+#   python retos_predefinidos.py instalar nativo_torre_leyendas --juego <carpeta del juego>
+# tipo/nombre/name/descripcion/description son del catalogo (el juego las ignora).
+# vida = maxima del jugador; vida_inicial = la del primer combate (0 = la maxima); arrastra_vida =
+# la vida que le queda pasa al siguiente (+ recupera); pausa = espera a la pantalla de resultados del HUB.
+# Por combate: rival (ID 0-63), escenario (0-16) y vida del rival (0 = la normal, 3000; tope 7000).
+tipo = "torre"
+nombre = "Torre de leyendas"
+name = "Legends Tower"
+descripcion = "Bardock, Cooler, Broly y Omega Shenron."
+description = "Bardock, Cooler, Broly and Omega Shenron."
+vida = 3000
+vida_inicial = 0
+arrastra_vida = false
+recupera = 0
+pausa = false
+
+[[combate]]
+rival = 39
+escenario = 5
+vida = 2500
+
+[[combate]]
+rival = 38
+escenario = 6
+vida = 3200
+
+[[combate]]
+rival = 40
+escenario = 7
+vida = 4000
+
+[[combate]]
+rival = 41
+escenario = 8
+vida = 5000

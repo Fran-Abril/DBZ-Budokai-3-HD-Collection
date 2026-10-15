@@ -1,0 +1,50 @@
+# Pack visual opcional para las pantallas propias (HUB, Tag Team, Online). Todo va a ui_ingame/,
+# que style::Img ya lee de los mods activos antes que la pieza del juego:
+#   - fondo_duelo: fondo 4:3 de TAG TEAM y ONLINE (funciona ya)
+#   - hub/*: piezas del HUB (las pide hub_panel.cpp; ver docs/14_frentes/assets_integracion.md y hub.md)
+#   - hub/vuelo_<n>: personaje que vuela hacia la camara al entrar al HUB (sin ellas, solo el fundido)
+#   python construir_pack.py pack_hub.toml --mods <mods>
+[pack]
+nombre = "pack_hub"
+titulo = "Arte: fondo del HUB y personajes que vuelan al entrar"
+descripcion = "Fondo, renders y vuelo a camara para las pantallas propias (arte de terceros, solo uso personal)."
+
+# Fondo de TAG TEAM y ONLINE (sustituye al cielo rosa del Duelo): el planeta de Kaio
+[[asset]]
+fuente = "Dragon Ball BG -BackGrounds-/King Kai Planet 1.jpg"
+destino = "ui_ingame/fondo_duelo.png"
+tipo = "fondo_duelo"
+
+# Fondo del HUB (16:9)
+[[asset]]
+fuente = "Dragon Ball Z/Frieza Saga/[2020-01-18] Namek Saga (Ginyu Force) Wallpaper [DBZ Kakarot] by Maxiuchiha22 - 827414160.png"
+destino = "ui_ingame/hub/fondo.png"
+tipo = "fondo_hub"
+
+# Banner horizontal: desde el HUB v2 el titulo es el logo "Dragon HUB" y el HUB ya no pinta hub/banner.
+# Receta anterior, por si se vuelve a usar:
+# [[asset]]
+# fuente = "Dragon Ball Z/Android Saga/[2018-09-05] Goku SSJ2 cutin [DB Legends] by Maxiuchiha22 - 762640143.png"
+# destino = "ui_ingame/hub/banner.png"
+# tipo = "banner"
+
+# Render de personaje del HUB (render_<ID del juego>; 27 = Freezer)
+[[asset]]
+fuente = "Dragon Ball Z/Frieza Saga/[2019-06-14] Frieza final form render [Dokkan Battle] by Maxiuchiha22 - 801726967.png"
+destino = "ui_ingame/hub/render_27.png"
+tipo = "render"
+
+# Entrada al HUB: el personaje vuela hacia la camara durante el fundido (hub_panel.cpp, vuelo_1..vuelo_8;
+# se turnan). Imagenes vertical con alfa, de frente; aqui las dos que trajo el usuario (ya no viven en
+# assets_propios/, que es CC0): <raiz>/Dragon HUB (pack opcional)/.
+[[asset]]
+fuente = "Dragon HUB (pack opcional)/Trunks flying to camera.png"
+destino = "ui_ingame/hub/vuelo_1.png"
+modo = "recortar"
+tamano = [768, 1024]
+
+[[asset]]
+fuente = "Dragon HUB (pack opcional)/Android 17 flying to camera.png"
+destino = "ui_ingame/hub/vuelo_2.png"
+modo = "recortar"
+tamano = [768, 1024]

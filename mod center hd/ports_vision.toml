@@ -1,0 +1,89 @@
+# Ports de "vision futura" (BASE de propuestas de roster). NO son oficiales ni estan montados:
+# son recetas para recrear personajes desde TUS discos, con el mismo formato que ports_oficiales.toml.
+# Solo incluye lo que el listado del importador muestra (python importar.py lista FUENTE).
+# Ficha de origen en cada bloque (studies/11_vision_futura/NN_*.md). Estado: studies/11_vision_futura/BASE_ROSTER.md
+#
+# Uso (mismo formato y comandos que ports_oficiales.toml, con --recetas):
+#   python importar.py oficiales --recetas ports_vision.toml [--mods CARPETA]   lista (y si ya esta instalado)
+#   python importar.py oficial vis_b2_fat_gotenks --recetas ports_vision.toml [--mods CARPETA]
+#   python importar.py oficial --todos --recetas ports_vision.toml [--mods CARPETA]
+# Despues: python roster_build.py construir [--mods CARPETA]. Estado en juego: docs/14_frentes/ports.md
+
+# ---- Ficha 07 (trajes por epoca) ----------------------------------------------------------
+# Traje de Vegeta de la saga Saiyan. NO es el "Badman" (camisa rosa): ese no aparece en ninguna fuente.
+[vis_iw_vegeta_saiyan]
+nombre = "Vegeta (Saiyan Saga)"
+fuente = "iw"
+clave = "c:vegeta (saiyan saga)"
+donante = 7
+preset = "original"
+
+# Yamcha con traje amarillo (IW). Ficha 07 pide Yamcha del DB original: confirmar visualmente que es esa epoca.
+[vis_iw_yamcha_amarillo]
+nombre = "Yamcha (traje amarillo)"
+fuente = "iw"
+clave = "c:yamcha (yellow suit)"
+donante = 13
+preset = "original"
+
+# Tenshinhan de Budokai 2 (1 traje). Ficha 07 pide Ten Shinhan del DB original: el aspecto DB no esta confirmado.
+# No es "Tiencha" (la fusion de la ficha 20): esa no existe en B2.
+[vis_b2_tenshinhan]
+nombre = "Tenshinhan (B2)"
+fuente = "b2"
+clave = "XTSH"
+donante = 12
+preset = "original"
+
+# ---- Ficha 08 (Super / SDBH) --------------------------------------------------------------
+# Goku con el modelo de Super Dragon Ball Heroes. Solo base provisional para Goku Black (que NO existe en
+# ninguna fuente); sus golpes no se portan (preset original de SDBH = golpes del donante).
+[vis_sdbh_goku]
+nombre = "Goku (SDBH)"
+fuente = "sdbh"
+clave = "GOK"
+donante = 0
+preset = "original"
+
+# ---- Ficha 20 (fusiones hipoteticas de Budokai 2) ------------------------------------------
+# Fusiones hipoteticas que SI estan en B2. Yamhan estaba sin nombre (XYMH); Gokule no existe en B2.
+[vis_b2_fat_gotenks]
+nombre = "Fat Gotenks"
+fuente = "b2"
+clave = "XGXL"
+donante = 8
+preset = "original"
+# B2 no tiene sus voces a mano: las de Gotenks de Infinite World (si esta el disco de IW), no las del donante
+extra = { voces = "iw:GOTENKS (GOTEN)" }
+
+[vis_b2_ghost_gotenks]
+nombre = "Ghost Gotenks"
+fuente = "b2"
+clave = "XGXG"
+donante = 8
+preset = "original"
+# B2 no tiene sus voces a mano: las de Gotenks de Infinite World (si esta el disco de IW), no las del donante
+extra = { voces = "iw:GOTENKS (GOTEN)" }
+
+# Yamhan (Yamcha + Tenshinhan): en B2 estaba sin nombre (prefijo XYMH); identificado por render el 2026-10-15
+# (tercer ojo, mechon de Yamcha y chaleco de fusion). Tiene moveset propio en B2 (YMH, entrada 318).
+[vis_b2_yamhan]
+nombre = "Yamhan"
+fuente = "b2"
+clave = "XYMH"
+donante = 12
+preset = "original"
+
+# La fusion fallida de Yamhan (delgada, como Fat Gotenks para Gotenks): prefijo XYHS, sin moveset propio en B2.
+[vis_b2_yamhan_fallida]
+nombre = "Yamhan (fusion fallida)"
+fuente = "b2"
+clave = "XYHS"
+donante = 12
+preset = "original"
+
+# Gokule (Goku + Mr. Satan): ningun modelo de B2 lo es (los dos sin nombre eran Yamhan). Sin receta.
+
+# ---- Ficha 21 (absorciones de Super Buu) ---------------------------------------------------
+# Super Buu absorbidos (Gohan, Gotenks, Piccolo): ya son variantes de B3 segun la ficha; no se duplican aqui.
+# Freezer, Cell, Vegeta, Tenshinhan y Yamcha absorbidos: no aparecen en ninguna fuente (sin receta).

@@ -121,7 +121,9 @@ retratos = [1443, 4501]
 marca = [1, 25, 3213, 48, -6083, 1500]   # la de Trunks en el juego (104.0, zona 25)
 plantilla = 717                   # un combate de Goku en la Tierra (saga de los androides)
 fondo_dialogo = 1549              # fondo de la charla de despues (la Tierra)
-cierre_imagen = "imagenes/frieza-dbz-feature-image.avif"   # Freezer en su forma final (el cierre habla de el y del Rey Cold)
+# varias imagenes en una narracion: las 2 primeras paginas con Freezer en su forma final y la ultima con el
+# fondo de la Tierra del juego (data_cmn 1549); cada imagen es una escena encadenada (op 20)
+cierre_imagenes = [{ imagen = "imagenes/frieza-dbz-feature-image.avif", paginas = 2 }, { imagen = 1549 }]
 cierre_es = ["Namek estalla en mil pedazos.",
              "Freezer escapa en el último segundo, destrozado.",
              "Su padre, el Rey Cold, lo reconstruirá con piezas mecánicas."]

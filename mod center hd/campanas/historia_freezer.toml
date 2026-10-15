@@ -52,7 +52,7 @@ contenedor = 1820
 eventos_mapa = { codigos = [2100], retrato = 1463, desde = 4600 }   # "I found something!" con la cara de Freezer
 traje_mapa = 2                 # en el mapa de Namek Freezer va en su nave (traje 3 del juego: modelo 193)
 altura_mapa = 600            # altura a la que vuelas por el mapa al volver de un combate
-idioma = "en"                # de momento, todos los idiomas con el texto en ingles
+# cada idioma con su texto (`_es`, `_en`...); los que no tienen el suyo (fr/de/it) usan el ingles
 # textos: campana.py reserva solo su bloque de entradas (sin `textos_desde`), sin pisar otros mods
 fondo = 1411                 # el panel verde de la introduccion de Freezer
 final = { contenedor = 1728, codigo = 1, entrada = 39, fondo = "villano" }   # entrada de final libre; fondo "villano" (Broly) o "heroe"

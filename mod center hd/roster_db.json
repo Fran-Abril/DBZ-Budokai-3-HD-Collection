@@ -1,5 +1,5 @@
 {
- "_doc": "Metadatos por ID de personaje del default.xex US (B3 HD), extraidos por RE (handback Claude 2026-10-03). Solo numeros de entrada (fids) y parametros; ningun dato del juego. Ver src/roster_ext.cpp. caps = lista de capsulas por defecto (char96 +80); form_caps = capsula que exige cada forma (char372 +212+20f); bank = entrada data_usi con los nombres de sus capsulas (tabla 0x82373D68); extra_ids = IDs 44-63, vacios en todas las tablas por ID (char96/char372 de 105 entradas). hud_face = data_cmn *_HUD.amt (cara de la barra de vida) y skills = ficha de habilidades (tabla 0x82324468 -> registro de 0x82373A00[indice+1]: scm = data_usi SCM<cod>.amb, capsulas de ataque y de transformacion).",
+ "_doc": "Metadatos por ID de personaje del default.xex US (B3 HD), extraidos por RE (handback Claude 2026-10-03). Solo numeros de entrada (fids) y parametros; ningun dato del juego. Ver src/roster_ext.cpp. caps = lista de capsulas por defecto (char96 +80); form_caps = capsula que exige cada forma (char372 +212+20f); bank = entrada data_usi con los nombres de sus capsulas (tabla 0x82373D68); extra_ids = IDs 44-63, vacios en todas las tablas por ID (char96/char372 de 105 entradas). hud_face = data_cmn *_HUD.amt (cara de la barra de vida) y skills = ficha de habilidades (tabla 0x82324468 -> registro de 0x82373A00[indice+1]: scm = data_usi SCM<cod>.amb, capsulas de ataque y de transformacion). form_models = por forma (char372 +212+20f) el [ID, modelo dentro del traje] que usa el juego; form_ids = modelos (char96 +8) de las formas que son otro ID (Goku SSJ4 = 91, Vegeta SSJ4 = 92...).",
  "free_ids": [
   22,
   23,
@@ -280,7 +280,33 @@
      4,
      5
     ]
-   }
+   },
+   "form_models": [
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     1
+    ],
+    [
+     0,
+     2
+    ],
+    [
+     0,
+     3
+    ],
+    [
+     0,
+     4
+    ],
+    [
+     91,
+     0
+    ]
+   ]
   },
   {
    "id": 1,
@@ -352,7 +378,13 @@
      15
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     1,
+     0
+    ]
+   ]
   },
   {
    "id": 2,
@@ -427,7 +459,17 @@
     "transformaciones": [
      16
     ]
-   }
+   },
+   "form_models": [
+    [
+     2,
+     0
+    ],
+    [
+     2,
+     0
+    ]
+   ]
   },
   {
    "id": 3,
@@ -513,7 +555,25 @@
      18,
      19
     ]
-   }
+   },
+   "form_models": [
+    [
+     3,
+     0
+    ],
+    [
+     3,
+     1
+    ],
+    [
+     3,
+     2
+    ],
+    [
+     0,
+     2
+    ]
+   ]
   },
   {
    "id": 4,
@@ -598,7 +658,25 @@
      24,
      25
     ]
-   }
+   },
+   "form_models": [
+    [
+     4,
+     0
+    ],
+    [
+     4,
+     1
+    ],
+    [
+     4,
+     1
+    ],
+    [
+     4,
+     2
+    ]
+   ]
   },
   {
    "id": 5,
@@ -671,7 +749,13 @@
      31
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     5,
+     0
+    ]
+   ]
   },
   {
    "id": 6,
@@ -748,7 +832,17 @@
     "transformaciones": [
      32
     ]
-   }
+   },
+   "form_models": [
+    [
+     6,
+     0
+    ],
+    [
+     6,
+     1
+    ]
+   ]
   },
   {
    "id": 7,
@@ -847,7 +941,33 @@
      36,
      37
     ]
-   }
+   },
+   "form_models": [
+    [
+     7,
+     0
+    ],
+    [
+     7,
+     1
+    ],
+    [
+     7,
+     1
+    ],
+    [
+     92,
+     0
+    ],
+    [
+     7,
+     2
+    ],
+    [
+     89,
+     0
+    ]
+   ]
   },
   {
    "id": 8,
@@ -930,7 +1050,21 @@
      45,
      46
     ]
-   }
+   },
+   "form_models": [
+    [
+     8,
+     0
+    ],
+    [
+     8,
+     1
+    ],
+    [
+     8,
+     1
+    ]
+   ]
   },
   {
    "id": 9,
@@ -1007,7 +1141,17 @@
     "transformaciones": [
      50
     ]
-   }
+   },
+   "form_models": [
+    [
+     9,
+     0
+    ],
+    [
+     9,
+     1
+    ]
+   ]
   },
   {
    "id": 10,
@@ -1085,7 +1229,17 @@
     "transformaciones": [
      53
     ]
-   }
+   },
+   "form_models": [
+    [
+     10,
+     0
+    ],
+    [
+     10,
+     0
+    ]
+   ]
   },
   {
    "id": 11,
@@ -1169,7 +1323,21 @@
      57,
      58
     ]
-   }
+   },
+   "form_models": [
+    [
+     11,
+     0
+    ],
+    [
+     11,
+     0
+    ],
+    [
+     11,
+     0
+    ]
+   ]
   },
   {
    "id": 12,
@@ -1242,7 +1410,13 @@
      65
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     12,
+     0
+    ]
+   ]
   },
   {
    "id": 13,
@@ -1317,7 +1491,13 @@
      68
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     13,
+     0
+    ]
+   ]
   },
   {
    "id": 14,
@@ -1394,7 +1574,17 @@
     "transformaciones": [
      69
     ]
-   }
+   },
+   "form_models": [
+    [
+     14,
+     0
+    ],
+    [
+     14,
+     0
+    ]
+   ]
   },
   {
    "id": 15,
@@ -1468,7 +1658,21 @@
      76
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     15,
+     0
+    ],
+    [
+     4,
+     0
+    ],
+    [
+     5,
+     0
+    ]
+   ]
   },
   {
    "id": 16,
@@ -1539,7 +1743,13 @@
      78
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     16,
+     0
+    ]
+   ]
   },
   {
    "id": 17,
@@ -1610,7 +1820,13 @@
      80
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     17,
+     0
+    ]
+   ]
   },
   {
    "id": 18,
@@ -1681,7 +1897,13 @@
      82
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     18,
+     0
+    ]
+   ]
   },
   {
    "id": 19,
@@ -1753,7 +1975,13 @@
      85
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     19,
+     0
+    ]
+   ]
   },
   {
    "id": 20,
@@ -1828,7 +2056,13 @@
      90
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     20,
+     0
+    ]
+   ]
   },
   {
    "id": 21,
@@ -1903,7 +2137,13 @@
      95
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     21,
+     0
+    ]
+   ]
   },
   {
    "id": 22,
@@ -1960,7 +2200,13 @@
    "lips_per_costume": 1,
    "caps": [],
    "form_caps": [],
-   "bank": 65535
+   "bank": 65535,
+   "form_models": [
+    [
+     0,
+     0
+    ]
+   ]
   },
   {
    "id": 23,
@@ -2017,7 +2263,13 @@
    "lips_per_costume": 1,
    "caps": [],
    "form_caps": [],
-   "bank": 65535
+   "bank": 65535,
+   "form_models": [
+    [
+     0,
+     0
+    ]
+   ]
   },
   {
    "id": 24,
@@ -2074,7 +2326,13 @@
    "lips_per_costume": 1,
    "caps": [],
    "form_caps": [],
-   "bank": 65535
+   "bank": 65535,
+   "form_models": [
+    [
+     0,
+     0
+    ]
+   ]
   },
   {
    "id": 25,
@@ -2133,7 +2391,17 @@
    "lips_per_costume": 1,
    "caps": [],
    "form_caps": [],
-   "bank": 65535
+   "bank": 65535,
+   "form_models": [
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ]
   },
   {
    "id": 26,
@@ -2190,7 +2458,13 @@
    "lips_per_costume": 1,
    "caps": [],
    "form_caps": [],
-   "bank": 65535
+   "bank": 65535,
+   "form_models": [
+    [
+     0,
+     0
+    ]
+   ]
   },
   {
    "id": 27,
@@ -2301,7 +2575,33 @@
      98,
      99
     ]
-   }
+   },
+   "form_models": [
+    [
+     27,
+     0
+    ],
+    [
+     27,
+     1
+    ],
+    [
+     27,
+     2
+    ],
+    [
+     27,
+     3
+    ],
+    [
+     27,
+     4
+    ],
+    [
+     27,
+     5
+    ]
+   ]
   },
   {
    "id": 28,
@@ -2372,7 +2672,13 @@
      104
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     28,
+     0
+    ]
+   ]
   },
   {
    "id": 29,
@@ -2445,7 +2751,17 @@
      107
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     29,
+     0
+    ],
+    [
+     30,
+     0
+    ]
+   ]
   },
   {
    "id": 30,
@@ -2520,7 +2836,17 @@
      110
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     30,
+     0
+    ],
+    [
+     29,
+     0
+    ]
+   ]
   },
   {
    "id": 31,
@@ -2577,7 +2903,13 @@
    "lips_per_costume": 1,
    "caps": [],
    "form_caps": [],
-   "bank": 65535
+   "bank": 65535,
+   "form_models": [
+    [
+     0,
+     0
+    ]
+   ]
   },
   {
    "id": 32,
@@ -2649,7 +2981,13 @@
      113
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     32,
+     0
+    ]
+   ]
   },
   {
    "id": 33,
@@ -2738,7 +3076,25 @@
      115,
      116
     ]
-   }
+   },
+   "form_models": [
+    [
+     33,
+     0
+    ],
+    [
+     33,
+     1
+    ],
+    [
+     33,
+     2
+    ],
+    [
+     33,
+     2
+    ]
+   ]
   },
   {
    "id": 34,
@@ -2810,7 +3166,13 @@
      122
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     34,
+     0
+    ]
+   ]
   },
   {
    "id": 35,
@@ -2896,7 +3258,41 @@
      206
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     35,
+     0
+    ],
+    [
+     84,
+     0
+    ],
+    [
+     78,
+     0
+    ],
+    [
+     79,
+     0
+    ],
+    [
+     11,
+     0
+    ],
+    [
+     64,
+     2
+    ],
+    [
+     4,
+     2
+    ],
+    [
+     90,
+     2
+    ]
+   ]
   },
   {
    "id": 36,
@@ -2969,7 +3365,13 @@
      128
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     36,
+     0
+    ]
+   ]
   },
   {
    "id": 37,
@@ -3045,7 +3447,17 @@
     "transformaciones": [
      129
     ]
-   }
+   },
+   "form_models": [
+    [
+     37,
+     0
+    ],
+    [
+     37,
+     0
+    ]
+   ]
   },
   {
    "id": 38,
@@ -3125,7 +3537,21 @@
     "transformaciones": [
      133
     ]
-   }
+   },
+   "form_models": [
+    [
+     38,
+     0
+    ],
+    [
+     38,
+     1
+    ],
+    [
+     38,
+     2
+    ]
+   ]
   },
   {
    "id": 39,
@@ -3201,7 +3627,13 @@
      143
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     39,
+     0
+    ]
+   ]
   },
   {
    "id": 40,
@@ -3281,7 +3713,17 @@
     "transformaciones": [
      140
     ]
-   }
+   },
+   "form_models": [
+    [
+     40,
+     0
+    ],
+    [
+     40,
+     1
+    ]
+   ]
   },
   {
    "id": 41,
@@ -3354,7 +3796,13 @@
      146
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     41,
+     0
+    ]
+   ]
   },
   {
    "id": 42,
@@ -3426,7 +3874,17 @@
      148
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     42,
+     0
+    ],
+    [
+     42,
+     0
+    ]
+   ]
   },
   {
    "id": 43,
@@ -3496,7 +3954,13 @@
      149
     ],
     "transformaciones": []
-   }
+   },
+   "form_models": [
+    [
+     43,
+     0
+    ]
+   ]
   }
  ],
  "extra_ids": [
@@ -3520,5 +3984,146 @@
   61,
   62,
   63
- ]
+ ],
+ "form_ids": {
+  "0": {
+   "models": [
+    264,
+    265,
+    266,
+    267,
+    268,
+    270,
+    271,
+    272,
+    273,
+    274,
+    276,
+    277,
+    278,
+    279,
+    280,
+    281,
+    281,
+    281,
+    281,
+    281,
+    282,
+    283,
+    284,
+    285,
+    286
+   ],
+   "models_per_costume": 5
+  },
+  "4": {
+   "models": [
+    225,
+    226,
+    227,
+    228,
+    229,
+    230
+   ],
+   "models_per_costume": 3
+  },
+  "5": {
+   "models": [
+    293,
+    294
+   ],
+   "models_per_costume": 1
+  },
+  "11": {
+   "models": [
+    350,
+    351,
+    352,
+    353
+   ],
+   "models_per_costume": 1
+  },
+  "29": {
+   "models": [
+    75,
+    76
+   ],
+   "models_per_costume": 1
+  },
+  "30": {
+   "models": [
+    80,
+    81,
+    82
+   ],
+   "models_per_costume": 1
+  },
+  "64": {
+   "models": [
+    305,
+    306,
+    307,
+    308,
+    309,
+    310
+   ],
+   "models_per_costume": 3
+  },
+  "78": {
+   "models": [
+    107,
+    108
+   ],
+   "models_per_costume": 1
+  },
+  "79": {
+   "models": [
+    104,
+    105
+   ],
+   "models_per_costume": 1
+  },
+  "84": {
+   "models": [
+    116,
+    117
+   ],
+   "models_per_costume": 1
+  },
+  "89": {
+   "models": [
+    96,
+    96
+   ],
+   "models_per_costume": 1
+  },
+  "90": {
+   "models": [
+    312,
+    313,
+    114,
+    312,
+    313,
+    114
+   ],
+   "models_per_costume": 3
+  },
+  "91": {
+   "models": [
+    269,
+    275,
+    269,
+    269,
+    287
+   ],
+   "models_per_costume": 1
+  },
+  "92": {
+   "models": [
+    418,
+    422
+   ],
+   "models_per_costume": 1
+  }
+ }
 }

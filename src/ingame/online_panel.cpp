@@ -6,6 +6,8 @@
 #include <cfloat>
 #include <chrono>
 #include <cstdio>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -42,6 +44,8 @@ REXCVAR_DEFINE_BOOL(dbz3_online_enabled, true, "DBZ3/Mods", "ONLINE entry in the
 
 namespace dbz3 {
 bool GameDimmed();
+bool OverlayOpen();
+void SetWindowIconRgba(const uint8_t* rgba, int w, int h);
 }
 
 namespace dbz3::tag {
@@ -52,8 +56,12 @@ bool dbz3_select_live();   // select_ext.cpp: la rueda de personajes esta en mar
 bool dbz3_select_to_stage();   // los dos confirmaron: escenario (misma pantalla 14)
 void dbz3_select_reset_flow();
 
+namespace dbz3::hub {
+bool RowActive();   // hub_menu.cpp: la fila HUB ocupa el sitio de la fila TAG TEAM (Tag Team sigue con X)
+}
 namespace dbz3::campaigns {
 void Trace(uint8_t* base);   // campaigns.cpp
+void ForgetStoryBattle();   // campaigns.cpp: menu principal = fuera de Dragon Universe
 }
 
 namespace dbz3::ingame {
@@ -64,6 +72,7 @@ using dbz3::net::Link;
 using dbz3::net::Session;
 
 std::atomic<bool> g_wanted{false};
+std::atomic<bool> g_open_at_duel{false};   // OnlineOpen(): el panel se abre al llegar al Duelo
 std::atomic<bool> g_open{false};
 std::atomic<uint16_t> g_pad{0};          // mando 1 leido fuera del pintado (DeferUi)
 std::atomic<bool> g_pad_pending{false};
@@ -90,14 +99,24 @@ void EntryBadge(ImGuiIO& io, const char* text) {
 // Fundido de nuestras filas con el del juego (medido 2026-10-11 con capturas cada 0,5 s): al
 // confirmar (A/B) la lista sale en ~0,3 s y la pantalla funde a negro en ~1,5 s; al llegar a un
 // menu la pantalla sale de negro en ~1,5 s. El tiempo de llegada y el de salida los anota OnlineTick.
+// Fundido a negro del propio juego (US): float en 0x8243A278, 0 = se ve todo, 1 = negro. Encontrado el
+// 2026-10-15 comparando la memoria con el brillo de capturas al entrar y salir del Duelo (r = -0,95;
+// E:\DBZ3HD_trabajo\bugs\analiza_fundido.py). Lo lee OnlineTick (hilo del juego) en cada cuadro. Con el
+// la fila ONLINE ya no sale sobre el negro (el byte de pantalla cambia con la pantalla aun negra y el negro
+// dura mas o menos segun lo que cargue). EU (sin medir): la cuenta de tiempo de antes, con una espera.
+constexpr uint32_t kGameFadeUs = 0x8243A278;
+std::atomic<float> g_game_fade{0.0f};
 std::atomic<int64_t> g_enter_ms{0}, g_leave_ms{0};   // 0 = sin salida pendiente
+std::atomic<int> g_enter_delay_ms{0};                 // EU: espera antes de salir de negro (por pantalla)
 int64_t NowMs() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 float MenuFade() {
   const int64_t now = NowMs(), leave = g_leave_ms.load();
-  float a = std::clamp(float(now - g_enter_ms.load()) / 1500.0f, 0.0f, 1.0f);
+  float a = dbz3::g_guest_eu
+                ? std::clamp(float(now - g_enter_ms.load() - g_enter_delay_ms.load()) / 1500.0f, 0.0f, 1.0f)
+                : 1.0f - g_game_fade.load();
   if (leave) a *= std::clamp(1.0f - float(now - leave) / 300.0f, 0.0f, 1.0f);
   return a;
 }
@@ -195,6 +214,7 @@ int MainMenuRow() {
 }
 void SetMainMenuRow(int row) { g_main_row = row; }
 
+void OnlineOpen() { g_open_at_duel = true; }
 bool OnlinePanelWanted() { return g_wanted.load() || Session::Get().link() != Link::kIdle; }
 bool OnlinePanel::IsOpen() { return g_open.load(); }
 
@@ -238,7 +258,7 @@ uint16_t DuelMenuFilter(uint8_t* base, uint16_t real) {
   // menu principal (7 filas, recuerda la ultima): se sigue igual para el piloto de TAG TEAM
   // con la ultima fila (Dragon Arena), abajo pasa a TAG TEAM (el juego no lo ve); arriba vuelve,
   // abajo da la vuelta a la primera fila y A abre la pantalla TAG TEAM
-  if (screen == kMainMenuScreen && !TagTeamWanted() && REXCVAR_GET(dbz3_tag_team_enabled)) {
+  if (screen == kMainMenuScreen && !TagTeamWanted() && REXCVAR_GET(dbz3_tag_team_enabled) && !dbz3::hub::RowActive()) {
     g_main_row = MainMenuRow();   // la fila real, si el menu la ha dado
     if (!g_tag_focus.load()) {
       if ((pressed & kDown) && g_main_row.load() == 6) {
@@ -312,16 +332,36 @@ void OnlineTick(uint8_t* base, uint16_t p1_buttons) {
   auto& s = Session::Get();
   constexpr uint16_t kX = 0x4000;
   const int screen = base[dbz3::GuestAddr(0x824BA110, 0x824BA100)];
+  if (!dbz3::g_guest_eu) {
+    const uint32_t bits = REX_LOAD_U32(kGameFadeUs);
+    float f;
+    std::memcpy(&f, &bits, 4);
+    g_game_fade = std::isfinite(f) ? std::clamp(f, 0.0f, 1.0f) : 0.0f;
+  }
   dbz3::tag::OnScreen(screen);
+  if (screen == kMainMenuScreen) dbz3::campaigns::ForgetStoryBattle();
   if (screen != kDuelMenuScreen) dbz3_select_reset_flow();
   const bool battle = dbz3::tag::InBattle();
   if (screen != g_screen.load()) {          // llegada a otro menu: sale de negro
     g_enter_ms = NowMs();
+    g_enter_delay_ms = screen == kDuelMenuScreen ? 900 : 0;
     g_leave_ms = 0;
   }
-  // A/B en el menu principal o en el Duelo sin nuestra fila elegida: el juego sale de ese menu
-  if ((screen == kMainMenuScreen && !g_tag_focus.load()) || (screen == kDuelMenuScreen && !g_online_focus.load())) {
-    if ((p1_buttons & ~g_prev_select & 0x3000) && !g_leave_ms.load()) g_leave_ms = NowMs();
+  // HUB > Online: la pantalla ONLINE se abre cuando el Duelo ya se ve (antes salia en cuanto cambiaba el byte,
+  // con la pantalla aun en negro)
+  if (g_open_at_duel.load() && screen == kDuelMenuScreen && !dbz3_select_live() && !dbz3_select_to_stage() &&
+      MenuFade() >= 1.0f) {
+    g_open_at_duel = false;
+    g_wanted = true;
+  }
+  // el juego sale del menu: A/B sin nuestra fila elegida y, en el Duelo, tambien Y (atras; antes no contaba y la
+  // fila seguia entera hasta el negro). Con ONLINE elegida, B/Y solo la sueltan (medido: el Duelo se queda).
+  {
+    const uint16_t newly = p1_buttons & ~g_prev_select;
+    constexpr uint16_t kA = 0x1000, kB = 0x2000, kY = 0x8000;
+    const bool leaves = (screen == kMainMenuScreen && !g_tag_focus.load() && (newly & (kA | kB))) ||
+                        (screen == kDuelMenuScreen && !g_online_focus.load() && (newly & (kA | kB | kY)));
+    if (leaves && !g_leave_ms.load()) g_leave_ms = NowMs();
   }
   if (g_leave_ms.load() && NowMs() - g_leave_ms.load() > 2500) {   // no salio (opcion bloqueada): vuelve
     g_enter_ms = NowMs();
@@ -377,6 +417,10 @@ uint16_t OnlinePanel::Pad() {
 void OnlinePanel::OnDraw(ImGuiIO& io) {
   if (dbz3::GameDimmed()) return;   // fuera de la ventana: solo la pantalla oscura del juego
   native_ui::Prefetch();   // piezas del juego para las pantallas propias (una vez, en su hilo)
+  if (static bool icon = false; !icon && native_ui::Ready()) {   // icono de la ventana: la bola del juego
+    icon = true;
+    if (native_ui::Image im; native_ui::Take("icono", im)) dbz3::SetWindowIconRgba(im.rgba.data(), im.w, im.h);
+  }
   auto& s = Session::Get();
   // salir pedido desde la pantalla: lo ejecuta este hilo (dueno del socket salvo en partida); en
   // partida lo cierra el hilo del juego (RunTick), que es el que usa el socket
@@ -398,18 +442,29 @@ void OnlinePanel::OnDraw(ImGuiIO& io) {
   if (show && !g_open.load()) {   // la A que abre la pantalla no cuenta (el mando llega un poco tarde)
     wait_release_ = true;
     opened_at_ = ImGui::GetTime();
+    REXLOG_INFO("dbz3 online: se abre la pantalla ONLINE");
   }
   g_open = show;
   if (s.link() == Link::kPlaying) g_wanted = false;
-  // conexion perdida o error: la pantalla vuelve sola (fuera del combate) con el motivo
+  // conexion perdida o error: la pantalla vuelve sola con el motivo; si pasa en pleno combate, al acabarlo
+  // (antes solo se miraba el cuadro del cambio: en combate no se abria y despues tampoco)
   const Link now = s.link();
-  if (int(now) != last_link_ && (now == Link::kLost || now == Link::kError) && !g_battle.load()) g_wanted = true;
+  const bool broken = now == Link::kLost || now == Link::kError;
+  if (int(now) != last_link_ && broken) lost_notice_ = true;
+  if (!broken) lost_notice_ = false;
+  if (lost_notice_ && !g_battle.load()) {
+    g_wanted = true;
+    lost_notice_ = false;
+  }
   last_link_ = int(now);
+  if (dbz3::OverlayOpen()) return;   // launcher/menu rapido encima: la red sigue, sin pintar nada
   if (!show) {
-    if (s.link() == Link::kPlaying && s.desynced()) {   // aviso en la partida (el juego no tiene pantalla para esto)
+    // aviso en la partida (el juego no tiene pantalla para esto). Antes miraba desynced() con el enlace en
+    // kPlaying, que no se da nunca (Fail lo pasa a error y borra la marca): un corte en combate no avisaba
+    if (lost_notice_ && g_battle.load()) {
       ImGui::GetForegroundDrawList()->AddText(ImVec2(16, 16), IM_COL32(255, 70, 70, 255),
-                                              T::T("DESINCRONIA: los dos PCs ya no ven lo mismo. Cerrad y volved a empezar.",
-                                                   "DESYNC: both PCs no longer see the same thing. Close and start again."));
+                                              T::T("ONLINE: se corto la partida con el otro PC. Al acabar el combate veras el motivo.",
+                                                   "ONLINE: the match with the other PC was cut. You will see why when the fight ends."));
     }
     editing_ = false;
     // entradas propias en los menus del juego: rotulo con el boton X, como los avisos del juego
@@ -421,7 +476,7 @@ void OnlinePanel::OnDraw(ImGuiIO& io) {
       if (Pad() & 0x4000) g_close_req = true;
     }
     if (!g_battle.load() && !TagTeamWanted() && !TagTeamGate() && s.link() == Link::kIdle) {
-      if (screen == kMainMenuScreen && REXCVAR_GET(dbz3_tag_team_enabled)) {
+      if (screen == kMainMenuScreen && REXCVAR_GET(dbz3_tag_team_enabled) && !dbz3::hub::RowActive()) {
         TagTeamRow(io, g_tag_focus.load());   // US y EU: los menus son iguales
       }
       if (screen == kDuelMenuScreen && REXCVAR_GET(dbz3_online_enabled) && !dbz3_select_live() && !dbz3_select_to_stage()) {
@@ -435,7 +490,14 @@ void OnlinePanel::OnDraw(ImGuiIO& io) {
     if (g_pad.load() == 0 && ImGui::GetTime() - opened_at_ > 0.3) wait_release_ = false;
     pressed = 0;
   }
+  // entra fundida en 0,3 s, como las listas del juego (antes aparecia de golpe)
+  auto* bg = ImGui::GetBackgroundDrawList();
+  auto* fg = ImGui::GetForegroundDrawList();
+  const int v0 = bg->VtxBuffer.Size, f0 = fg->VtxBuffer.Size;
   DrawScreen(io, editing_ ? 0 : pressed);   // escribiendo la IP, el teclado no mueve el menu
+  const float fade_in = std::clamp(float(ImGui::GetTime() - opened_at_) / 0.3f, 0.0f, 1.0f);
+  FadeFrom(bg, v0, fade_in);
+  FadeFrom(fg, f0, fade_in);
 }
 
 // Pantalla con el aspecto del Duelo: fondo de Kame House, cinta "Online", marco con filas y
@@ -455,6 +517,7 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
   auto admission_ready = [&admission_reason]() {
     if (dbz3::g_guest_eu) {
       admission_reason = T::T("Online: solo con la version US del juego.", "Online: US version of the game only.");
+      REXLOG_WARN("dbz3 online: {}", admission_reason);
       return false;
     }
     const std::filesystem::path exe = rex::filesystem::GetExecutablePath();
@@ -538,13 +601,18 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
     switch (cur) {
       case kHostRow:
         if (!admission_ready()) { last_err_ = admission_reason; break; }
-        s.Host(uint16_t(port_), uint8_t(delay_), &last_err_);
+        if (s.Host(uint16_t(port_), uint8_t(delay_), &last_err_))
+          REXLOG_INFO("dbz3 online: partida creada en el puerto {}", port_);
+        else
+          REXLOG_WARN("dbz3 online: no se pudo crear la partida: {}", last_err_);
         row_ = 0;
         break;
       case kJoinRow:
         if (!admission_ready()) { last_err_ = admission_reason; break; }
         if (ip_[0]) {
-          if (s.Join(ip_, uint16_t(port_), &last_err_) && REXCVAR_GET(dbz3_net_last_ip) != ip_) {
+          const bool joined = s.Join(ip_, uint16_t(port_), &last_err_);
+          if (!joined) REXLOG_WARN("dbz3 online: no se pudo unir a la partida: {}", last_err_);
+          if (joined && REXCVAR_GET(dbz3_net_last_ip) != ip_) {
             rex::cvar::SetFlagByName("dbz3_net_last_ip", ip_);
             dbz3::settings::SaveUserSettings();
           }
@@ -687,7 +755,8 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
       std::string how;
       const std::string code = s.RoomCode(&how);
       if (!code.empty() && code != copied_code_) {
-        ImGui::SetClipboardText(code.c_str());
+        // pruebas automaticas (DBZ3_NO_DIALOGS): sin pisar el portapapeles del usuario
+        if (!std::getenv("DBZ3_NO_DIALOGS")) ImGui::SetClipboardText(code.c_str());
         copied_code_ = code;
       }
       say += T::T("\nCodigo de sala: ", "\nRoom code: ") + code + T::T("  (copiado)", "  (copied)");

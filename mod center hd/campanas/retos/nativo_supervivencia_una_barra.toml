@@ -1,0 +1,57 @@
+# Reto predefinido 'nativo_supervivencia_una_barra' (catalogo de la vision futura, 2026-10-15).
+# Lo lee el juego en user_data/dbz3/modos/supervivencia.toml: instalalo con
+#   python retos_predefinidos.py instalar nativo_supervivencia_una_barra --juego <carpeta del juego>
+# tipo/nombre/name/descripcion/description son del catalogo (el juego las ignora).
+# vida = maxima del jugador; vida_inicial = la del primer combate (0 = la maxima); arrastra_vida =
+# la vida que le queda pasa al siguiente (+ recupera); pausa = espera a la pantalla de resultados del HUB.
+# Por combate: rival (ID 0-63), escenario (0-16) y vida del rival (0 = la normal, 3000; tope 7000).
+tipo = "supervivencia"
+nombre = "Una sola barra"
+name = "One Bar Only"
+descripcion = "Ocho rivales con una sola barra de vida para todo el reto."
+description = "Eight opponents with a single health bar for the whole challenge."
+vida = 1000
+vida_inicial = 0
+arrastra_vida = true
+recupera = 0
+pausa = false
+
+[[combate]]
+rival = 13
+escenario = 8
+vida = 1000
+
+[[combate]]
+rival = 10
+escenario = 9
+vida = 1100
+
+[[combate]]
+rival = 11
+escenario = 10
+vida = 1200
+
+[[combate]]
+rival = 19
+escenario = 0
+vida = 1300
+
+[[combate]]
+rival = 29
+escenario = 1
+vida = 1400
+
+[[combate]]
+rival = 30
+escenario = 2
+vida = 1500
+
+[[combate]]
+rival = 8
+escenario = 3
+vida = 1600
+
+[[combate]]
+rival = 7
+escenario = 4
+vida = 1700

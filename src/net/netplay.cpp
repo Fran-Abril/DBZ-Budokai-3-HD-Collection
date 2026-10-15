@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -327,7 +328,7 @@ bool Session::OpenSocket(uint16_t port, std::string* error) {
 #else
     ::close(s);
 #endif
-    if (error) *error = "el puerto " + std::to_string(port) + " esta ocupado";
+    if (error) *error = T::T("el puerto ", "port ") + std::to_string(port) + T::T(" esta ocupado", " is in use");
     return false;
   }
   sock_ = intptr_t(s);
@@ -373,7 +374,7 @@ bool Session::Recv(std::vector<uint8_t>& pkt) {
   if (buf[5] != kProto) {
     if (have_peer_ && role_ == Role::kGuest &&
         std::memcmp(peer_addr_, &from, sizeof(from)) == 0)
-      Fail(Link::kError, "protocolo incompatible (se requiere F4/v3)");
+      Fail(Link::kError, T::T("el otro PC tiene otra version del juego", "the other PC has another game version"));
     return true;
   }
   std::vector<uint8_t> candidate(buf, buf + n);
@@ -389,7 +390,7 @@ bool Session::Recv(std::vector<uint8_t>& pkt) {
       return true;
     }
     if (buf[4] == kReject && n == 10 && reply.u32() == local_nonce_) {
-      Fail(Link::kError, "identidad/protocolo incompatible (F4/v3)");
+      Fail(Link::kError, T::T("el otro PC tiene otra version del juego", "the other PC has another game version"));
       return true;
     }
   }
@@ -430,21 +431,27 @@ bool Session::Recv(std::vector<uint8_t>& pkt) {
 // ---------------------------------------------------------------- emparejamiento
 bool Session::Host(uint16_t port, uint8_t delay, std::string* error) {
   std::lock_guard<std::recursive_mutex> io(io_mu_);
-  if (guest_owner_) { if (error) *error = "sesion del juego aun activa"; return false; }
+  if (guest_owner_) {
+    if (error) *error = T::T("la partida online anterior aun se esta cerrando", "the previous online match is still closing");
+    return false;
+  }
   Close();
   if (!identity_ready_ || !identity_admission_ || dbz3::g_guest_eu) {
-    if (error) *error = "F4: falta identidad verificada US/seleccion segura";
+    if (error) *error = T::T("Online: no se pudo verificar este juego (solo la version US)",
+                             "Online: this game could not be verified (US version only)");
     return false;
   }
   identity_admission_ = false;
   local_nonce_ = NewNonce();
   local_team_ = dbz3::tag::MyLastTeam();
   if (local_team_.size() >= 2 && !safe_tagteam_) {
-    if (error) *error = "F4: Tag Team necesita prueba de aborto seguro/relevo identificado";
-    return false;
+    // Tag Team online sin autorizar: se juega 1 contra 1. Antes el ultimo equipo del Tag Team de 1P (que no
+    // se borra) dejaba CREAR y UNIRSE fallando hasta reiniciar el juego (2026-10-15)
+    REXLOG_INFO("dbz3 online: el equipo de Tag Team ({} luchadores) no viaja al online: 1 contra 1", local_team_.size());
+    local_team_.clear();
   }
   if (local_team_.size() > 3 || std::any_of(local_team_.begin(), local_team_.end(), [](int x) { return x < 0 || x >= 64; })) {
-    if (error) *error = "equipo fuera del contrato F4";
+    if (error) *error = T::T("Online: equipo de Tag Team no valido", "Online: invalid Tag Team team");
     return false;
   }
   role_ = Role::kHost;
@@ -457,6 +464,10 @@ bool Session::Host(uint16_t port, uint8_t delay, std::string* error) {
   // Internet: el router abre el puerto (UPnP) y, si no puede, un servidor STUN dice la IP publica
   // (Poll). En un hilo: tarda segundos y no debe parar el juego. Solo da el codigo de sala; la
   // admision (identidad, nonces, mods) no cambia. Lo de una sesion ya cerrada se descarta (generation_).
+  if (std::getenv("DBZ3_NET_LOCAL")) {   // PRUEBA: solo red local (las pruebas cierran el juego a la fuerza)
+    REXLOG_INFO("dbz3 online: PRUEBA: sin UPnP ni STUN (DBZ3_NET_LOCAL)");
+    return true;
+  }
   std::string local = LocalAddresses();
   local = local.substr(0, local.find(' '));
   const uint64_t gen = generation_;
@@ -499,21 +510,27 @@ bool Session::Host(uint16_t port, uint8_t delay, std::string* error) {
 
 bool Session::Join(const std::string& ip, uint16_t port, std::string* error) {
   std::lock_guard<std::recursive_mutex> io(io_mu_);
-  if (guest_owner_) { if (error) *error = "sesion del juego aun activa"; return false; }
+  if (guest_owner_) {
+    if (error) *error = T::T("la partida online anterior aun se esta cerrando", "the previous online match is still closing");
+    return false;
+  }
   Close();
   if (!identity_ready_ || !identity_admission_ || dbz3::g_guest_eu) {
-    if (error) *error = "F4: falta identidad verificada US/seleccion segura";
+    if (error) *error = T::T("Online: no se pudo verificar este juego (solo la version US)",
+                             "Online: this game could not be verified (US version only)");
     return false;
   }
   identity_admission_ = false;
   local_nonce_ = NewNonce();
   local_team_ = dbz3::tag::MyLastTeam();
   if (local_team_.size() >= 2 && !safe_tagteam_) {
-    if (error) *error = "F4: Tag Team necesita prueba de aborto seguro/relevo identificado";
-    return false;
+    // Tag Team online sin autorizar: se juega 1 contra 1. Antes el ultimo equipo del Tag Team de 1P (que no
+    // se borra) dejaba CREAR y UNIRSE fallando hasta reiniciar el juego (2026-10-15)
+    REXLOG_INFO("dbz3 online: el equipo de Tag Team ({} luchadores) no viaja al online: 1 contra 1", local_team_.size());
+    local_team_.clear();
   }
   if (local_team_.size() > 3 || std::any_of(local_team_.begin(), local_team_.end(), [](int x) { return x < 0 || x >= 64; })) {
-    if (error) *error = "equipo fuera del contrato F4";
+    if (error) *error = T::T("Online: equipo de Tag Team no valido", "Online: invalid Tag Team team");
     return false;
   }
   role_ = Role::kGuest;
@@ -544,7 +561,10 @@ void Session::SendHello(uint8_t type) {
   if (my_build_.empty()) {
     my_build_ = identity_;
     try { my_mods_ = ModFingerprints(); }
-    catch (const std::exception&) { Fail(Link::kError, "no se pudo verificar contenido"); return; }
+    catch (const std::exception&) {
+      Fail(Link::kError, T::T("no se pudieron comprobar los mods de este PC", "could not check this PC's mods"));
+      return;
+    }
     std::string acc;
     for (const auto& m : my_mods_) acc += m + "\n";
     my_mods_hash_ = rex::hash_bytes(acc);
@@ -692,7 +712,7 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
         their_rng_[i] = rv;
         if (my_rng_tick_[i] == rt && my_rng_[i] != rv && !desync_.exchange(true)) {
           REXLOG_WARN("dbz3 online: DESINCRONIA en el tick {} (rng {:08X} / {:08X})", rt, my_rng_[i], rv);
-          Fail(Link::kError, "desincronia RNG: sesion abortada");
+          Fail(Link::kError, T::T("DESINCRONIA: los dos PCs ya no veian lo mismo", "DESYNC: both PCs no longer saw the same thing"));
         }
       }
       if (role_ == Role::kHost && link_ == Link::kStarting) launch_ = true;   // el invitado ya juega
@@ -832,11 +852,14 @@ void Session::BattleBarrier() {
       return;
     }
   }
-  if (active()) Fail(Link::kLost, "plazo real de barrera agotado");
+  if (active()) Fail(Link::kLost, T::T("el otro PC no llego al combate", "the other PC did not reach the fight"));
   REXLOG_WARN("dbz3 online: el otro PC no llego al combate");
 }
 
 bool Session::TakeStart(uint8_t* base) {
+  // Lo llama el hilo del juego en cada vuelta: sin arranque pendiente sale sin tocar io_mu_ (si la interfaz lo
+  // tenia, p. ej. con el DNS de RoomCode o el hash de los mods del HELLO, el juego esperaba: tirones en los menus)
+  if (!launch_.load() || link_.load() != Link::kStarting) return false;
   std::lock_guard<std::recursive_mutex> io(io_mu_);
   if (link_ != Link::kStarting || !mods_match_ || !team_ready_ ||
       ui_snap_.size() != kUiSnapSize || !base || !launch_.exchange(false)) return false;
@@ -987,7 +1010,6 @@ bool Session::ModDiff(std::vector<ModDelta>& out) const {
 }
 
 std::string Session::RoomCode(std::string* how) const {
-  std::lock_guard<std::recursive_mutex> io(io_mu_);
   {
     std::lock_guard<std::mutex> lock(mu_);
     if (pub_ip_) {
@@ -996,8 +1018,24 @@ std::string Session::RoomCode(std::string* how) const {
     }
   }
   if (how) *how = "local";
-  std::string local = LocalAddresses();
-  local = local.substr(0, local.find(' '));
+  // La pantalla lo pide en cada fotograma: gethostname + DNS cada vez (y con io_mu_ cogido) daba tirones
+  // mientras se espera al rival sin IP publica. La IP local se recuerda 5 s y se busca sin el candado.
+  static std::mutex cache_mu;
+  static std::string cache;
+  static uint64_t cache_ms = 0;
+  std::string local;
+  {
+    std::lock_guard<std::mutex> lock(cache_mu);
+    if (!cache.empty() && NowMs() - cache_ms < 5000) local = cache;
+  }
+  if (local.empty()) {
+    local = LocalAddresses();
+    local = local.substr(0, local.find(' '));
+    std::lock_guard<std::mutex> lock(cache_mu);
+    cache = local;
+    cache_ms = NowMs();
+  }
+  std::lock_guard<std::recursive_mutex> io(io_mu_);   // sock_
   uint32_t ip = 0;
   sockaddr_in a{};
   socklen_t len = sizeof(a);

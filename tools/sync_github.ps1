@@ -56,7 +56,8 @@ Write-Output "=== Sincronizando proyecto -> github/ ==="
 # Carpetas versionables (mirror exacto). Excluye cachés/artefactos que el
 # .gitignore de github/ ya ignora.
 Sync-Tree "src"                  "src"
-Sync-Tree "docs"                 "docs"
+# docs/07_ports (estudios de ports) y docs/13_assets_externos (catalogo de arte de terceros) son privados.
+Sync-Tree "docs"                 "docs"           @("07_ports", "13_assets_externos")
 Sync-Tree "awo_tools"            "awo_tools"      @("bins_trabajo")
 Sync-Tree "mod center hd"        "mod center hd"  @("__pycache__")
 Sync-Tree "portforge"            "portforge"

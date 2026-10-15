@@ -139,7 +139,14 @@ void BeforeBattleSetup(uint8_t* base, uint32_t sel) {
   }
   // equipos solo en el modo Tag Team o en una partida online: si quedo alguno de antes (online
   // cerrado a medias, salida por otro camino) no se cuela en Practica ni en un combate normal
-  if (!dbz3::ingame::TagTeamMode() && dbz3::net::Session::Get().link() == dbz3::net::Link::kIdle) ClearDynamicTeams();
+  if (!dbz3::ingame::TagTeamMode() && dbz3::net::Session::Get().link() == dbz3::net::Link::kIdle) {
+    ClearDynamicTeams();
+    // combate normal (Duelo, HUB, retos, demo): el ultimo equipo de TAG TEAM deja de ser "el mio" para el online
+    // (antes no se olvidaba nunca: bugs.md P5). De TAG TEAM directo al online se sigue llevando.
+    std::lock_guard<std::mutex> lock(g_mu);
+    if (!g_mine.empty()) REXLOG_INFO("dbz3 tag: combate sin TAG TEAM: se olvida el ultimo equipo ({} miembros)", g_mine.size());
+    g_mine.clear();
+  }
   for (int k = 0; k < 2; ++k) {
     std::vector<int> team = DynamicTeam(k);
     // pruebas: DBZ3_TAG_TEST="0,11" = equipo del jugador 1 en cualquier combate (tambien en el modo Tag

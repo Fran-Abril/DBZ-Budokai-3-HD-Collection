@@ -111,3 +111,10 @@ _archive/
 
 # arte oficial de las historias (no se publica)
 mod center hd/campanas/imagenes/
+
+# Documentacion privada (estudios de ports, catalogo de arte de terceros).
+docs/07_ports/
+docs/13_assets_externos/
+
+# Derivado del codigo generado (lo crea CMake con tools/gen_escenarios_sel.py).
+src/escenarios_sel_gen.inc

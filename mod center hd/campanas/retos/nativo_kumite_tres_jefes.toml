@@ -1,0 +1,32 @@
+# Reto predefinido 'nativo_kumite_tres_jefes' (catalogo de la vision futura, 2026-10-15).
+# Lo lee el juego en user_data/dbz3/modos/kumite.toml: instalalo con
+#   python retos_predefinidos.py instalar nativo_kumite_tres_jefes --juego <carpeta del juego>
+# tipo/nombre/name/descripcion/description son del catalogo (el juego las ignora).
+# vida = maxima del jugador; vida_inicial = la del primer combate (0 = la maxima); arrastra_vida =
+# la vida que le queda pasa al siguiente (+ recupera); pausa = espera a la pantalla de resultados del HUB.
+# Por combate: rival (ID 0-63), escenario (0-16) y vida del rival (0 = la normal, 3000; tope 7000).
+tipo = "kumite"
+nombre = "Kumite exprés"
+name = "Express Kumite"
+descripcion = "Tres jefes seguidos para una partida corta: Freezer, Cell y Kid Buu."
+description = "Three bosses in a row for a short session: Frieza, Cell and Kid Buu."
+vida = 3000
+vida_inicial = 0
+arrastra_vida = true
+recupera = 1500
+pausa = false
+
+[[combate]]
+rival = 27
+escenario = 0
+vida = 5000
+
+[[combate]]
+rival = 33
+escenario = 1
+vida = 6000
+
+[[combate]]
+rival = 36
+escenario = 2
+vida = 7000

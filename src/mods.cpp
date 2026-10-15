@@ -1,6 +1,7 @@
 // dbz3 - Mod manager (project-side).
 
 #include "mods.h"
+#include "launcher/i18n.h"
 
 #include <rex/filesystem.h>
 #include <rex/logging.h>
@@ -370,14 +371,21 @@ bool PublishMod(const fs::path& ready, const std::string& name, std::string& err
     fs::create_directories(bak.parent_path(), ec);
     if (!RenameRetry(old, bak)) {
       restore();
-      err = "el mod '" + name + "' ya instalado esta en uso (cierra el juego y vuelve a probar)";
+      err = std::string(dbz3::i18n::T("el mod '", "the mod '")) + name +
+            dbz3::i18n::T("' ya instalado está abierto en otro programa. Cierra el juego (y el Mod Kit o la "
+                          "carpeta mods en el Explorador) y vuelve a instalarlo.",
+                          "' that is already installed is open in another program. Close the game (and the "
+                          "Mod Kit or the mods folder in Explorer) and install it again.");
       return false;
     }
     moved.emplace_back(bak, old);
   }
   if (!RenameRetry(ready, dest)) {
     restore();
-    err = "no se pudo colocar el mod (carpeta en uso o sin permisos)";
+    err = dbz3::i18n::T("no se pudo copiar el mod a la carpeta mods. Cierra lo que la tenga abierta; si el juego "
+                        "está dentro de Archivos de programa, muévelo a otra carpeta (por ejemplo Documentos).",
+                        "the mod could not be copied into the mods folder. Close whatever has it open; if the "
+                        "game is inside Program Files, move it to another folder (for example Documents).");
     return false;
   }
   for (const auto& [bak, old] : moved) {
@@ -809,7 +817,10 @@ bool InstallModFromZip(const std::string& zip_path_utf8, std::string& out_name,
 
   const std::wstring zip_wide = Utf8ToWide(zip_path_utf8);
   if (zip_wide.empty()) {
-    out_error = "ruta del zip invalida";
+    out_error = dbz3::i18n::T("no se encuentra el .zip. Muévelo a una carpeta normal (por ejemplo Descargas) y "
+                              "vuelve a probar.",
+                              "the .zip could not be found. Move it to a normal folder (for example Downloads) "
+                              "and try again.");
     return false;
   }
   const fs::path zip_fs(zip_wide);
@@ -820,7 +831,12 @@ bool InstallModFromZip(const std::string& zip_path_utf8, std::string& out_name,
   const fs::path temp_dir = mods_root / (".install_" + Stamp());
   if (!ExtractZipWin(zip_wide, temp_dir)) {
     fs::remove_all(temp_dir, ec);
-    out_error = "no se pudo descomprimir (zip corrupto, protegido o sin espacio en disco)";
+    out_error = dbz3::i18n::T("no se pudo descomprimir el .zip. Puede estar a medio descargar o dañado: "
+                              "descárgalo otra vez. Si tiene contraseña, descomprímelo tú dentro de la carpeta "
+                              "mods. Mira también que quede espacio libre en el disco.",
+                              "the .zip could not be extracted. It may be incomplete or damaged: download it "
+                              "again. If it has a password, extract it yourself into the mods folder. Also "
+                              "check that there is free disk space.");
     return false;
   }
   return FinishInstall(temp_dir, base, out_name, out_error);
@@ -868,7 +884,10 @@ bool InstallModFromZip(const std::string& zip_path_utf8, std::string& out_name,
   fs::create_directories(mods_root, ec);
   const fs::path zip = fs::u8path(zip_path_utf8);
   if (!fs::is_regular_file(zip, ec)) {
-    out_error = "ruta del zip invalida";
+    out_error = dbz3::i18n::T("no se encuentra el .zip. Muévelo a una carpeta normal (por ejemplo Descargas) y "
+                              "vuelve a probar.",
+                              "the .zip could not be found. Move it to a normal folder (for example Downloads) "
+                              "and try again.");
     return false;
   }
 
@@ -877,7 +896,8 @@ bool InstallModFromZip(const std::string& zip_path_utf8, std::string& out_name,
   fs::create_directories(temp_dir, ec);
   if (!ExtractZip(zip, temp_dir)) {
     fs::remove_all(temp_dir, ec);
-    out_error = "no se pudo extraer el zip (instala unzip)";
+    out_error = dbz3::i18n::T("no se pudo descomprimir el .zip: instala el paquete 'unzip' y vuelve a probar.",
+                              "the .zip could not be extracted: install the 'unzip' package and try again.");
     return false;
   }
   return FinishInstall(temp_dir, base, out_name, out_error);

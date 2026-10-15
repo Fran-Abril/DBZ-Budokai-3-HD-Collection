@@ -39,6 +39,9 @@
 #include "ingame/tagteam_panel.h"
 namespace dbz3::campaigns { int PlayerStartForm(); int RivalSuit(); }
 #include "net/netplay.h"
+#include "launcher/settings.h"
+#include <ctime>
+#include <filesystem>
 
 DBZ3_EXTERN_EU(dbz3eu_sub_820FB6D0);
 DBZ3_EXTERN_EU(dbz3eu_sub_82115370);
@@ -140,6 +143,10 @@ struct Team {
   bool ring = false, ring_giveup = false;                // giveup: el relevo no cargo, el ring out sigue
   float ring_pos[3]{};
   uint32_t pose_at = 0, pose_until = 0;   // pose de entrada (carga de ki del juego) al aterrizar
+  // teletransporte del relevo (ver Afterimage): el que sale desaparece y el que entra aparece parpadeando
+  uint32_t tele_at = 0;            // tick en que empezo a aparecer el que entra (0 = nada)
+  bool tele_fx = false;            // su estela y su sonido ya salieron
+  bool veiled = false;             // X+3261 puesto por nosotros (se quita si el combate acaba a mitad)
 };
 
 std::mutex g_mu;
@@ -165,6 +172,19 @@ std::array<uint32_t, 2> g_pose_com{};           // luchador del COM con el hueco
 std::array<std::atomic<bool>, 4> g_pose_pad{};  // mando (hueco) que pulsa la pose este tick
 std::array<uint32_t, 2> g_pose_ticks{};
 std::array<int, 2> g_pose_slot{-1, -1};      // mando que pulsa la pose de cada lado
+// Salida del relevo: el que sale hace un movimiento del propio juego con su mando (el humano) o con el
+// mando 4 virtual (el COM, aparcado ahi desde que sale hasta acabar la pose del que entra), como la pose
+std::array<std::atomic<uint32_t>, 2> g_exit_until{};   // por lado: hasta este tick se pulsa la salida
+std::array<std::atomic<int>, 2> g_exit_slot{-1, -1};   // mando del humano que sale
+constexpr uint32_t kExitHold = 10;
+int16_t ExitLy() {   // stick izquierdo vertical de la salida (DBZ3_TAG_EXIT_LY; 0 = sin movimiento)
+  static const int v = std::getenv("DBZ3_TAG_EXIT_LY") ? std::atoi(std::getenv("DBZ3_TAG_EXIT_LY")) : 0;
+  return int16_t(std::clamp(v, -32768, 32767));
+}
+uint16_t ExitBtn() {   // botones de la salida (DBZ3_TAG_EXIT_BTN, hex)
+  static const unsigned long v = std::getenv("DBZ3_TAG_EXIT_BTN") ? std::strtoul(std::getenv("DBZ3_TAG_EXIT_BTN"), nullptr, 16) : 0;
+  return uint16_t(v);
+}
 
 void PoseEnd(uint8_t* base, int p) {
   if (const uint32_t x = g_pose_com[size_t(p)]) {
@@ -175,11 +195,16 @@ void PoseEnd(uint8_t* base, int p) {
   if (const int slot = g_pose_slot[size_t(p)]; slot >= 0) g_pose_pad[size_t(slot)] = false;
   g_pose_slot[size_t(p)] = -1;
   g_pose_ticks[size_t(p)] = 0;
+  g_exit_until[size_t(p)] = 0;
+  g_exit_slot[size_t(p)] = -1;
 }
 std::array<std::map<int, uint32_t>, 2> g_face;  // por lado: ID -> hoja de caras (datos !AZT) del combate
 // ultimo tick en que el juego uso un banco de efectos de la ranura de tecnica del lado (sub_82092C58):
 // mientras un efecto suyo sigue vivo (rayo en pantalla, choque de poderes) el relevo espera, porque
 // esos efectos buscan sus datos en la ranura del lado y tras el cambio ya serian los del que entra
+// Huecos de forma (bits) donde se carga el que entra, por lado: el juego no los suelta mientras tanto (ver el
+// gancho de sub_82100D60 al final)
+std::array<std::atomic<uint32_t>, 2> g_keep{};
 std::array<std::atomic<uint32_t>, 2> g_tech_seen{};// ticks sin efectos; espera maxima (~10 s). Con 8 ticks un efecto del que salia (sus llamadas al
 // banco no son seguidas) sobrevivia al relevo, buscaba su id en el banco del que entra y el juego se
 // paraba (2026-10-12: trampa en sub_822F8988 via sub_82096FF0, 20-30 ms despues del relevo)
@@ -436,6 +461,68 @@ void StepSlide(uint8_t* base, uint32_t x, Team& t, uint32_t now) {
   if (f >= 1.0f && t.slide == 2) t.slide = 0;   // la salida se queda arriba hasta el cambio
 }
 
+// Relevo con el teletransporte del propio juego (2026-10-15, solo US). Es el del contraataque de B3: sus
+// acciones 39/40 (ticks sub_8210D9E8 / sub_82108208 en la tabla 0x8201EFC0) hacen exactamente esto:
+//   - X+3261 = 1: el dibujo del luchador (sub_82109D90) se salta el cuerpo A (X+1616); el B (X+3280) solo
+//     esta encendido a mitad de una transformacion (X+4924 = 0). Es lo mismo que hace el fin del asalto con
+//     el perdedor (sub_821017B8) y la accion 0x50/0x51 de las lineas AP7 (sub_820F9B88 casos 80/81; Cell y
+//     Cooler, codigo 0x433, parpadean asi al aparecer: oculto 0-5, visible 5-7, oculto 7-9, 9-11, 11-13).
+//   - estela de 6 sombras en los huesos del cuerpo: sub_820D85A8(13 al irse / 14 al volver, {+12 = 1 modo,
+//     +16 = lado}) (tabla 0x8201D8F8 -> sub_820D98A8 / sub_820D8E08);
+//   - su sonido: sub_82122488(banco 1, efecto 83, retardo 0.0, volumen 1.0).
+// DBZ3_TAG_SALIDA=salto vuelve al salto de antes (subir y bajar deslizando).
+bool TeleportOn() {
+  static const bool jump = [] {
+    const char* v = std::getenv("DBZ3_TAG_SALIDA");
+    return v && std::strcmp(v, "salto") == 0;
+  }();
+  return !jump && !dbz3::g_guest_eu;
+}
+constexpr uint32_t kHidden = 3261;                 // X+3261: 1 = cuerpo A sin dibujar
+constexpr uint32_t kTeleIn = 13;                   // ticks del parpadeo al aparecer (el de Cell/Cooler)
+bool TeleHidden(uint32_t f) { return f < 5 || (f >= 7 && f < 9) || (f >= 11 && f < kTeleIn); }
+void Afterimage(PPCContext& ctx, uint8_t* base, uint32_t x, uint32_t type, bool sound = true) {
+  const int side = SideOf(base, x);
+  if (side < 0 || dbz3::g_guest_eu) return;
+  PPCContext c = ctx;
+  c.r3.u64 = type;
+  c.r4.u64 = 0;
+  c.r5.u64 = 1;                                    // +12: modo 1 (estela en el cuerpo)
+  c.r6.u64 = uint64_t(uint32_t(side)) << 32;       // +16: lado
+  c.r7.u64 = 0;
+  c.r8.u64 = 0;
+  c.r9.u64 = 0;
+  sub_820D85A8(c, base);
+  if (!sound) return;
+  c = ctx;
+  c.r3.u64 = 1;
+  c.r4.u64 = 83;
+  c.r6.u64 = 0;
+  c.r7.u64 = 0;
+  c.r8.u64 = 0;
+  c.f1.f64 = LoadF(base, 0x8201F60C);              // 0.0: sin retardo
+  c.f2.f64 = LoadF(base, 0x820007A4);              // 1.0: volumen
+  sub_82122488(c, base);
+}
+void Veil(uint8_t* base, uint32_t x, Team& t, bool hidden) {
+  REX_STORE_U8(x + kHidden, hidden ? 1 : 0);
+  t.veiled = hidden;
+}
+void PlaceAt(uint8_t* base, uint32_t x, const float* p) {
+  for (const uint32_t o : {48u, 64u, 80u}) {
+    for (uint32_t i = 0; i < 3; ++i) StoreF(base, x + o + 4 * i, p[i]);
+  }
+}
+// El que entra aparece en `p` con el parpadeo del juego (la estela y el sonido, en Tick a los 2 ticks: el
+// cuerpo nuevo aun no tiene sus huesos colocados en el tick del cambio).
+void TeleportIn(uint8_t* base, uint32_t x, Team& t, const float* p, uint32_t now) {
+  t.slide = 0;
+  PlaceAt(base, x, p);
+  Veil(base, x, t, true);
+  t.tele_at = now;
+  t.tele_fx = false;
+}
+
 // Insertar tras Team: el propietario guest prepara y fija una sola carga.
 // US/offline opt-in. EU/online conservan la ruta anterior, sin preferencias F2.
 bool RoundEnabled() {
@@ -542,11 +629,13 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
     t.visited[size_t(t.active)] = true;
   }
   t.restore = 0;
+  if (const int side = SideOf(base, x); side >= 0) g_keep[size_t(side)] = 0;   // (un reintento suelta lo suyo)
   if (t.spare) {   // la forma pedida en un intento anterior (carga que no llego) se suelta
     TAG_CALL(sub_82100D60, dbz3eu_sub_82100E60, x, kSpare);
     TAG_CALL(sub_82100DE8, dbz3eu_sub_82100EE8, x, kSpare);
     t.spare = 0;
   }
+  if (const int side = SideOf(base, x); side >= 0) g_keep[size_t(side)] = 0;
   TAG_CALL(sub_82100D60, dbz3eu_sub_82100E60, x, kLoad);       // hueco libre
   TAG_CALL(sub_82100DE8, dbz3eu_sub_82100EE8, x, kLoad);
   const uint32_t src = kChar372 + 372 * id;
@@ -581,6 +670,9 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   TAG_CALL(sub_82109148, dbz3eu_sub_82109248, x, sel);         // pide sus ficheros
   t.new_cam = REX_LOAD_U32(x + kCam);
   t.new_lang = REX_LOAD_U32(x + kLang);
+  // mientras carga, el juego no suelta esos huecos como "formas sin usar" (sub_82109380 al cambiar el modelo del
+  // cuerpo o tras un ring out): vaciaba el modelo del que entra y el relevo tardaba 10 s (2026-10-15)
+  if (const int side = SideOf(base, x); side >= 0) g_keep[size_t(side)] = (1u << kLoad) | (t.spare ? 1u << kSpare : 0u);
   t.new_tech = 0;
   if (!dbz3::g_guest_eu) {
     const uint32_t fid = REX_LOAD_U32(kTechFid + 4 * id);
@@ -593,14 +685,20 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
     const uint32_t hud = REX_LOAD_U32(kHudBase);
     auto& faces = g_face[size_t(side)];
     if (hud && !faces.count(int(keep[1]))) faces[int(keep[1])] = REX_LOAD_U32(hud + kHudFaces + 4 * uint32_t(side));
+    // los personajes de mods (IDs 22-26, 31, 44-63) solo estan en esa tabla mientras el juego la lee al empezar el
+    // combate (roster_ext.cpp, SkillTable): sin ponerlos aqui igual, al entrar por relevo el marcador seguia con
+    // los ojos y las caras del que salia (2026-10-15)
+    dbz3::roster::SkillTable(true);
     const uint32_t row = FaceRow(base, id, t.round_owned ? uint32_t(t.round_suit) : REX_LOAD_U16(sel + 18));
+    const uint32_t face_fid = row ? REX_LOAD_U32(row + 8) : 0xFFFFFFFFu;
     t.new_face = 0;
-    if (row && !faces.count(int(id))) {
-      const uint32_t h = Call(ctx, base, sub_82083968, REX_LOAD_U32(row + 8), 0, 1);
+    if (row && face_fid != 0xFFFFFFFFu && !faces.count(int(id))) {
+      const uint32_t h = Call(ctx, base, sub_82083968, face_fid, 0, 1);
       t.new_face = h != 0xFFFFFFFFu ? h : 0;
     }
     if (t.new_portrait) Call(ctx, base, sub_821B63F8, t.new_portrait, 0);
     t.new_portrait = row ? Call(ctx, base, sub_821B62D0, REX_LOAD_U32(row + 12), 0) : 0;
+    dbz3::roster::SkillTable(false);
     // su aura, si es otra (sin aura propia, -1, se queda la que habia)
     const uint32_t afid = REX_LOAD_U32(kAuraFid + 4 * id);
     t.new_aura = 0;
@@ -624,13 +722,29 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   t.target = k;
   t.since = g_frame.load();
   for (uint32_t i = 0; i < 3; ++i) t.home[i] = LoadF(base, x + 64 + 4 * i);
-  if (!t.down[size_t(t.active)]) {   // el que sale salta hacia atras y arriba (el caido se queda tumbado)
+  if (!t.down[size_t(t.active)] && TeleportOn() && !t.round_owned) {
+    // teletransporte (2026-10-15): el que sale sigue en combate mientras carga el compañero (la ficha dice
+    // "espera") y el cambio entero, irse y llegar, es un solo golpe en FinishSwap. Antes subia sin animacion
+    // y la pantalla se quedaba ~0,8 s con el rival pegando al aire hasta que el otro bajaba.
+    t.slide = 0;
+    REXLOG_INFO("dbz3 tag: relevo con teletransporte: {:08X} sigue hasta que el compañero este listo", x);
+  } else if (!t.down[size_t(t.active)]) {   // el que sale salta hacia atras y arriba (el caido se queda tumbado)
     float dx, dz;
     AwayDir(base, x, &dx, &dz);
     const float out[3] = {t.home[0] + dx * kExitBack, t.home[1] + kExitRise, t.home[2] + dz * kExitBack};
     StartSlide(t, 1, t.home, out);
-    // (2026-10-14: una accion nativa para la pose de salida no se puede pedir aqui: en reposo X+6048
-    // es nulo y sub_82103908 lo necesita; haria falta el reproductor de movimientos, sub_82136328)
+    // movimiento de salida con el mando (en reposo X+6048 es nulo y sub_82103908 no vale: solo la entrada)
+    if (const int side = SideOf(base, x); side >= 0 && (ExitLy() || ExitBtn()) && !dbz3::g_guest_eu && !dbz3::net::Session::Get().active()) {
+      const int16_t slot = int16_t(REX_LOAD_U16(x + kPoseSlotOff));
+      if (slot == -1) {
+        for (const uint32_t o : {12u, 14u, 16u, 88u, 92u}) REX_STORE_U32(kPoseRec + o, 0);
+        REX_STORE_U16(x + kPoseSlotOff, uint16_t(kPoseSlot));
+        g_pose_com[size_t(side)] = x;
+      } else if (slot >= 0 && slot < 4 && slot != kPoseSlot) {
+        g_exit_slot[size_t(side)] = slot;
+      }
+      g_exit_until[size_t(side)] = g_frame.load() + kExitHold;
+    }
   } else {
     t.slide = 0;
   }
@@ -644,6 +758,13 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
 void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   const int k = t.target;
   const bool ko = t.down[size_t(t.active)];   // entra por un KO (el que sale esta en el suelo)
+  if (const int side = SideOf(base, x); side >= 0) g_keep[size_t(side)] = 0;
+  // teletransporte: el que sale se va con la estela y el sonido del juego (con sus huesos aun colocados) y en
+  // este mismo tick el que entra empieza a aparecer en su sitio (TeleportIn, abajo)
+  if (TeleportOn() && !ko && !t.ring && !t.round_owned) {
+    Afterimage(ctx, base, x, 13);
+    REXLOG_INFO("dbz3 tag: salida con teletransporte de {:08X}", x);
+  }
   const uint8_t near_death = REX_LOAD_U8(x + kNearDeath);
   const uint32_t id = uint32_t(t.ids[size_t(k)]);
   const uint32_t model = REX_LOAD_U32(x + kModel0 + 4 * kLoad);
@@ -756,11 +877,18 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
     float home[3];
     for (uint32_t i = 0; i < 3; ++i)
       home[i] = t.ring ? t.ring_pos[i] : t.slide == 1 ? t.home[i] : LoadF(base, x + 64 + 4 * i);
+    const bool ring = t.ring;
     t.ring = false;   // tras un ring out, dentro del ring (no donde quedo el caido)
     t.ring_at = 0;    // el ring out ya se resolvio: los KO y relevos siguientes van por su camino normal
-    const float from[3] = {home[0] + dx * kExitBack, home[1] + kExitRise, home[2] + dz * kExitBack};
-    StartSlide(t, 2, from, home);
-    StepSlide(base, x, t, g_frame.load());
+    if (TeleportOn() && !ko && !ring && !t.round_owned) {
+      // relevo pedido: aparece en el sitio del que salio con el parpadeo y la estela del teletransporte
+      TeleportIn(base, x, t, home, g_frame.load());
+    } else {
+      if (t.veiled) Veil(base, x, t, false);
+      const float from[3] = {home[0] + dx * kExitBack, home[1] + kExitRise, home[2] + dz * kExitBack};
+      StartSlide(t, 2, from, home);
+      StepSlide(base, x, t, g_frame.load());
+    }
   }
   // en guardia: sin movimiento en curso ni accion (como el rival en reposo; el reinicio lo
   // dejaba en la pose de antes de empezar el asalto)
@@ -770,10 +898,11 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   REX_STORE_U16(x + 3252, 0);
   if (ko && !spare) TAG_CALL(sub_820FB5D0, dbz3eu_sub_820FB6D0, x + kBody, 0);   // destello (forma 0)
   t.restore = spare;                    // se transforma al aterrizar (Tick)
-  t.restore_at = g_frame.load() + SlideTicks(2) + 6;
+  t.restore_at = g_frame.load() + (t.tele_at ? (kTeleIn + 2) * std::max(1u, SlideTicks(1) / 12) : SlideTicks(2) + 6);
   static const bool no_pose = std::getenv("DBZ3_TAG_NO_POSE") != nullptr;
   t.pose_at = (spare || no_pose || dbz3::g_guest_eu) ? 0 : t.restore_at;
   t.pose_until = t.pose_at + kPoseWindow;   // tope para empezar; la pose dura kPoseTicks
+  if (const int side = SideOf(base, x); !t.pose_at && side >= 0) PoseEnd(base, side);   // sin pose: el COM vuelve a su IA
   // el COM pasa ya al mando 4 (sin nada pulsado): baja y aterriza quieto (su IA empezaba a moverse al
   // aterrizar y nunca quedaba libre para la pose)
   if (const int side = SideOf(base, x); t.pose_at && side >= 0 && int16_t(REX_LOAD_U16(x + kPoseSlotOff)) == -1 &&
@@ -831,9 +960,62 @@ static bool ActionCtxOk(uint8_t* base, uint32_t x) {
   return action_ctx != 0 && dbz3::roster::FormSelectionRange(action_ctx, 4, false);
 }
 
+// Registro de combates (fichas 01 y 12 de vision, y pruebas automaticas). Solo US (mgr medido alli).
+// - Siempre: cada combate acabado (estado 4 -> 5) es una linea de user_data/combates.csv: fecha, id de
+//   cada lado, lado ganador (mgr+35136) y motivo (mgr+35132: 0/2 caido, 4 ring out, 3 tiempo, 1 los dos).
+//   Base del ranking local y de las comprobaciones de los tests.
+// - DBZ3_LAB=1: ademas, por tick de pelea, accion (X+3244), vida y posicion de los dos en logs/lab.csv
+//   (laboratorio de solo lectura: datos por cuadro para medir golpes, cancelaciones y esquivas).
+void LabTick(uint8_t* base) {
+  if (dbz3::g_guest_eu) return;
+  static uint32_t last = 0, ticks = 0;
+  static std::FILE* lab = nullptr;
+  static const bool lab_on = std::getenv("DBZ3_LAB") != nullptr;
+  const uint32_t mgr = REX_LOAD_U32(0x823D6CF4);
+  const uint32_t st = mgr ? REX_LOAD_U32(mgr + 35128) : 0;
+  const uint32_t x0 = Fighter(base, 0), x1 = Fighter(base, 1);
+  if (st == 4 && lab_on && x0 && x1) {
+    if (!lab) {
+      std::error_code ec;
+      std::filesystem::create_directories("logs", ec);
+      lab = std::fopen("logs/lab.csv", "a");
+      if (lab) std::fputs("tick,id1,accion1,vida1,x1,y1,z1,id2,accion2,vida2,x2,y2,z2\n", lab);
+    }
+    if (lab) {
+      std::fprintf(lab, "%u,%u,%u,%.0f,%.2f,%.2f,%.2f,%u,%u,%.0f,%.2f,%.2f,%.2f\n", ticks++, REX_LOAD_U32(x0 + kId),
+                   REX_LOAD_U16(x0 + 3244), LoadF(base, x0 + kHp), LoadF(base, x0 + 64), LoadF(base, x0 + 68),
+                   LoadF(base, x0 + 72), REX_LOAD_U32(x1 + kId), REX_LOAD_U16(x1 + 3244), LoadF(base, x1 + kHp),
+                   LoadF(base, x1 + 64), LoadF(base, x1 + 68), LoadF(base, x1 + 72));
+    }
+  }
+  if (last == 4 && st == 5 && x0 && x1) {
+    const int32_t winner = int32_t(REX_LOAD_U32(mgr + 35136));
+    const uint32_t reason = REX_LOAD_U32(mgr + 35132);
+    std::error_code ec;
+    const auto dir = dbz3::settings::UserDataRoot();
+    std::filesystem::create_directories(dir, ec);
+    const auto path = dir / "combates.csv";
+    const bool fresh = !std::filesystem::exists(path, ec);
+    if (std::FILE* f = std::fopen(path.string().c_str(), "a")) {
+      if (fresh) std::fputs("fecha,id1,id2,ganador,motivo\n", f);
+      const std::time_t now = std::time(nullptr);
+      char when[32] = {};
+      std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+      std::fprintf(f, "%s,%u,%u,%d,%u\n", when, REX_LOAD_U32(x0 + kId), REX_LOAD_U32(x1 + kId),
+                   winner == 0 || winner == 1 ? winner + 1 : 0, reason);
+      std::fclose(f);
+    }
+    REXLOG_INFO("dbz3 tag: combate acabado: id {} contra id {}, gana el lado {}, motivo {}", REX_LOAD_U32(x0 + kId),
+                REX_LOAD_U32(x1 + kId), winner + 1, reason);
+    if (lab) std::fflush(lab);
+  }
+  last = st;
+}
+
 // Cada tick del juego: termina los relevos cuyos ficheros ya estan y copia el marcador.
 void Tick(PPCContext& ctx, uint8_t* base) {
   const uint32_t now = ++g_frame;
+  LabTick(base);
   if (const uint32_t fx = g_fall_x.exchange(0)) {
     static const int act = std::getenv("DBZ3_KO_ACTION") ? std::atoi(std::getenv("DBZ3_KO_ACTION")) : 25;
     if (act >= 0 && !dbz3::g_guest_eu && REX_LOAD_U16(fx + 3244) != uint16_t(act) && ActionCtxOk(base, fx)) {   // accion medida en la US
@@ -847,6 +1029,8 @@ void Tick(PPCContext& ctx, uint8_t* base) {
   static uint32_t battle_frames = 0;
   if (!g_in_battle.load()) {
     battle_frames = 0;
+    g_keep[0] = 0;
+    g_keep[1] = 0;
     if (g_pose_com[0] || g_pose_com[1] || g_pose_slot[0] >= 0 || g_pose_slot[1] >= 0) {   // nada pulsado en los menus
       std::lock_guard<std::mutex> lock(g_mu);
       PoseEnd(base, 0);
@@ -880,7 +1064,11 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       REXLOG_INFO("dbz3 tag: prueba: rival fuera del ring");
     }
   }
-  if (test_ro && BattleState(base) == 4) ++battle_frames;
+  if (test_ro) battle_frames = BattleState(base) == 4 ? battle_frames + 1 : 0;   // cada combate (Dragon Universe no sale del modo combate)
+  if (static uint32_t last_st = 0; test_ro && BattleState(base) != last_st) {   // para las pruebas: cada estado
+    last_st = BattleState(base);
+    REXLOG_INFO("dbz3 tag: prueba: estado del combate {}", last_st);
+  }
   if (test_ko) {
     if (const uint32_t x1 = Fighter(base, 0)) StoreF(base, x1 + kHp, LoadF(base, x1 + kHpMax));
     if (++battle_frames >= 120) {
@@ -920,6 +1108,15 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     g_hud[size_t(p)] = HudSide{};
     if (!tp || over) {
       PoseEnd(base, p);
+      g_keep[size_t(p)] = 0;   // el final del combate lo suelta todo
+      // combate acabado a mitad de un relevo: el que salio vuelve a verse en su sitio (si no, la pose del
+      // ganador o el menu final lo tendrian oculto y en el aire)
+      if (tp && tp->veiled) {
+        if (tp->slide == 1 || tp->phase == Phase::kLoading) PlaceAt(base, x, tp->home);
+        tp->slide = 0;
+        tp->tele_at = 0;
+        Veil(base, x, *tp, false);
+      }
       continue;
     }
     Team& t = *tp;
@@ -1035,6 +1232,19 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     // 0x0400 lado 1, 0x0800 lado 2; libres en XInput) de que ya tiene cargado al que entra, y se
     // termina cuando los dos mandos aplicados (iguales en los dos PCs) lo dicen
     StepSlide(base, x, t, now);   // deslizamiento de salida / llegada del relevo
+    if (t.tele_at) {              // aparece: estela y sonido a los 2 ticks y el parpadeo del juego
+      const uint32_t f = (now - t.tele_at) / std::max(1u, SlideTicks(1) / 12);   // DBZ3_TAG_SLOW: mas lento
+      if (f >= 3 && !t.tele_fx) {   // su estela (el sonido ya sono al irse el otro)
+        t.tele_fx = true;
+        Afterimage(ctx, base, x, 14, false);
+      }
+      if (f >= kTeleIn) {
+        t.tele_at = 0;
+        Veil(base, x, t, false);
+      } else {
+        REX_STORE_U8(x + kHidden, TeleHidden(f) ? 1 : 0);
+      }
+    }
     const uint16_t bit = p ? 0x0800 : 0x0400;
     const bool online = dbz3::net::Session::Get().active();
     // pose de entrada: aterrizado y libre; termina a su tiempo, al caer o si hace otra cosa (un golpe)
@@ -1123,9 +1333,11 @@ void Tick(PPCContext& ctx, uint8_t* base) {
         g_net_local &= uint16_t(~bit);
       } else if (!loaded && !online &&
                  (now - t.since > kLoadTimeout ||
-                  // ring out a mitad de un relevo pedido: el reinicio del caido (RingOutReset) vacia el modelo
-                  // que se estaba cargando; se pide otra vez ya (antes: 10 s de espera y el asalto perdido)
-                  (t.ring_at && t.retries == 0 && now - t.ring_at > 30 && !REX_LOAD_U32(x + kModel0 + 4 * kLoad)))) {
+                  // el juego solto el modelo que se estaba cargando (sus "formas sin usar", sub_82109380: tras un
+                  // ring out, RingOutReset; y alguna vez con el que sale en combate, medido 2026-10-15): se pide otra
+                  // vez ya (antes: 10 s de espera, y tras un ring out el asalto perdido)
+                  (t.retries == 0 && now - std::max(t.since, t.ring_at) > 30 && !REX_LOAD_U32(x + kModel0 + 4 * kLoad)))) {
+        g_keep[size_t(p)] = 0;
         const uint32_t cam = t.new_cam, model = REX_LOAD_U32(x + kModel0 + 4 * kLoad);
         REXLOG_WARN("dbz3 tag: luchador {:08X}: la carga no termina (camara {:08X} +192 {:08X}, modelo {:08X} +36 {:08X})",
                     x, cam, cam ? REX_LOAD_U32(cam + 192) : 0, model, model ? REX_LOAD_U32(model + 36) : 0);
@@ -1168,11 +1380,15 @@ void Tick(PPCContext& ctx, uint8_t* base) {
           }
           t.retries = tries + 1;
         } else {                            // cancelado (o StartSwap no pudo empezar)
-          if (t.slide == 1) {               // el que salio vuelve a su sitio (un caido sigue tumbado)
+          PoseEnd(base, p);                 // el COM que salia vuelve a su IA
+          if (t.slide == 1 && t.veiled) {   // se habia ido con el teletransporte: vuelve igual
+            TeleportIn(base, x, t, home, now);
+          } else if (t.slide == 1) {        // el que salio vuelve a su sitio (un caido sigue tumbado)
             float cur[3];
             for (uint32_t i = 0; i < 3; ++i) cur[i] = LoadF(base, x + 64 + 4 * i);
             StartSlide(t, 2, cur, home);
           }
+          g_keep[size_t(p)] = 0;
           if (t.spare) {
             TAG_CALL(sub_82100D60, dbz3eu_sub_82100E60, x, kSpare);
             TAG_CALL(sub_82100DE8, dbz3eu_sub_82100EE8, x, kSpare);
@@ -1205,6 +1421,7 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     h.active = t.active;
     h.switching = t.phase != Phase::kIdle;
     h.refused = t.refused_at && now - t.refused_at < kRefusedShow;
+    h.shown = !PreFight(base);   // las fichas salen con el marcador del juego, no en la presentacion
     for (int k = 0; k < h.n && k < 5; ++k) {
       h.ids[k] = t.ids[size_t(k)];
       h.hp[k] = std::clamp((k == t.active && !h.switching ? LoadF(base, x + kHp) : t.hp[size_t(k)]) / mx, 0.0f, 1.0f);
@@ -1240,14 +1457,32 @@ void OnScreen(int screen) {
 // Mando del usuario (0/1) leido este tick (hook de XamInputGetState): SELECT = relevo, con L
 // (LB o gatillo) al tercero. Devuelve true si hay que ocultar SELECT al juego.
 // Y+B (XInput 0x8000 | 0x2000) que pulsa la pose de entrada en ese mando (solo sin online)
-uint16_t PoseButtons(uint32_t user) { return user < 4 && g_pose_pad[user].load() ? 0xA000 : 0; }
+uint16_t PoseButtons(uint32_t user) {
+  uint16_t b = user < 4 && g_pose_pad[user].load() ? 0xA000 : 0;
+  for (int p = 0; p < 2; ++p) {
+    if (g_exit_slot[size_t(p)].load() == int(user) && g_frame.load() < g_exit_until[size_t(p)].load()) b |= ExitBtn();
+  }
+  return b;
+}
+// stick de la salida del relevo para el mando `user` del humano que sale (true = cambiarlo)
+bool ExitStick(uint32_t user, int16_t* ly) {
+  for (int p = 0; p < 2; ++p) {
+    if (g_exit_slot[size_t(p)].load() == int(user) && g_frame.load() < g_exit_until[size_t(p)].load()) {
+      *ly = ExitLy();
+      return true;
+    }
+  }
+  return false;
+}
 
 // Mando 4 virtual del COM en pose: true mientras algun lado lo usa; *buttons = Y+B si su pose ya empezo
-bool PoseVirtualPad(uint16_t* buttons) {
+bool PoseVirtualPad(uint16_t* buttons, int16_t* ly) {
   std::lock_guard<std::mutex> lock(g_mu);
   for (int p = 0; p < 2; ++p) {
     if (g_pose_com[size_t(p)]) {
-      *buttons = g_pose_ticks[size_t(p)] ? 0xA000 : 0;
+      const bool exiting = g_frame.load() < g_exit_until[size_t(p)].load();
+      *buttons = uint16_t((g_pose_ticks[size_t(p)] ? 0xA000 : 0) | (exiting ? ExitBtn() : 0));
+      *ly = exiting ? ExitLy() : 0;
       return true;
     }
   }
@@ -1371,6 +1606,8 @@ DBZ3_HOOK(sub_8211A5A8, dbz3eu_sub_8211A6A8) {
   if (!t) return;
   t->down[size_t(t->active)] = true;
   if (t->slide == 1) t->slide = 0;   // salia de un relevo: deja de sostenerlo en el aire y cae
+  if (t->veiled) dbz3::tag::Veil(base, x, *t, false);   // (y vuelve a verse)
+  t->tele_at = 0;
   // KO con compañero vivo: en el tick siguiente (tras la reaccion al golpe que pone el juego) sale
   // despedido con la accion 25 del juego (la del golpe fuerte) y el relevo espera a que se levante
   dbz3::tag::g_fall_x = x;
@@ -1434,6 +1671,8 @@ static bool RingOutToSwap(uint8_t* base, uint32_t x) {
   t->ring_at = now;
   t->down[size_t(t->active)] = true;
   if (t->slide == 1) t->slide = 0;
+  if (t->veiled) tg::Veil(base, x, *t, false);
+  t->tele_at = 0;
   t->ko_at = now;
   t->seen25 = false;
   // con un relevo ya cargando (SELECT), ese entra; si no, el siguiente vivo
@@ -1558,4 +1797,178 @@ REX_HOOK_RAW(sub_82092C58) {
     }
   }
   __imp__sub_82092C58(ctx, base);
+}
+
+// SONDA (2026-10-15): huecos de forma que el juego suelta "por no usarse" (sub_82100EB8 / sub_82100F30, desde
+// sub_82109380) mientras carga el que entra (g_keep): quien lo pide y en que estado esta el luchador. No se bloquea:
+// bloquearlo cerro el juego (lectura de 0x10 en sub_8208D2D0 justo despues).
+static bool KeepSlot(uint8_t* base, uint32_t x, uint32_t slot, uint32_t lr, const char* what) {
+  const int side = dbz3::tag::SideOf(base, x);
+  if (side < 0 || slot >= 8 || !((dbz3::tag::g_keep[size_t(side)].load() >> slot) & 1)) return false;
+  REXLOG_INFO("dbz3 tag sonda: el juego suelta el {} del hueco {} del que entra (lado {}, desde {:08X}; forma {} -> {}, "
+              "cuerpo A {:08X} B {:08X}, hueco0 {:08X} hueco7 {:08X}, accion {})",
+              what, slot, side + 1, lr, REX_LOAD_U32(x + 2980), REX_LOAD_U32(x + 2984), REX_LOAD_U32(x + 2940),
+              REX_LOAD_U32(x + 4604), REX_LOAD_U32(x + 7608), REX_LOAD_U32(x + 7636), REX_LOAD_U16(x + 3244));
+  return true;
+}
+REX_HOOK_RAW(sub_82100D60) {
+  if (!dbz3::g_guest_eu) KeepSlot(base, ctx.r3.u32, ctx.r4.u32, uint32_t(ctx.lr), "modelo");
+  __imp__sub_82100D60(ctx, base);
+}
+REX_HOOK_RAW(sub_82109380) {
+  if (!dbz3::g_guest_eu && dbz3::tag::SideOf(base, ctx.r3.u32) >= 0 &&
+      dbz3::tag::g_keep[size_t(dbz3::tag::SideOf(base, ctx.r3.u32))].load()) {
+    // quien llama: lr; y el de su llamador (marco de sub_82111458: 96 B, lr guardado en -8)
+    REXLOG_INFO("dbz3 tag sonda: sub_82109380(X {:08X}, guarda {}) desde {:08X} (antes {:08X})", ctx.r3.u32, ctx.r4.s32,
+                uint32_t(ctx.lr), REX_LOAD_U32(ctx.r1.u32 + 96 - 8));
+  }
+  __imp__sub_82109380(ctx, base);
+}
+
+// --- TAG TEAM por la via nativa (solo US; docs/12_conectores/13_tagteam_nativo.md) ---
+// Sin piloto de menus ni negro propio: el menu principal sale con su sonido y su fundido y abre la
+// rueda directamente; "atras" en la rueda vuelve a la pantalla TAG TEAM por el atras del Duelo.
+namespace dbz3::tag {
+namespace {
+std::atomic<int> g_enter_row{-1};    // fila del Duelo pedida por el panel (la recoge el menu principal)
+std::atomic<bool> g_native{false};   // de la entrada a la vuelta al menu principal
+std::array<std::atomic<int>, 2> g_wheel_menu{};          // WheelMenu
+std::array<std::atomic<uint32_t>, 2> g_wheel_at{};
+std::array<std::atomic<bool>, 2> g_wheel_tray{};          // WheelTray
+std::atomic<bool> g_duel_back{false};   // el menu de Duelo que crea el atras sale en su primer fotograma
+constexpr uint32_t kUi = 0x824BA110, kPadSlot = 0x8238B670, kPads = 0x8238B780;
+}  // namespace
+bool NativeEnter(int duel_row) {
+  if (dbz3::g_guest_eu || std::getenv("DBZ3_TAG_PILOT")) return false;
+  g_native = true;
+  g_enter_row = duel_row;
+  return true;
+}
+int WheelMenu(int side) {
+  if (side < 0 || side > 1 || g_frame.load() - g_wheel_at[size_t(side)].load() > 10) return 0;
+  return g_wheel_menu[size_t(side)].load();
+}
+bool WheelTray(int side) {
+  return side >= 0 && side <= 1 && g_frame.load() - g_wheel_at[size_t(side)].load() <= 10 && g_wheel_tray[size_t(side)].load();
+}
+void NativeEnd() {
+  g_wheel_tray[0] = false;
+  g_wheel_tray[1] = false;
+  g_enter_row = -1;
+  g_duel_back = false;
+  g_native = false;
+}
+}  // namespace dbz3::tag
+
+// El menu principal esperando (sub_8218C5D8) llama a sub_8218BBC0(menu) al empezar cada fotograma (lr
+// 0x8218C5F4; sus otros dos llamadores son otros estados). Con una entrada pedida se repite su rama de A
+// (10:14940-15003) con la pantalla 14 y argumento 1: sub_821AEBA8(1) abre la rueda sin el menu de Duelo
+// con el tipo y la fila guardados (0x823734E8/EC, 11:16934, 36:16714).
+REX_HOOK_RAW(sub_8218BBC0) {
+  using namespace dbz3::tag;
+  const bool idle = ctx.lr == 0x8218C5F4;
+  const uint32_t task = ctx.r27.u32, menu = ctx.r3.u32;
+  __imp__sub_8218BBC0(ctx, base);
+  if (!idle || dbz3::g_guest_eu || g_enter_row.load() < 0 || REX_LOAD_U32(task + 48) != menu) return;
+  const int row = g_enter_row.exchange(-1);
+  REX_STORE_U32(0x823734E8, 0);              // tipo: Duelo (1 seria Practica)
+  REX_STORE_U32(0x823734EC, uint32_t(row));  // fila del Duelo
+  REX_STORE_U8(menu + 150, 1);               // el menu recuerda Duelo
+  const float vol = LoadF(base, kUi + 0x2C0C0);   // sonido de aceptar del menu (0x8218C640-0x8218C690)
+  PPCContext c = ctx;
+  c.r3.u64 = 0;
+  c.r4.u64 = 0;
+  c.f1.f64 = vol;
+  sub_82092570(c, base);
+  if (vol > LoadF(base, 0x8201F60C)) {
+    c = ctx;
+    c.r3.u64 = 0; c.r4.u64 = 0; c.r5.u64 = 3; c.r6.u64 = 0;
+    sub_820922A0(c, base);
+  }
+  const uint32_t slot = REX_LOAD_U32(kPadSlot);
+  Call(ctx, base, sub_821D98B8, row < 2 ? slot : 0xFFFFFFFFu, 0xFFFFFFFFu);   // mandos, como el Duelo (41:16839)
+  Call(ctx, base, sub_821D2778, 14, 1);
+  Call(ctx, base, sub_8218C588, menu, 0);
+  Call(ctx, base, sub_82081A48, REX_LOAD_U32(menu + 164), 0);
+  REX_STORE_U8(kUi + 37, 1);
+  REX_STORE_U8(kUi + 38, 0);
+  Call(ctx, base, sub_821D27B8, 10, 0);       // fundido del juego
+  REX_STORE_U32(task + 28, 0x8218C4C8);       // menu "saliendo", como tras su A
+  if (slot < 4) REX_STORE_U16(kPads + 184 * slot + 14, 0);   // lo que queda de este fotograma no ve la A del panel
+  REXLOG_INFO("dbz3 tag nativo: menu principal -> rueda directa (fila del Duelo {}, mando {})", row, slot);
+}
+
+// Atras desde la rueda: sub_821AC410 pide el menu de Duelo con sub_821AEBA8(0, fila) (43:16744). En modo
+// Tag nativo el juego lo crea entero (su principio coge una referencia del recurso 0x823BF224 que la
+// limpieza de la rueda suelta despues: sin ella se liberaba dos veces, 2026-10-15) y en su primer fotograma
+// de espera sale por su propio atras (sub_821AE520 -> sub_821AE440: pantalla 5 y fundido). La pantalla
+// TAG TEAM se abre encima desde ya: el menu de Duelo no se llega a ver.
+REX_HOOK_RAW(sub_821AEBA8) {
+  using namespace dbz3::tag;
+  const bool back = !dbz3::g_guest_eu && g_native.load() && ctx.r3.s16 == 0;
+  __imp__sub_821AEBA8(ctx, base);
+  if (!back) return;
+  g_native = false;
+  g_duel_back = true;
+  dbz3::ingame::TagTeamOpen();
+  REXLOG_INFO("dbz3 tag nativo: atras en la rueda -> TAG TEAM");
+}
+// Menu de Duelo esperando (r3 = tarea, +48 = objeto): la rama de su atras (41:16905-16960) sin el sonido.
+REX_HOOK_RAW(sub_821AE520) {
+  if (!dbz3::tag::g_duel_back.exchange(false)) {
+    __imp__sub_821AE520(ctx, base);
+    return;
+  }
+  using namespace dbz3::tag;
+  const uint32_t task = ctx.r3.u32, obj = REX_LOAD_U32(task + 48);
+  Call(ctx, base, sub_821AE440, obj, 0);
+  Call(ctx, base, sub_82081A48, REX_LOAD_U32(obj + 76), 0);
+  Call(ctx, base, sub_8217E800, REX_LOAD_U32(obj + 68), 0xFFFFFFFFu);
+  REX_STORE_U32(task + 28, 0x821AE518);
+}
+
+// Orquestador de las dos ruedas (sub_821ACCA0, cada fotograma; r3 = tarea, +56 = objeto con las ruedas del
+// lado 1 y 2). Antes que el juego decida el turno: un miembro que no es el ultimo (+2 == 1: personaje y
+// capsulas elegidos de verdad) vuelve a "eligiendo" con sub_8217CF60 (fase 4, resultado -1, su animacion y
+// estado 0x8217CC68), asi el juego no da el lado por terminado ni pasa al rival. El ultimo sigue el flujo del
+// juego. Ademas apunta que pantalla tiene abierta cada lado (WheelMenu) y, al cambiar, fase/resultado/estado.
+REX_HOOK_RAW(sub_821ACCA0) {
+  using namespace dbz3::tag;
+  if (!dbz3::g_guest_eu) {
+    static uint32_t last[2] = {};
+    const uint32_t obj = REX_LOAD_U32(ctx.r3.u32 + 56);
+    for (uint32_t k = 0; obj && k < 2; ++k) {
+      const uint32_t wheel = REX_LOAD_U32(obj + 4 * k), wst = wheel ? REX_LOAD_U32(wheel + 48) : 0;
+      if (!wst) continue;
+      g_wheel_menu[k] = REX_LOAD_U8(wst) == 5 ? REX_LOAD_U8(wst + 10) : 0;
+      g_wheel_at[k] = g_frame.load();
+      if (g_native.load() && int8_t(REX_LOAD_U8(wst + 2)) == 1 && dbz3::ingame::TeamWantsMore(int(k))) {
+        Call(ctx, base, sub_8217CF60, wheel, 0);
+        REXLOG_INFO("dbz3 tag nativo: lado {}: miembro elegido, la rueda vuelve a eligiendo", k + 1);
+      }
+      // bandeja "Custom Tray" de Edit Skills abierta (medido 2026-10-15 con una sonda y capturas: el menu de opciones
+      // del lado es una tarea en wst+52, su interior en +48: +0 opcion resaltada, +2 paso: 1 abriendose, 2 eligiendo
+      // (tambien al mover el cursor), 3 bandeja abierta (estado de la tarea 0x82182930), 4-5 el menu se cierra)
+      {
+        const uint8_t kind = REX_LOAD_U8(wst + 10);
+        const uint32_t w = (REX_LOAD_U8(wst) == 5 && kind >= 2 && kind <= 4) ? REX_LOAD_U32(wst + 52) : 0;
+        const uint32_t in = w ? REX_LOAD_U32(w + 48) : 0;
+        const uint8_t step = in ? REX_LOAD_U8(in + 2) : 0;
+        const bool tray = step == 3;
+        if (tray != g_wheel_tray[k].load())
+          REXLOG_INFO("dbz3 tag: bandeja de Edit Skills del lado {} {} (fase {} menu {} paso {} tarea {:08X} estado {:08X})", k + 1,
+                      tray ? "abierta" : "cerrada", REX_LOAD_U8(wst), kind, step, REX_LOAD_U32(wst + 52),
+                      REX_LOAD_U32(wst + 52) ? REX_LOAD_U32(REX_LOAD_U32(wst + 52) + 28) : 0);
+        g_wheel_tray[k] = tray;
+      }
+      if (!g_native.load()) continue;
+      const uint32_t state = REX_LOAD_U32(wheel + 28);
+      const uint32_t sig = REX_LOAD_U8(wst) | REX_LOAD_U8(wst + 2) << 8 | REX_LOAD_U8(wst + 10) << 16 | (state & 0xFFF) << 20;
+      if (sig == last[k]) continue;
+      last[k] = sig;
+      REXLOG_INFO("dbz3 tag nativo: rueda {} fase {} resultado {} menu {} bandera {:02X} estado {:08X}", k + 1, REX_LOAD_U8(wst),
+                  int8_t(REX_LOAD_U8(wst + 2)), REX_LOAD_U8(wst + 10), REX_LOAD_U8(wst + 6), state);
+    }
+  }
+  __imp__sub_821ACCA0(ctx, base);
 }

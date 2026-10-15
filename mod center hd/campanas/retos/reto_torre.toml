@@ -1,0 +1,199 @@
+# Generado por modos_reto.py (modo torre, 10 combates). No editar a mano: regenerar con el script.
+# Montar: python campana.py montar campanas/retos/reto_torre.toml
+
+[campana]
+nombre = "Torre de Freezer"
+mod = "reto_torre"
+descripcion = "Sube una torre de 10 pisos con rivales cada vez mas fuertes."
+
+[rueda]
+personajes = [27]
+
+[[escena]]
+contenedor = 1725
+entrada = 22
+cabecera = [9, 3, 4, 2, 0, 0, 2779]
+cambiar = [[10, 0, 4520], [10, 1, 66197], [10, 2, 66197], [13, 0, 135269], [11, 0, 1414], [12, 0, 1415], [11, 1, 1414], [12, 1, 1415], [14, 1, 132303], [14, 2, 132304], [14, 3, 132305], [22, 0, 0], [44, 0, 4918, -4416, 600], [54, 0, 0], [24, 6, "2100.0", 2688, 9, -6214, 15, 5477, 1000], [35, 0, "2100.0", 479], [24, 7, "2100.1", 2688, 9, -3010, 15, -4781, 1000], [35, 1, "2100.1", 492], [24, 8, "2100.2", 2688, 9, -537, 15, 2474, 1000], [35, 2, "2100.2", 479], [24, 9, "2100.8", 2688, 9, 6907, 15, 3096, 1000], [35, 3, "2100.8", 479], [24, 10, "2100.3", 176, 9, 4799, 15, -6998, 1000], [24, 11, "2100.4", 176, 9, -5788, 25, -2764, 1000], [24, 12, "2100.6", 2688, 9, 4577, 15, -2237, 1000], [29, 0, "SAITYOU", 1], [29, 0, "SAITYOUHAKAI", 0], [29, 0, "VEGE", 0], [29, 0, "VEGEHAKAI", 1], [29, 0, "NAIL", 1], [29, 0, "NAILHAKAI", 0], [29, 0, "COOL", 0], [29, 0, "COOLHAKAI", 0], [29, 0, "COOLNASI", 1], [29, 0, "FSS", 1], [29, 0, "FSSGIN", 1], [29, 0, "FSSGINHAKAI", 0], [29, 0, "GSS", 1], [29, 0, "BRUMA", 1], [29, 0, "BRUMAHAKAI", 0], [24, 0, "5522.0", 1, 2, 4918, 67, -4916, 1000], [20, 0, "5122.0"]]
+
+[[imagen]]
+entrada = 4520
+archivo = "../imagenes/dragon-ball-reveals-original-90s-freiza-artwork-from-rare-dbz-release-3-1.avif"
+
+[historia]
+codigo = 5122
+contenedor = 1820
+eventos_mapa = { codigos = [2100], retrato = 1463, desde = 4600 }
+traje_mapa = 2
+altura_mapa = 600
+fondo = 1411
+final = { contenedor = 1728, codigo = 1, entrada = 39, fondo = "villano" }
+combates = { codigo = 5522, contenedor = 2132, plantilla = 709 }
+dialogos = { codigo = 5922, contenedor = 1659, textos_desde = 5620 }
+textos_desde = 5620
+
+[[retrato]]
+entrada = 1464
+reparar = true
+
+[[retrato]]
+entrada = 1465
+reparar = true
+
+[[retrato]]
+entrada = 4501
+png = "../retratos/mecha_freezer.png"
+escala = 1.15
+desplazamiento = [0, 0]
+
+[[panel_limpio]]
+cmn = 1411
+filas = 17
+
+[[capitulo]]
+combate = 654
+rival = 10
+nivel = 0
+marca = [1, 2, 4918, 67, -4916, 1000]
+retratos = [1447, 1463]
+traje_rival = 2
+dialogo_es = ["Piso 1 de 10: Krilin te cierra el paso.", "Sube si puedes. Cada piso es más duro."]
+dialogo_en = ["Floor 1 of 10: Krillin blocks the way.", "Climb if you can. Each floor is harder."]
+victoria_es = ["Piso 1 superado.", "Uno menos. Sigue subiendo."]
+victoria_en = ["Floor 1 cleared.", "One less. Keep climbing."]
+mapa_es = ["Al piso 2."]
+mapa_en = ["On to floor 2."]
+llegada_es = ["La torre empieza aquí."]
+llegada_en = ["The tower starts here."]
+
+[[capitulo]]
+combate = 655
+rival = 10
+nivel = 0
+marca = [1, 2, 5010, 20, -5399, 1000]
+retratos = [1447, 1463]
+traje_rival = 2
+dialogo_es = ["Piso 2 de 10: Krilin te cierra el paso.", "Sube si puedes. Cada piso es más duro."]
+dialogo_en = ["Floor 2 of 10: Krillin blocks the way.", "Climb if you can. Each floor is harder."]
+victoria_es = ["Piso 2 superado.", "Uno menos. Sigue subiendo."]
+victoria_en = ["Floor 2 cleared.", "One less. Keep climbing."]
+mapa_es = ["Al piso 3."]
+mapa_en = ["On to floor 3."]
+
+[[capitulo]]
+combate = 656
+rival = 2
+nivel = 1
+marca = [1, 2, 5517, 39, -5053, 1000]
+retratos = [1425, 1463]
+traje_rival = 1
+dialogo_es = ["Piso 3 de 10: Gohan te cierra el paso.", "Sube si puedes. Cada piso es más duro."]
+dialogo_en = ["Floor 3 of 10: Gohan blocks the way.", "Climb if you can. Each floor is harder."]
+victoria_es = ["Piso 3 superado.", "Uno menos. Sigue subiendo."]
+victoria_en = ["Floor 3 cleared.", "One less. Keep climbing."]
+mapa_es = ["Al piso 4."]
+mapa_en = ["On to floor 4."]
+
+[[capitulo]]
+combate = 657
+rival = 2
+nivel = 1
+marca = [1, 3, 6400, 40, 3800, 1000]
+retratos = [1425, 1463]
+traje_rival = 1
+dialogo_es = ["Piso 4 de 10: Gohan te cierra el paso.", "Sube si puedes. Cada piso es más duro."]
+dialogo_en = ["Floor 4 of 10: Gohan blocks the way.", "Climb if you can. Each floor is harder."]
+victoria_es = ["Piso 4 superado.", "Uno menos. Sigue subiendo."]
+victoria_en = ["Floor 4 cleared.", "One less. Keep climbing."]
+mapa_es = ["Al piso 5."]
+mapa_en = ["On to floor 5."]
+
+[[capitulo]]
+combate = 658
+rival = 11
+nivel = 2
+marca = [1, 2, 4918, 67, -4916, 1000]
+retratos = [1449, 1464]
+forma_jugador = 1
+dialogo_es = ["Piso 5 de 10: Piccolo te cierra el paso.", "Sube si puedes. Cada piso es más duro."]
+dialogo_en = ["Floor 5 of 10: Piccolo blocks the way.", "Climb if you can. Each floor is harder."]
+victoria_es = ["Piso 5 superado.", "Uno menos. Sigue subiendo."]
+victoria_en = ["Floor 5 cleared.", "One less. Keep climbing."]
+mapa_es = ["Al piso 6."]
+mapa_en = ["On to floor 6."]
+
+[[capitulo]]
+combate = 659
+rival = 7
+nivel = 2
+marca = [1, 2, -4160, 130, -3202, 1000]
+retratos = [1436, 1464]
+forma_jugador = 1
+traje_rival = 3
+dialogo_es = ["Piso 6 de 10: Vegeta te cierra el paso.", "Sube si puedes. Cada piso es más duro."]
+dialogo_en = ["Floor 6 of 10: Vegeta blocks the way.", "Climb if you can. Each floor is harder."]
+victoria_es = ["Piso 6 superado.", "Uno menos. Sigue subiendo."]
+victoria_en = ["Floor 6 cleared.", "One less. Keep climbing."]
+mapa_es = ["Al piso 7."]
+mapa_en = ["On to floor 7."]
+
+[[capitulo]]
+combate = 660
+rival = 7
+nivel = 3
+marca = [1, 1, -2800, 11, 2650, 1000]
+retratos = [1436, 1465]
+forma_jugador = 2
+traje_rival = 3
+dialogo_es = ["Piso 7 de 10: Vegeta te cierra el paso.", "Sube si puedes. Cada piso es más duro."]
+dialogo_en = ["Floor 7 of 10: Vegeta blocks the way.", "Climb if you can. Each floor is harder."]
+victoria_es = ["Piso 7 superado.", "Uno menos. Sigue subiendo."]
+victoria_en = ["Floor 7 cleared.", "One less. Keep climbing."]
+mapa_es = ["Al piso 8."]
+mapa_en = ["On to floor 8."]
+
+[[capitulo]]
+combate = 661
+rival = 0
+nivel = 3
+marca = [1, 2, 5462, 54, -5448, 1000]
+retratos = [1416, 1465]
+forma_jugador = 2
+dialogo_es = ["Piso 8 de 10: Goku te cierra el paso.", "Sube si puedes. Cada piso es más duro."]
+dialogo_en = ["Floor 8 of 10: Goku blocks the way.", "Climb if you can. Each floor is harder."]
+victoria_es = ["Piso 8 superado.", "Uno menos. Sigue subiendo."]
+victoria_en = ["Floor 8 cleared.", "One less. Keep climbing."]
+mapa_es = ["Al piso 9."]
+mapa_en = ["On to floor 9."]
+
+[[capitulo]]
+combate = 662
+rival = 0
+nivel = 4
+marca = [1, 2, 5010, 20, -5399, 1000]
+retratos = [1416, 1465]
+forma_jugador = 2
+dialogo_es = ["Piso 9 de 10: Goku te cierra el paso.", "Sube si puedes. Cada piso es más duro."]
+dialogo_en = ["Floor 9 of 10: Goku blocks the way.", "Climb if you can. Each floor is harder."]
+victoria_es = ["Piso 9 superado.", "Uno menos. Sigue subiendo."]
+victoria_en = ["Floor 9 cleared.", "One less. Keep climbing."]
+mapa_es = ["Al piso 10."]
+mapa_en = ["On to floor 10."]
+
+[[capitulo]]
+combate = 663
+rival = 8
+nivel = 4
+marca = [1, 1, -2800, 11, 2650, 1000]
+retratos = [1443, 1466]
+forma_jugador = 3
+premio = 102
+dialogo_es = ["Piso 10 de 10: Trunks te cierra el paso.", "Sube si puedes. Cada piso es más duro."]
+dialogo_en = ["Floor 10 of 10: Trunks blocks the way.", "Climb if you can. Each floor is harder."]
+victoria_es = ["Piso 10 superado.", "Ya solo queda la cima."]
+victoria_en = ["Floor 10 cleared.", "Only the summit is left."]
+mapa_es = ["La cima es mía."]
+mapa_en = ["The summit is mine."]
+
+[[capitulo]]
+es = ["Has subido los 10 pisos de la torre.", "Ningún guerrero ha llegado más alto."]
+en = ["You climbed all 10 floors of the tower.", "No warrior has reached higher."]

@@ -1,0 +1,47 @@
+# Pack visual opcional: imagenes de narracion y retrato de Mecha Freezer para la Historia de
+# Freezer (campanas/historia_freezer.toml). Copia esa campana dentro del pack con sus imagenes
+# cambiadas; con --montar sale el mod historia_freezer (el anterior va a mods_respaldo/).
+#   python construir_pack.py pack_campana_freezer.toml --mods <mods> [--montar]
+[pack]
+nombre = "pack_campana_freezer"
+titulo = "Arte: Historia de Freezer"
+descripcion = "Imagenes de narracion y retrato de Mecha Freezer (arte de terceros, solo uso personal)."
+
+[campana]
+toml = "campanas/historia_freezer.toml"
+
+# Introduccion ([[imagen]] entrada 4520): Namek y Freezer
+[[asset]]
+fuente = "Dragon Ball Z/Frieza Saga/[2020-01-18] Namek Saga (Frieza) Wallpaper [DBZ Kakarot] by Maxiuchiha22 - 827414127.png"
+destino = "campana/imagenes/intro_namek.png"
+tipo = "narracion"
+foco = [0.5, 0.35]
+reemplaza = "imagenes/dragon-ball-reveals-original-90s-freiza-artwork-from-rare-dbz-release-3-1.avif"
+
+# Cierre (cierre_imagen): Freezer en su forma final sobre Namek (las "Episode" de Kakarot son
+# paginas de libro con texto: no valen para narracion)
+[[asset]]
+fuente = "Dragon Ball Z/Frieza Saga/[2019-06-14] Frieza final form render [Dokkan Battle] by Maxiuchiha22 - 801726967.png"
+destino = "campana/imagenes/cierre_freezer.png"
+tipo = "narracion"
+modo = "ajustar"
+alinear = "abajo"
+fondo = "Dragon Ball BG -BackGrounds-/Namek Landscape.jpg"
+reemplaza = "imagenes/frieza-dbz-feature-image.avif"
+
+# Freezer y el Rey Cold (imagen de la saga de Mecha Freezer): render sobre su nave
+[[asset]]
+fuente = "Dragon Ball Z/Mecha Frieza Saga/[2019-07-20] Mecha Frieza - King Cold render [Dokkan Battle] by Maxiuchiha22 - 806439048.png"
+destino = "campana/imagenes/freezer_rey_cold.png"
+tipo = "narracion"
+modo = "ajustar"
+alinear = "abajo"
+fondo = "Dragon Ball BG -BackGrounds-/[2020-03-07] Frieza's spaceship (Broly Movie)BG [Dokkan Battle] by Maxiuchiha22 - 832970882.png"
+reemplaza = "imagenes/FriezaKingColdNV.webp"
+
+# Retrato de dialogo de Mecha Freezer ([[retrato]] entrada 4501; campana.py lo encaja en 541x530)
+[[asset]]
+fuente = "Dragon Ball Z/Mecha Frieza Saga/[2018-05-31] Mecha Frieza render [Dokkan Battle] by Maxiuchiha22 - 747460688.png"
+destino = "campana/retratos/mecha_freezer.png"
+tipo = "retrato_campana"
+reemplaza = "retratos/mecha_freezer.png"

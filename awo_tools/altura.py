@@ -335,6 +335,38 @@ def lift_waist(model, dy):
     return None
 
 
+def hang_tails(model, deg=80.0, roots=("LOBI1", "ROBI1")):
+    """Colas del cinturon (B1/B2/IW) colgadas en el bind: giro de `deg` en el eje X local de
+    su raiz. Sin pista suya en el moveset (donante sin cinturon; B3 no aplica la fisica a los
+    modelos nuevos) se quedaban en horizontal: dos hojas blancas junto a la mano (Fat Gotenks
+    con los golpes de Trunks). Si el moveset si las anima, su pista sustituye este giro.
+    Modelo PS2 (#AMB/#AMO) o HD; None si no tiene esas raices."""
+    if model[:4] == b"#AMO" or _is_ps2(model):
+        amo = 0
+        if model[:4] == b"#AMB":
+            n, t = struct.unpack("<II", model[0x10:0x18])
+            amo = next((o for o, s, _, _ in (struct.unpack_from("<4I", model, t + 16 * k) for k in range(n))
+                        if model[o:o + 4] == b"#AMO"), None)
+            if amo is None:
+                return None
+        g = model.find(b"#AMG", amo)
+        e, axes = "<", g + 0x20
+        nb, names = struct.unpack_from("<I", model, g + 0x10)[0], g + struct.unpack_from("<I", model, g + 0x1C)[0]
+    else:
+        from awg_vertex_buffer import AwgVertexBuffer, be32  # noqa: PLC0415
+        a = AwgVertexBuffer._parse(model)
+        e, axes, nb, names = ">", a.awg0 + be32(a.data, a.awg0 + 0x14), a.bone_count(), a.awg0 + 0x40
+    out, hit = bytearray(model), 0
+    qx = (math.sin(math.radians(deg) / 2), 0.0, 0.0, math.cos(math.radians(deg) / 2))
+    for i in range(nb):
+        nm = bytes(model[names + 32 * i:names + 32 * i + 32]).split(b"\0")[0].decode("latin1")
+        if suffix(nm) in roots:
+            o = axes + 80 * i
+            struct.pack_into(e + "4f", out, o, *qmul(struct.unpack_from(e + "4f", model, o), qx))
+            hit += 1
+    return bytes(out) if hit else None
+
+
 if __name__ == "__main__":
     a = sys.argv[1:]
     m, anm = open(a[0], "rb").read(), open(a[1], "rb").read()

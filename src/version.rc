@@ -86,3 +86,6 @@ BEGIN
         VALUE "Translation", 0x409, 1200
     END
 END
+// Icono del exe en el Explorador: arte propio CC0 (assets_propios/png/app/dbz3.ico, generar.py). En la
+// ventana, en marcha, se pone la bola del juego sacada del AFS del jugador (online_panel.cpp, WM_SETICON).
+1 ICON "dbz3.ico"

@@ -39,6 +39,8 @@ Uso (salida en lineas TAB para el launcher):
   python importar.py lista FUENTE [--carpeta DIR]
   python importar.py importar FUENTE CLAVE --mod CARPETA --nombre NOMBRE [--donante ID]
                      [--id ID] [--despues-de ID] [--carpeta DIR]
+  python importar.py traje MOD [--personaje ID] [--nombre N] [--mods DIR]
+                     (un port importado tambien como traje de epoca del personaje del juego: traje.toml)
 """
 import argparse
 import glob
@@ -166,12 +168,15 @@ EXTRA_NAMES = {  # personajes que B3 no tiene (prefijos de B2 / IW)
     "XGVT": "Vegeta GT", "XGS2": "Great Saiyaman 2", "XBBR": "Broly Super",
     "XGTA": "Gogeta", "XVTO": "Vegito", "XGXL": "Gotenks (adulto)", "XGXG": "Gotenks fantasma",
     "XKBT": "Kibito", "XKOK": "Kibito Kai", "BCDBR": "Dabura (alternativo)", "SNR": "Shenron",
+    # fusiones de Yamcha y Tenshinhan (render 2026-10-15: tercer ojo, mechon de Yamcha, chaleco de fusion);
+    # XYHS es la version delgada de la fusion fallida, como Fat Gotenks. Gokule no tiene modelo en B2.
+    "XYMH": "Yamhan", "XYHS": "Yamhan (fusion fallida)",
 }
 EXTRA_DONORS = {"XRCM": ("Recoome", 21), "XSBM": ("Saibaman", 42), "TSH": ("Tenshinhan", 12)}
 # sin ID propio en B3 (fusiones, Babidi, Kibito...): el personaje de B3 mas parecido, con modo hiper
 # y definitiva si lo hay (sin esto caian en el 21, Recoome)
 SIMILAR_DONOR = {"XBAB": 37, "BCDBR": 37, "XGTA": 0, "XVTO": 7, "XGTX": 8, "XGXL": 8, "XGXG": 8,
-                 "XKBT": 16, "XKOK": 16}
+                 "XKBT": 16, "XKOK": 16, "XYMH": 12, "XYHS": 12}
 
 
 def cache_load():
@@ -1097,7 +1102,7 @@ def do_import(a):
         a.golpes_donante = True
     pname = preset_name(game, getattr(a, "preset", None))
     rb.log("preset %s: %s" % (pname, ", ".join("%s=%s" % kv for kv in sorted(opt.items()) if kv[0] != "descripcion")))
-    work = tempfile.mkdtemp(prefix="importar_")
+    work = rb.work_dir("importar_")
     lst = list_source(game, a.carpeta)
     e = next((x for x in lst if x["clave"] == a.clave), None)
     if e is None:
@@ -1148,6 +1153,18 @@ def do_import(a):
         if wigs.get(0) is not None:
             rb.log("Budokai 2: pelo y cara pegados a la cabeza%s" % (" (normal y transformado)" if b2_pairs else ""))
         port = e.get("port")
+    if game in ("b1", "b2", "iw"):
+        # colas del cinturon colgadas en el reposo: sin pista en el moveset salian en horizontal
+        # (hojas blancas junto a la mano de Fat Gotenks); SB/SDBH ya las cuelga sdbh_model
+        import altura  # noqa: PLC0415
+        hung = 0
+        for p in models:
+            h = altura.hang_tails(open(p, "rb").read())
+            if h:
+                open(p, "wb").write(h)
+                hung += 1
+        if hung:
+            rb.log("cinturon: colas colgadas en %d modelos" % hung)
     rb.log("importando %s de %s: %d modelos, donante %d" % (e["nombre"], dict((g, n) for g, n, s in GAMES)[game],
                                                          len(models), donor))
     files, own_donor = {}, donor
@@ -1454,6 +1471,82 @@ def oficial(a):
     return 0 if hechos or not fallos else 1
 
 
+def _relabel_awo(hd, old, new):
+    """Cambia el prefijo de los huesos (VGT_ -> MVG_, mismo largo) solo en el #AWO (nombres de huesos, de los
+    #AWG y etiquetas de los dibujos); las texturas (#AZT) no se tocan."""
+    if len(old) != len(new):
+        raise ValueError("prefijos de distinto largo: %s / %s" % (old, new))
+    n, tbl = struct.unpack_from(">II", hd, 0x10)
+    out = bytearray(hd)
+    for k in range(n):
+        off, size, _, _ = struct.unpack_from(">4I", hd, tbl + 16 * k)
+        if size and hd[off:off + 4] == b"#AWO":
+            seg = bytes(out[off:off + size])
+            out[off:off + size] = seg.replace(old.encode() + b"_", new.encode() + b"_")
+    return bytes(out)
+
+
+def traje_desde_port(a):
+    """Un port ya importado (mods/<mod>/personaje.toml) como traje extra de un personaje del juego
+    (mods/<salida>/traje.toml, roster_build.build_trajes). El port sigue igual: no se quita nada."""
+    import shutil  # noqa: PLC0415
+    import tomllib  # noqa: PLC0415
+    import roster_build as rb  # noqa: PLC0415
+    mods = a.mods or rb.default_mods()
+    src = os.path.join(mods, a.mod)
+    cfg = tomllib.load(open(os.path.join(src, "personaje.toml"), "rb")).get("personaje", {})
+    cid = a.personaje if a.personaje is not None else cfg.get("donante")
+    dn = rb.IDS.get(cid)
+    if dn is None or not dn.get("models"):
+        raise SystemExit("ERROR: el personaje %r no es del juego" % cid)
+    files = cfg.get("modelos", [])
+    if not files:
+        raise SystemExit("ERROR: %s no tiene modelos" % a.mod)
+    work = rb.work_dir("traje_")
+    us = a.us or rb.default_us()
+    cmn = rb.Afs(os.path.join(us, "data_cmn.afs"), work)
+    per = max(1, dn["models_per_costume"])
+    forma = cfg.get("modelo_forma") or list(range(len(files)))
+    # que modelo usa el juego en cada forma (roster_db form_models: [ID, modelo del traje]); sin el dato, uno por
+    # modelo del traje 1
+    fm = dn.get("form_models") or [[cid, k] for k in range(per)]
+    out_mod = a.salida or ("traje_" + a.mod)
+    dst = os.path.join(mods, out_mod)
+    os.makedirs(os.path.join(dst, "modelos"), exist_ok=True)
+    rels, hechos = [], {}
+    for f, (fid_id, mi) in enumerate(fm):
+        if fid_id != cid:                 # forma que es otro personaje (Vegeta SSJ4 = ID 92): el del juego tal cual
+            otro = rb.DB.get("form_ids", {}).get(str(fid_id), {})
+            nat = otro.get("models", [None])[min(mi, max(0, otro.get("models_per_costume", 1) - 1))]
+            if nat is not None:
+                rels.append("juego:%d" % nat)
+                rb.log("traje: forma %d (ID %d) con el modelo del juego %d" % (f, fid_id, nat))
+                continue
+        if (fid_id, mi) in hechos:        # el juego reutiliza el modelo (SSJ2 de Vegeta = el del SSJ)
+            rels.append(hechos[(fid_id, mi)])
+            continue
+        k = forma[min(f, len(forma) - 1)]  # forma del port mas cercana (sin la suya, la ultima que tenga)
+        m = files[min(k, len(files) - 1)]
+        hd = rb.to_hd(open(os.path.join(src, m), "rb").read(), work)
+        want = rb.prefix(rb.skeleton(rb.to_hd(cmn.entry(dn["models"][min(mi, per - 1)]), work), work)[0])
+        have = rb.prefix(rb.skeleton(hd, work)[0])
+        if want and have and want != have:
+            hd = _relabel_awo(hd, have, want)
+            rb.log("traje: forma %d con los huesos de la forma del juego (%s_ -> %s_)" % (f, have, want))
+        rel = "modelos/forma%d.bin" % (f + 1)
+        open(os.path.join(dst, rel), "wb").write(hd)
+        hechos[(fid_id, mi)] = rel
+        rels.append(rel)
+    nombre = a.nombre or cfg.get("nombre", a.mod)
+    with open(os.path.join(dst, "traje.toml"), "w", encoding="utf-8") as fh:
+        fh.write("# Traje de epoca creado con importar.py traje desde el port %s (que sigue instalado)\n" % a.mod)
+        fh.write("[traje]\npersonaje = %d\nnombre = %s\nmodelos = [%s]\n"
+                 % (cid, json.dumps(nombre, ensure_ascii=False), ", ".join('"%s"' % r for r in rels)))
+    shutil.rmtree(work, ignore_errors=True)
+    emit("traje", out_mod, cid, nombre, len(rels))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1487,23 +1580,38 @@ def main():
     r.add_argument("--preset", help="otro preset (por defecto, el que uso)")
     r.add_argument("--opcion", action="append", default=None, metavar="CLAVE=VALOR",
                    help="sustituye las opciones guardadas")
-    sub.add_parser("oficiales", help="lista los ports oficiales (ports_oficiales.toml)")
+    lo = sub.add_parser("oficiales", help="lista los ports oficiales (ports_oficiales.toml)")
+    lo.add_argument("--recetas", help="otro catalogo de recetas (p. ej. ports_vision.toml)")
+    lo.add_argument("--mods", help="carpeta de mods donde mirar si ya esta instalado")
+    t = sub.add_parser("traje", help="un port importado como traje extra de un personaje del juego")
+    t.add_argument("mod", help="mod del port (p. ej. vis_iw_vegeta_saiyan)")
+    t.add_argument("--personaje", type=int, help="ID del personaje del juego (por defecto, el donante)")
+    t.add_argument("--nombre")
+    t.add_argument("--salida", help="carpeta del mod nuevo (por defecto traje_<mod>)")
+    t.add_argument("--mods")
+    t.add_argument("--us")
     o = sub.add_parser("oficial", help="crea o rehace un port oficial desde tus discos")
+    o.add_argument("--recetas", help="otro catalogo de recetas (p. ej. ports_vision.toml)")
     o.add_argument("mod", nargs="?")
     o.add_argument("--todos", action="store_true")
     o.add_argument("--mods")
     o.add_argument("--us")
     o.add_argument("--carpeta")
     a = ap.parse_args()
+    if getattr(a, "recetas", None):
+        global OFICIALES
+        OFICIALES = a.recetas if os.path.isabs(a.recetas) else os.path.join(HERE, a.recetas)
     if a.cmd == "rehacer":
         return rehacer(a)
+    if a.cmd == "traje":
+        return traje_desde_port(a)
     if a.cmd == "oficial":
         if not a.mod and not a.todos:
             ap.error("oficial: di que mod (o --todos)")
         return oficial(a)
     if a.cmd == "oficiales":
         import roster_build as rb  # noqa: PLC0415
-        mods = rb.default_mods()
+        mods = a.mods or rb.default_mods()
         for mod, r in oficiales().items():
             # mod, nombre, fuente, listo|falta (juego de origen), instalado 1|0, preset
             emit("oficial", mod, r["nombre"], r["fuente"], "listo" if source_path(r["fuente"]) else "falta",
