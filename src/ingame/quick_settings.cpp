@@ -197,6 +197,13 @@ void ConfigureQuickMenu(rex::ui::QuickMenuConfig& menu, std::function<void()> op
     rim.display_scale = 100.0;
     rim.format = "%.0f%%";
   }
+  image.items.push_back(Choice(
+      T::T("Sombras de contacto", "Contact shadows"), "dbz3_relight",
+      {{"0", T::T("No", "Off")}, {"1", T::T("Baja", "Low")}, {"2", T::T("Alta", "High")}},
+      T::T("Experimental: oscurece un poco los rincones de la escena 3D (no la interfaz). "
+           "Cuesta rendimiento.",
+           "Experimental: slightly darkens the corners of the 3D scene (not the HUD). Costs "
+           "performance.")));
 
   auto& sound = menu.sections.emplace_back();
   sound.title = T::T("SONIDO Y MANDO", "SOUND & PAD");
@@ -252,6 +259,67 @@ void ConfigureQuickMenu(rex::ui::QuickMenuConfig& menu, std::function<void()> op
     full.action = std::move(open_full_settings);
     screen.items.push_back(std::move(full));
   }
+
+  // Combate (frente combate, src/combate.cpp): todo apagado de serie; lo que cambia el combate no se usa online.
+  auto& fight = menu.sections.emplace_back();
+  fight.title = T::T("COMBATE (OPCIONAL)", "FIGHT (OPTIONAL)");
+  fight.items.push_back(Toggle(
+      T::T("Aviso de golpe", "Hit warning"), "dbz3_combate_aviso",
+      T::T("Un aro bajo tu barra de vida cuando un golpe del rival va a llegar: es el momento de pulsar la guardia "
+           "para el contraataque. Solo se ve: no cambia el combate.",
+           "A ring under your health bar when a rival hit is about to land: the moment to press guard for the "
+           "counter. Display only: the fight does not change.")));
+  fight.items.push_back(Toggle(
+      T::T("Reglas competitivas v0", "Competitive rules v0"), "dbz3_combate_reglas_v0",
+      T::T("AVISO: cambia el dano de 2 golpes de Goku (patada 50 a 70, adelante + punetazo 35 a 50). Apagado es el "
+           "juego original. No se usa en el online.",
+           "WARNING: changes the damage of 2 Goku hits (kick 50 to 70, forward + punch 35 to 50). Off is the "
+           "original game. Not used online.")));
+  fight.items.push_back(Toggle(
+      T::T("Definitiva directa", "Direct ultimate"), "dbz3_combate_definitiva_directa",
+      T::T("La definitiva sin entrar en el modo hiper: su misma entrada, pagando una vez el ki de su capsula. No se "
+           "usa en el online.",
+           "The ultimate without entering hyper mode: same input, paying its capsule's ki once. Not used online.")));
+  fight.items.push_back(Choice(
+      T::T("Boton de cancelacion", "Cancel button"), "dbz3_combate_boton_cancel",
+      {{"no", T::T("No", "Off")}, {"lb", "LB"}, {"rb", "RB"}},
+      T::T("Ese boton hace adelante + ki de una vez (la cancelacion al final de un combo) y deja de hacer su atajo. "
+           "Mantenerlo no repite. No se usa en el online.",
+           "That button does forward + ki at once (the cancel at the end of a combo) instead of its shortcut. "
+           "Holding it does not repeat. Not used online.")));
+  fight.items.push_back(Choice(
+      T::T("Perder la transformacion", "Lose transformation"), "dbz3_combate_reversion",
+      {{"0", T::T("No", "Off")}, {"50", T::T("Golpes de 50 o mas", "Hits of 50+")}, {"100", "100+"}, {"300", "300+"}},
+      T::T("Un golpe de ese dano o mas te devuelve a la forma normal, como cuando te quedas sin ki. Las fusiones no "
+           "cambian. No se usa en el online.",
+           "A hit of that damage or more sends you back to normal form, like running out of ki. Fusions do not "
+           "change. Not used online.")));
+  fight.items.push_back(Toggle(
+      T::T("Sonda del laboratorio", "Lab probe"), "dbz3_combate_sonda",
+      T::T("Guarda cada cuadro y cada golpe del combate en logs/combate_*.csv para medir los golpes (frame data).",
+           "Saves every frame and hit of the fight to logs/combate_*.csv to measure moves (frame data).")));
+  // Escenario (frente escenarios: clima.cpp, gigantes.cpp, cine.cpp): apagados de serie; ninguno actua en el online.
+  auto& stage = menu.sections.emplace_back();
+  stage.title = T::T("ESCENARIO (OPCIONAL)", "STAGE (OPTIONAL)");
+  stage.items.push_back(Toggle(T::T("Clima vivo", "Living weather"), "dbz3_clima",
+                               T::T("El cielo del escenario se oscurece poco a poco durante el combate. Solo se "
+                                    "ve: no cambia el combate. No se usa en el online.",
+                                    "The stage sky slowly darkens during the fight. Display only: the fight does "
+                                    "not change. Not used online.")));
+  stage.items.push_back(Choice(T::T("Jefe gigante", "Giant boss"), "dbz3_jefe_gigante",
+                               {{"0", T::T("No", "Off")}, {"1.25", "125 %"}, {"1.5", "150 %"}, {"1.75", "175 %"},
+                                {"2", "200 %"}, {"2.5", "250 %"}},
+                               T::T("El rival que controla la consola sale más grande, como un jefe gigante, y la"
+                                    " cámara se abre para verlo. Solo cambia su tamaño en pantalla. No se usa en "
+                                    "el online.",
+                                    "The rival controlled by the console appears bigger, like a giant boss, and "
+                                    "the camera widens to show it. Only its on-screen size changes. Not used "
+                                    "online.")));
+  stage.items.push_back(Toggle(T::T("Intro de cine", "Cinematic intro"), "dbz3_cine_intro",
+                               T::T("Al empezar cada combate, 10 s de cámara de cine sobre el escenario y los "
+                                    "luchadores; A la salta. No se usa en el online.",
+                                    "When each fight starts, 10 s of cinematic camera over the stage and the "
+                                    "fighters; A skips it. Not used online.")));
   REXLOG_INFO("dbz3: quick settings menu ready (F1 / {})", rex::cvar::GetFlagByName("quick_menu_buttons"));
 }
 

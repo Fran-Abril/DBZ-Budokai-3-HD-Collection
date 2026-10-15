@@ -12,6 +12,7 @@
 #include <rex/graphics/graphics_system.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <atomic>
 #include <cctype>
 #include <cstdint>
@@ -33,6 +34,19 @@
 #include <rex/ui/window.h>
 #include <rex/ui/windowed_app_context.h>
 
+// dbz3 (tests): guest vblank N times slower, so the game advances one frame
+// every N / 60 s and live setting changes can be captured on almost the same
+// picture (relight before / after comparisons).
+REXCVAR_DEFINE_INT32(dbz3_vblank_slowdown, 1, "DBZ3/Dev",
+                     "Tests: guest vblank this many times slower (1 = normal)")
+    .range(1, 1000)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+// Only in automated tests (pruebas.py sets DBZ3_NO_DIALOGS): a value saved in
+// a player's settings by mistake never slows the game.
+static uint64_t Dbz3VblankSlowdown() {
+  static const bool tests = std::getenv("DBZ3_NO_DIALOGS") != nullptr;
+  return tests ? uint64_t(std::max(REXCVAR_GET(dbz3_vblank_slowdown), 1)) : 1;
+}
 REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU",
                       "Anti-aliasing of the final image: none, fxaa, fxaa_extreme")
     .allowed({"none", "fxaa", "fxaa_extreme"});
@@ -183,7 +197,7 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
           // than one 60 Hz frame (vsync=false becomes a no-op).
           uint64_t interval_ticks = std::max(
               REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks,
-              vsync_interval_ticks);
+              vsync_interval_ticks) * Dbz3VblankSlowdown();
           while (current_time - last_frame_time >= interval_ticks) {
             MarkVblank();
             last_frame_time += interval_ticks;

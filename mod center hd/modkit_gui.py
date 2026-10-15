@@ -54,6 +54,8 @@ DISCORD_URL = ""
 HERE = os.path.dirname(os.path.abspath(__file__))          # .../mod center hd
 KIT = os.path.dirname(HERE)                                  # carpeta del kit (junto a dbz3.exe)
 AWO = os.path.join(KIT, "awo_tools")
+sys.path.insert(0, HERE)
+import swap_b3  # noqa: E402  (deteccion validada del data_cmn.afs del Budokai 3 HD, la misma que las herramientas)
 IS_WIN = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WIN else 0                      # CREATE_NO_WINDOW
 SELF_NAME = os.path.basename(os.path.abspath(__file__))
@@ -323,9 +325,16 @@ class Env:
         return os.path.join(KIT, "mods")
 
     def _find_us(self):
+        # el data_cmn.afs del Budokai 3 HD comprobado (entradas y LZX): la carpeta elegida, la del launcher
+        # (dbz3_game_dir), DBZ3/us de un volcado del disco... Antes valia cualquier us/ (un jugador con el de
+        # otro juego veia "IndexError" en la vista previa).
+        good = swap_b3.find_us(self.us_override if os.path.isdir(self.us_override) else None,
+                               roots=(self.game, KIT))
+        if good:
+            return good
         if self.us_override and os.path.isdir(self.us_override):
             return os.path.abspath(self.us_override)
-        # launcher (ProjectRoot): sube desde el exe buscando us/ o assets/us/
+        # sin datos buenos: la primera us/ que haya, para decir en «Comprobar instalación» qué le pasa
         probe = self.game or KIT
         for _ in range(6):
             for sub in ("us", os.path.join("assets", "us")):
@@ -341,9 +350,7 @@ class Env:
     @property
     def tool_default_us(self):
         """La carpeta us/ que las herramientas usan solas (swap_b3.DEFAULT_AFS)."""
-        p = first_existing(os.path.join(KIT, "assets", "us", "data_cmn.afs"),
-                           os.path.join(KIT, "us", "data_cmn.afs"))
-        return os.path.dirname(p) if p else os.path.join(KIT, "assets", "us")
+        return os.path.dirname(swap_b3.DEFAULT_AFS)
 
     def pass_us(self):
         """El launcher solo pasa --us/--afs con una ruta propia; aqui tambien cuando el juego no
@@ -514,6 +521,7 @@ def spawn(cmd, cwd=None):
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"       # que una tilde en la salida no rompa la herramienta
     env["PYTHONUNBUFFERED"] = "1"           # registro en vivo
+    env["DBZ3_LANG"] = LANG                 # avisos de las herramientas en el idioma del Kit (swap_b3.ui_lang)
     return subprocess.Popen([str(c) for c in cmd], cwd=cwd or None, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env,
                             creationflags=NO_WINDOW)
@@ -2349,9 +2357,11 @@ def collect_checks(app):
                     "dbz3.exe not found. Copy the kit next to dbz3.exe or choose the game folder."),
                 "action": None if env.game else (T("Elegir carpeta…", "Choose folder…"), app.pick_game)})
     afs = env.afs
+    bad = afs and os.path.isfile(afs) and swap_b3.cmn_problem(afs)
     out.append({"key": "data", "title": T("Datos del juego", "Game data"),
-                "level": "ok" if afs and os.path.isfile(afs) else "warn",
-                "detail": afs if afs and os.path.isfile(afs) else T(
+                "level": "err" if bad else "ok" if afs and os.path.isfile(afs) else "warn",
+                "detail": str(swap_b3.no_cmn_error(afs, LANG))[len("ERROR: "):] if bad else
+                afs if afs and os.path.isfile(afs) else T(
                     "No encuentro los datos del juego (carpeta us). Los mods necesitan el juego extraído en una "
                     "CARPETA (jugando desde la ISO no se aplican).",
                     "The game data (us folder) was not found. Mods need the game extracted to a FOLDER (they "
@@ -6478,6 +6488,15 @@ def selftest(lang=None):
                 say("FAIL: importar.py fuentes rc=%s\n%s" % (rc, text[-800:]))
             else:
                 say("importar.py fuentes -> rc=0, %d sources parsed" % len(srcs))
+            # Heroes: la lista trae TODOS los modelos (antes 24) y Xeno Janemba con su nombre
+            if any(s["id"] == "sdbh" and s["state"] == "listo" for s in srcs):
+                rc, text = run_sync(cmd_importer(env, ["lista", "sdbh"]), env.cwd(), timeout=120)
+                lst = parse_entries(text)
+                if rc != 0 or len(lst) < 300 or not any(e["key"] == "JNO" and e["name"] == "Xeno Janemba" for e in lst):
+                    ok = False
+                    say("FAIL: importar.py lista sdbh rc=%s, %d personajes" % (rc, len(lst)))
+                else:
+                    say("importar.py lista sdbh -> %d characters (Xeno Janemba included)" % len(lst))
         else:
             ok = False
             say("FAIL: importar.py / roster_build.py not found next to the GUI")

@@ -3,6 +3,220 @@
 Copias de prueba: `D:\DBZ3HD\aura_test` (combates) y `D:\DBZ3HD\ports_test` (traje de época). Nunca el juego ni la
 partida del usuario. Herramientas de este turno en `E:\DBZ3HD_trabajo\ports\` (ver §6).
 
+## Ronda 3 (2026-10-15 tarde): lo que faltaba para el 100 %
+
+Pruebas en `D:\DBZ3HD\aura_test`, `D:\DBZ3HD\ports_test`, `D:\DBZ3HD\zarbon_test` (solo Zarbon B1) y
+`D:\DBZ3HD\voces_b`; capturas en `D:\DBZ3HD\_pruebas\20261015-<hora>_<copia>_<prueba>`. Las carpetas de las rondas 1-2
+(anteriores a las 14:00) se movieron a `E:\DBZ3HD_trabajo\ports\pruebas_archivo\` (el disco D se llenó a las 16:28).
+
+### R3.1 Qué ve el jugador ahora
+| Antes | Ahora | Prueba |
+|---|---|---|
+| Fat y Ghost Gotenks «se transformaban» (aura de Super Saiyan del donante sin cambiar de modelo) | Sus cápsulas por defecto y las heredables ya no traen las transformaciones del donante: luchan en su única forma | `143237` (Fat) y `143820` (Ghost): formas vistas [0], 11-12 técnicas, sin transformación |
+| Vegeta saga Saiyan como 5.º traje de Vegeta solo cambiaba el modelo | Ese traje juega con los golpes, técnicas (Galick Gun, Final Impact), cápsulas propias (Super Saiyan, 628-631) y aura morada del Vegeta saga Saiyan; en el select sale un rótulo «Traje de época: golpes y cápsulas propios» | `161418` (Torre: SSJ con su cápsula, Galick Gun; `hoja_traje_enlazado.png`), `150808` (rótulo y combate desde el Duelo) |
+| Roshi gritaba con la voz de Krilin | Roshi grita con sus voces de Super Dragon Ball Heroes (43 grabaciones) | montaje «gritos propios (wav:gritos)»; en combate `gritos RXADPC en uso` (`155352`) |
+| Zarbon B1 salía blanco entero (normal y transformado) | Con sus colores y sombreado | `152348` (transformado), `162736` (normal) |
+
+### R3.2 Cómo se arregló
+- **Gotenks** (`roster_build.py`, ports de una forma): con `formas = 1`, las cápsulas de transformación del donante
+  salen de `hereda` y de `capsulas`, y `capsulas_forma = [0]`.
+- **Traje enlazado (ficha 07)**: `traje.toml` admite `enlazado = "<mod del personaje>"` (lo pone `importar.py traje`;
+  `--sin-enlace` lo quita) y el montaje escribe `traje_enlazado = [traje, ID]`. En el juego (`src/ports_guard.cpp`),
+  justo antes de montar el combate, el jugador que lleva ese traje pasa a ser ese personaje (traje 0) con sus cápsulas
+  por defecto; después la selección vuelve a quedar como estaba (el select recuerda su casilla y su traje; la revancha
+  vuelve a pasar por ahí). Dos caminos, los dos cubiertos: HUB/retos (espera de la escena 24: `sub_821D7FE8` →
+  `sub_820FE668`) y Duelo del juego (`sub_820FFA80`, que arma la configuración desde la partida). Rótulo: panel
+  propio en el select, bajo la ayuda de LT/RT.
+- **Roshi**: `awo_tools/cri.py` (nuevo) lee los `.cpk` de SDBH World Mission, sus tablas `@UTF`, los `.acb` (nombre de
+  cada sonido → onda) y los `.awb` (AFS2). Las voces de Roshi están en `data_07_win.cpk`: `bckms/CueSheet_BCKMS` y
+  `CueSheet_BCKMS_PWUP` (HCA de 16 kHz sin cifrar; los decodifica ffmpeg). Son los sonidos `BKMS_nnn` (43 distintos;
+  `KamehameCharge`, `DBZP_...` son efectos). `importar.py` los guarda en `<mod>/gritos/*.wav` y pone
+  `gritos = "wav:gritos"`; `gritos.wav_pool` los reparte por duración en el banco de gritos del juego (volumen igualado
+  al de las grabaciones de IW). El preset `sdbh.original` ya no fuerza las voces del donante.
+- **Zarbon B1** (`awo_tools/rampas.py`, `desde_b1`): los modelos de Budokai 1 no traen rampa de sombreado y su tipo de
+  material (0x1BD) no es el de B3 (0x1B5/0x29BD con rampa): el juego los pintaba blancos. Se crea una rampa al estilo
+  de B3 por textura (como con B2) y se pone el tipo de los nativos. El montaje lo aplica a todo modelo de B1.
+
+### R3.3 Definitivas de Pan y Janemba, y el aviso del efecto de Goku SDBH
+- **Janemba** (Spike Hell, cápsula 598): sale contra Krilin COM (`140309`) y 4 veces contra el muñeco (`161050`), sin
+  cierres.
+- **Pan** (Reliable Friend, cápsula 612): sale 2 veces contra Videl (`151449`, regla «definitiva directa»,
+  `hoja_definitiva_pan.png`) y 4 veces contra el muñeco (`160646`, `161509`). **Una vez el juego se cerró**, a los 16 s
+  de su segunda definitiva contra el muñeco (`160646`: lectura de 0x24 en la lista de efectos, `lr 0x821554B0`); al
+  repetirlo (`161509`) no pasó. Queda abierto (ver «Pendiente de la ronda 3»).
+- **Goku SDBH, efecto 47**: solo aparece cuando su **definitiva acaba estando en Kaio-ken** (forma 1). El Goku del
+  juego en la misma situación no da avisos (`142142`: 3 definitivas en Kaio-ken). El banco del efecto no es el aura ni
+  la ranura de técnicas del luchador. En pantalla no se ve nada raro (solo falta ese destello). Sin arreglar: sale en uno de cada dos o tres combates (en `164621` no salió) y no se ha localizado qué fichero carga el Goku del juego para ese final; el aviso no cierra el juego.
+
+### R3.4 Voces oídas de verdad (música a 0)
+- **Lo que suena es suyo**: los bancos de gritos que monta el juego para cada port, decodificados fuera del juego con
+  la misma lógica que usa (`gritos.rx_decode`), traen voz audible: Roshi 51 de 56 huecos (41 s, voces de SDBH), Fat y
+  Ghost Gotenks 55 de 55 (45 s, Gotenks de IW), Pan 47 de 55, Janemba 51 de 56, y también Baby, Goku GT, Vegeta GT,
+  Future Gohan y Trunks SB2 (`D:\DBZ3HD\ports_test\mods\_roster`). En cada combate de prueba el juego las usa
+  (`XmaContext: gritos RXADPC (personaje portado) en uso`).
+- **Medida por el registro de audio (`audio pico` cada 5 s, música a 0)**: no basta para decir «este pico es el grito».
+  La ventana de 5 s mezcla el grito con golpes, rayos y viento; con el muñeco quieto los dos lados hacen ruido. La
+  prueba A/B (mismo combate con las voces del port en silencio: `silencio.py`, `voces_ab.py`) da diferencias del
+  tamaño del azar del COM (Roshi: 5 ventanas con pico > 0,9 con voces, 3 sin ellas; Fat Gotenks: 1 y 3). La copia B
+  aparte (`voces_b`) no quedó con la música a 0, y la repetición en la misma copia se cortó a las 17:15 (falta de los datos del juego).
+- **Conclusión honesta**: el juego carga y reproduce los bancos con voz de cada port (comprobado); que se *oigan* por
+  encima del resto no se puede demostrar con este medidor. Hace falta escucharlo (o un medidor por voz en el runtime:
+  propuesta, no es de este frente).
+
+### R3.5 Ports desde el HUB con su lista Normal de cápsulas
+El conector del HUB ya da a cada luchador sus cápsulas de serie (`dbz3 hub: lado N (id X): n capsulas de serie`).
+Probado sin cierres: Torre con Roshi (`153907`, `154759`: 2 combates ganados), Kumite con Janemba (`155018`), Torre con
+el traje enlazado de Vegeta (`161418`), Supervivencia con Vegeta saga Saiyan (`163938`: 5 cápsulas de serie, 628-632, se transforma) y todos los combates de prueba de esta ronda (que ya pasan por
+ese conector). La excepción es el cierre de Pan de R3.3.
+
+### R3.6 Fichas
+| Ficha | Entregable mínimo (texto de la ficha) | Qué hay | Prueba | Nota |
+|---|---|---|---|---|
+| **07** Trajes de época | «Un personaje con un traje de época: modelo + moveset alternativo + cápsulas + color, jugable y con badge» | Vegeta, 5.º traje «Vegeta (Saga Saiyan)»: modelo de IW por forma, moveset y técnicas de IW, cápsulas propias, aura morada y rótulo en el select. La ficha marcaba el «moveset por traje» como [P] porque faltaba el punto donde el juego elige el moveset: ese punto es el montaje del combate (traje → personaje), y ahí el traje se enlaza a un personaje con todo lo suyo | `161418` (Torre: traje 5 → Vegeta saga Saiyan, Super Saiyan con su cápsula, Galick Gun), `150808` (rótulo en el select y combate desde el Duelo). El rótulo se fotografió con un traje de Goku enlazado a Goku SDBH (solo en la copia de pruebas): en las partidas de prueba Vegeta está bloqueado | **1** |
+| **13** Maestro Roshi | «Un traje y una técnica, en Versus/Práctica, movimientos compatibles del donante. Documentar toda sustitución provisional en Mod Kit» | Roshi de SDBH con los golpes y técnicas de Krilin (sustitución documentada en la receta `ports_vision.toml` y aquí) y sus voces de SDBH | `093333` (ronda 2) y la batería WL-13 de abajo | **1**: traje (modelo de SDBH), técnicas de Krilin, en Versus, sustitución documentada; WL-13: los 12 casos PASS y la variante terrestre bloqueada como dice la ficha |
+
+### WL — WL-13 (Maestro Roshi; `studies/11_vision_futura/13_maestro_roshi.md` e `INTEGRACION_SEGURA.md`)
+| Caso | Prueba | Resultado |
+|---|---|---|
+| Contra rival aéreo, Roshi en el lado 1 | Roshi contra Goku, los dos COM (`153522`): Goku vuela y se transforma en Kaio-ken; Roshi le persigue (combos de 23 golpes, 6 técnicas) | PASS |
+| Contra rival aéreo, Roshi en el lado 2 | Goku contra Roshi (`154225`): modo hiper y técnicas de los dos | PASS |
+| Dos Roshis a la vez (espejo) | Roshi contra Roshi (`154640`): uno en el aire, contraataques, 5 y 7 técnicas | PASS |
+| Agarre | En los tres combates los COM agarran y lanzan sin quedarse colgados | PASS |
+| K.O. | `155621`: el rival cae y Roshi hace su pose de victoria («WINNER!») | PASS |
+| Transformación | Roshi no tiene formas: sin las cápsulas de transformación de Krilin (lista `54 55`) | PASS |
+| Relevo de Tag Team sin huecos | Roshi + Krilin contra Goku + Yamcha con relevo cada 10 s (`155816`): Roshi → Krilin → Roshi, ficha del equipo con «Maestro Roshi», sin avisos ni cierres | PASS |
+| Revancha | Roshi contra Krilin; al acabar, «Battle Again?» (`173922`): la segunda pelea empieza (estados 7 → 2 → 3 → 4) con los dos | PASS |
+| Sin T-pose ni bloqueo por una animación que falte | Ninguna captura de las pruebas la muestra | PASS |
+| Cápsulas aisladas del anfitrión | Roshi tiene su lista (`54 55`: las de Krilin sin sus transformaciones); Krilin conserva la suya | PASS |
+| Desactivar restaura celda y donante y no toca el guardado | Con la marca `.disabled` el montaje deja 18 personajes (sin Roshi), Krilin pelea con su lista del juego (`165543`), al quitar la marca vuelve (19) y el guardado no cambia (mismo md5 antes y después) | PASS |
+| **Variante terrestre** | **Bloqueada**: Roshi usa la locomoción de Krilin (vuela). La ficha la deja bloqueada hasta probar el lanzamiento y la vuelta al suelo; no se ha intentado | Bloqueada (documentado) |
+
+### R3.7 Ficheros tocados en la ronda 3
+- Míos: `src/ports_guard.cpp` (traje enlazado en los dos caminos y rótulo),
+  `awo_tools/cri.py` (nuevo), `awo_tools/rampas.py` (`es_b1`, `desde_b1`), `mod center hd/importar.py` (`enlazado`,
+  `--sin-enlace`, voces de SDBH), `mod center hd/gritos.py` (`wav_pool`, `gritos = "wav:carpeta"`),
+  `mod center hd/presets_importar.toml` (`sdbh.original`), `mod center hd/ports_vision.toml` (aura morada de Vegeta
+  saga Saiyan), este documento.
+- `mod center hd/roster_build.py` (permitido en esta ronda): Gotenks sin transformación del donante,
+  `traje_enlazado`, `gritos = "wav:..."`, modelos de B1 en `b3_ramps`.
+- **Aviso a campañas**: Zarbon B1 de `presets_test`/`campanas_test` sale bien al volver a montar el roster de esa copia
+  (`roster_build.py construir --mods ...`).
+- Pruebas nuevas en `E:\DBZ3HD_trabajo\ports\`: `wl13.py` (revancha), `voces_ab.py` (voces A/B), `silencio.py`
+  (copia B sin voces y vuelta atrás), `combate_ports.py --cvar` y volcado del banco de un efecto que falta.
+
+### Pendiente de la ronda 3
+- Entre las 17:15 y las 17:36 faltaron los datos del juego del proyecto (`us\`, `eu\`; los movió el coordinador y ya
+  están): las pruebas de ese rato se repitieron después (revancha, Vegeta GT, batería).
+- **Pan, definitiva contra el muñeco**: un cierre en 5 definitivas (`160646`, nodo de efecto nulo en `sub_82155228`,
+  `lr 0x821554B0`); no se repitió en `161509` ni en `174501`. Medido: `sub_82152890` saca los nodos de efecto de un
+  anillo de 2048 (`0x8242E8B0`, índice `0x823EE804`) sin mirar si siguen en uso; Pan llega a ~1150 por segundo y
+  Janemba a ~1200-1990 sin cerrarse (`175025`), así que no es solo cuestión de cantidad. Queda abierto.
+- **Goku SDBH, efecto 47** al acabar una definitiva en Kaio-ken (R3.3).
+- **Voces**: confirmarlas de oído (R3.4).
+- **Batería `python tools/pruebas.py todo`**: 5/5 PASS (repetida a las 17:45, tras reponer los datos).
+- **Vegeta GT en la EU** (aviso del frente eu: cierre en su entrada con presentación): su copia `eu_test` tiene un
+  roster de las 03:37, anterior a `cam_pad_clips`; la cámara de Vegeta GT allí tiene 24 clips y en las mías 35 (la
+  del donante). Con el montaje actual entra bien con la presentación completa (`173557`: estados 1 → 2 → 3 → 4, en
+  US). Arreglo para la EU: volver a montar el roster de `eu_test` con el `roster_build.py` actual.
+- **Copias**: `aura_test` vuelve a tener su roster con voces (restaurado desde su `mods_respaldo`); `voces_b` es la
+  copia B (voces en silencio; los originales en `E:\DBZ3HD_trabajo\ports\ab_respaldo\voces_b`); `ports_test` lleva un
+  traje de Goku solo de prueba (`traje_prueba_goku_sdbh`, enlazado a Goku SDBH) para fotografiar el rótulo.
+- **`src/ports_guard.cpp` cerrado** para que el frente eu lo pase a la EU: ganchos `sub_821266A8`, `sub_821D7FE8`
+  (con su `lr 0x821D7428` y la petición `0x8247A990`) y `sub_820FFA80`; direcciones US: CFG `0x8245EFC0`, partida
+  `0x824BA110`, cápsulas del Duelo `0x8245EF92`, `char96 0x8234ABB8`. Todo va con `!dbz3::g_guest_eu`.
+
+## Ronda 2 (2026-10-15 mañana): cierre de la verificación y fichas 07, 08, 13, 20
+
+### R2.1 Cómo se ha probado (sin teclas simuladas)
+- `E:\DBZ3HD_trabajo\ports\combate_ports.py` con la presentación nativa del hub (modo 1): captura de las **entradas**
+  en el estado 2 de cada combate (los dos luchadores).
+- **Técnicas, transformación y definitiva**: `DBZ3_TEST_CAPS` (del hub) equipa las cápsulas del port al jugador 1 y
+  la prueba lo pasa a **COM** (hueco de mando `X+5028 = -1`, lo mismo que hace `tagteam.cpp` con el COM; escribir
+  `-1` en la CFG del jugador 1 llega tarde: el combate ya la copió) y le rellena el ki. Así el COM del port
+  transforma, lanza sus técnicas (el rótulo de la cápsula sale en pantalla) y la definitiva (minijuego «COM ATTACK /
+  COM DEFENSE»).
+- **Voces**: la prueba lee de la memoria la tabla de voces que el juego carga para cada ID (`0x823280B0`). El
+  `audio pico` del log es la mezcla entera (música incluida): no sirve para atribuir una voz.
+
+### R2.2 Fallos encontrados y arreglados (en el montaje)
+1. **Yamcha amarillo cerraba el juego al lanzar su definitiva (Spirit Ball) o una técnica**: con su fichero de
+   técnicas de IW el juego pedía efectos (12, 13, 14) que no existen y se cerraba (`efecto N que no esta en el banco`,
+   `...083523`, `...090253`, `...101408`, `...103244`). Con el fichero del Yamcha del juego no pasa
+   (`...110352`: la definitiva dos veces, Kamehameha y Wolf Fang Fist, sin avisos). Sus tres técnicas de IW son las
+   mismas que las del Yamcha del juego: receta con `tecnicas = "donante"` (clave nueva en `roster_build.py`: técnicas
+   del donante aunque el moveset sea de la fuente).
+   Por el camino: los registros de ráfaga de IW (`#CST` 360/361) de Yamcha, Pan y Janemba usan el «banco 6» (el de
+   los personajes con aura de Super Saiyan); `bsp_bank6_fix` los copia del primer rayo del personaje (quitó el efecto
+   12; no bastó para la definitiva). **Pan y Janemba de IW quedan por probar con su definitiva.**
+2. **Vegeta saga Saiyan (y Vegeta GT, Baby, Pan) cerraban el juego al acabar el vuelo de la presentación**: su cámara
+   de IW tiene menos clips que la del donante (Vegeta saga Saiyan 30, Vegeta 35) y la entrada pide el 30 → clip nulo
+   (`lr 0x820825A8`, `...084624`). Arreglo `cam_pad_clips`: se añaden al final los clips que faltan, del donante.
+   Probado: `...091039` (entradas de los dos y combate entero).
+3. **Fat y Ghost Gotenks «se transforman» en Super Saiyan sin cambiar de modelo** (cápsula de transformación del
+   donante, Trunks): las recetas llevan `formas = 1`, pero **no lo evita** si la cápsula está equipada (`124448`:
+   solo cambia el aura). Pendiente: quitar las cápsulas de transformación del donante en los ports de una forma
+   (en `roster_build.py`, de modkit; propuesta).
+4. **Pelo de Goku SDBH gris claro con brillos**: la textura del pelo venía con alfa 255 en toda la imagen, que en B3
+   significa «sin sombrear». `rampas.sombrear_planas` la pasa a la banda sombreada (solo en ports de SDBH; los del
+   juego no tienen ninguna así salvo una de Krilin). Ahora sale negro azulado como el Goku del juego
+   (`D:\DBZ3HD\_pruebas\20261015-110411_ports_test_combate_port\zz_pelo_despues_antes.png`: izquierda después, derecha antes). También
+   afecta a una textura de Goku Black.
+- Los arreglos 1, 2 y 4 están en `mod center hd/roster_build.py`, que en esta ronda es del frente **modkit**: son
+  pequeños (`bsp_bank6_fix`, `cam_pad_clips`, `tecnicas = "donante"`, `b3_ramps(..., c)`), llamados al montar. Aviso
+  a modkit para que los conserve. La lógica de rampas y texturas está en `awo_tools/rampas.py` (mío).
+
+### R2.3 Tabla por personaje (COM con cápsulas; capturas en `D:\DBZ3HD\_pruebas\<carpeta>\hoja_entrada.png` y `hoja_eventos.png`)
+«Definitiva» = el log del juego dice `dbz3 combate: ... definitiva ... (capsula N)` y sale el minijuego. «Voz» = la tabla
+de voces que carga el juego para ese ID (leída de la memoria); no se han escuchado (juego en silencio).
+
+| Personaje | Entrada | Técnicas | Transformación | Definitiva | Voz | Carpetas (`D:\DBZ3HD\_pruebas\20261015-...`) |
+|---|---|---|---|---|---|---|
+| Tenshinhan B2 | OK | OK (rayos, 7 gastos de ki) | no tiene | OK (2) | OK: la de Tenshinhan del juego (20) | `083046`, `120214` |
+| Yamcha amarillo | OK | OK (Kamehameha, Wolf Fang Fist) | no tiene | OK (1-2), tras el arreglo 1 | OK: la de Yamcha (21) | `083046`, `110352`, `113407` |
+| Fat Gotenks | OK | OK (Buster Cannon, Finish Buster, Burning Slash) | solo la del donante (aura, sin cambio de modelo) | OK (6) | OK: Gotenks de IW (16) | `083931`, `122514`, `124448` |
+| Ghost Gotenks | OK | OK (mismas, ráfagas) | solo la del donante (aura) | OK (3) | OK: Gotenks de IW (16) | `084242`, `123015`, `125202` |
+| Vegeta saga Saiyan | OK (tras el arreglo 2) | OK (Galick Gun, Final Impact) | OK (Super Saiyan) | OK (5) | OK: la de Vegeta (33) | `091039`, `120551` |
+| Goku SDBH | OK | OK (Super Dragon Fist) | OK (SSJ3 desde base; las 5 formas vistas antes) | OK (6) | OK: la de Goku (32) | `091039`, `100522`, `115600` |
+| Traje de Vegeta (saga Saiyan) | OK (5.º traje) | OK (Big Bang Attack) | OK (SSJ2, SSJ4 del juego) | OK (2) | OK: la de Vegeta | `092044`, `101113` |
+| Goku Black (nuevo) | OK | OK (Spirit Bomb) | OK (Rosé, aura rosa) | OK (4) | la de Goku (no hay voz de Black en las fuentes) | `092628`, `113929` |
+| Maestro Roshi (nuevo) | OK | OK (Destructo Disc) | la de Krilin (mismo modelo) | OK (2) | falla: la de Krilin (no hay voz de Roshi en ninguna fuente) | `093333`, `121046`, `125903` |
+| Yamhan (nuevo) | OK | OK (2 técnicas) | no tiene | OK (1) | la de Tenshinhan | `093805`, `123413` |
+| Yamhan, fusión fallida (nuevo) | OK | OK (Neo Ki Blast Cannon) | no tiene | OK (1) | la de Tenshinhan | `095111`, `124019` |
+
+Goku SDBH: 8 avisos de un efecto que no existe (47) al final de un combate (`115600`), sin cierre ni nada visible.
+
+
+### R2.4 Fichas de la visión
+| Ficha | Entregable mínimo (texto de la ficha) | Qué hay en el juego | Prueba | Nota |
+|---|---|---|---|---|
+| **07** Trajes de época | «Un personaje con un traje de época: modelo + moveset alternativo + cápsulas + color, jugable y con badge» | Vegeta saga Saiyan como 5.º traje de Vegeta (una forma por forma del juego) y también como personaje propio con su moveset, cápsulas y técnicas de IW | `...101113` (traje en la Torre: SSJ2, SSJ4 y Big Bang Attack), `...091039` (personaje) | **0,6**: el traje usa el moveset y las cápsulas de Vegeta; moveset y cápsulas por traje necesitan I+D en el runtime (la ficha lo marca [P]); sin «badge» |
+| **08** Goku Black (SDBH) | «Goku Black completo (modelo SDBH + moveset de Goku + Rosé + aura rosa + retrato), jugable» | Goku Black de SDBH World Mission (`bcgkb`: normal y Rosé), golpes de Goku, cápsula «Super Saiyan Rose», aura rosa (18 texturas), icono, retratos y cara del HUD generados del modelo | `...092628` (entrada, Rosé, técnicas, K.O.) | **1**: aura rosa al cargar ki (`113929\zz_aura_rosa_zoom.png`), definitiva 4 veces |
+| **13** Maestro Roshi | «Un traje y una técnica, en Versus/Práctica, movimientos compatibles del donante. Documentar toda sustitución provisional» | Roshi de SDBH World Mission (`bckms`, barba = huesos `xKMS_hige`) con los golpes y técnicas de Krilin (Destructo Disc) | `...093333` (entrada, Destructo Disc, K.O. al rival) | **0,9**: sustitución documentada en la receta (`ports_vision.toml`) y aquí; la lista WL-13 completa (agarre, Tag Team, dos Roshis…) sin hacer; voz de Krilin |
+| **20** Fusiones de B2 | «Una fusión como personaje independiente y una misión original» | Yamhan y Yamhan de la fusión fallida (B2, sin nombre en el juego), Fat Gotenks y Ghost Gotenks, todos jugables | `...093805`, `...095111` (Yamhan), `...083931`, `...084242` (Gotenks) | **0,5**: la mitad de este frente está hecha; la misión original es del frente de campañas (G2). Gokule no existe en B2 |
+
+Búsquedas (enjambre Haiku + render): Goku Black = `bcgkb` (b00 normal, b01 Rosé), Beerus = `bcbls`, Zamasu =
+`bczms`, Zamasu fusionado = `bczmu`, Roshi = `bckms`; Moro y Granolah no aparecen entre los 392 modelos (los
+candidatos `bcmoa`, `bcmoc`, `bcgrv`, `bcgrd` son otros personajes, `E:\DBZ3HD_trabajo\ports\sdbh\hoja1.png`).
+Roshi no existe en B1, B2, IW ni SB (solo dos dibujos 2D en `modding resources\Budokai 3 Story Art`). El importador
+ya lista Goku Black, Roshi, Beerus, Zamasu y Zamasu fusionado (`importar.py lista sdbh`); recetas
+`vis_sdbh_goku_black` y `vis_sdbh_roshi` en `ports_vision.toml` (nuevo: `capsulas = [...]` en una receta).
+
+
+### R2.5 Ficheros tocados en la ronda 2 y avisos a otros frentes
+- Míos: `awo_tools/rampas.py` (`sombrear_planas`), `mod center hd/ports_vision.toml` (Goku Black, Roshi, Yamhan,
+  Yamcha con técnicas del donante, Gotenks con una forma), `mod center hd/importar.py` (Goku Black, Roshi, Beerus,
+  Zamasu y Zamasu fusionado en la lista de SDBH; recetas con `capsulas = [...]`), este documento.
+- **Aviso a modkit** (`mod center hd/roster_build.py`, suyo en esta ronda): añadí `bsp_cst_records`,
+  `bsp_bank6_fix`, `cam_pad_clips`, `tecnicas = "donante"`, `b3_ramps(..., c)` (SDBH) y la clave de caché
+  `rampas3` de la vista previa. Son llamadas al montar; por favor, consérvalas al integrar.
+- **Aviso a modkit** (`awo_tools/sdbh_model.py`, suyo): el arreglo del pelo podría ir en la conversión (alfa 0 en las
+  texturas de color opacas); hoy lo hace `rampas.sombrear_planas` al montar, solo para mods con `origen_fuente = "sdbh"`.
+- **Aviso a campañas** (ficha 20): Yamhan y Fat Gotenks ya son personajes jugables para su misión.
+- Batería `python tools/pruebas.py todo`: 4/5 PASS; `du_continuar` falló una vez en el menú de Dragon Universe (no
+  llegó a la rueda; las copias smoke no tienen ports) y pasó al repetirlo (`--solo du_continuar`): 5/5.
+- Pruebas: `E:\DBZ3HD_trabajo\ports\combate_ports.py` admite `--com1 --killeno` (P1 COM con ki lleno), `--modo`
+  (retos de modos.cpp) y captura entradas (estado 2) y el aura al cargar ki.
+
 ## Turno 2 (tarde/noche): lo que ve el jugador ahora
 
 | Antes | Ahora |

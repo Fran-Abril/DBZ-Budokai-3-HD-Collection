@@ -1,0 +1,39 @@
+# Ficha 04: saga de Vegeta en Namek de Budokai 1 (los combates de la historia de B1 leidos de la ISO del jugador) con
+# Zarbon importado de B1 (mod port_b1_zarbon en la copia). Formas de B1 -> B3 (Zarbon transformado, Freezer 1.a forma
+# y final) y ki inicial del rival de la tabla de B1.
+# python tools/pruebas.py correr campanas_test docs/16_pasarela_modos/pruebas/saga_b1.toml
+descripcion = "Pasarela: saga de Vegeta en Namek (Budokai 1) con Zarbon importado"
+env = ["DBZ3_TEST_MISIONES=0,auto,reset", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games", "DBZ3_TEST_RINGOUT=1"]
+pasos = [
+  'log "misiones: prueba: modo saga_b1 listo true" 60',
+  'log "misiones: saga_b1 paso 1/13 \(charla\)" 15',
+  'esperar 1200', 'captura 01_charla_vegeta',
+  'log "misiones: saga_b1 paso 2/13 \(charla\)" 15',
+  'esperar 1200', 'captura 02_charla_zarbon',
+  'log "misiones: saga_b1 paso 3/13 \(combate\)" 15',
+  'esperar 1200', 'captura 03_tarjeta_zarbon',
+  'log "misiones: saga_b1 combate: id 7 .* contra id 22 \(forma 1\), escenario 7" 20',
+  'log "misiones: saga_b1 paso 3: ki al empezar .* -> rival 4000" 90',
+  'log "misiones: saga_b1 paso 3 estado del combate 4" 90',
+  'esperar 2000', 'captura 04_combate_zarbon_transformado',
+  'log "misiones: saga_b1 paso 3 estado del combate 7" 90',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: saga_b1 combate: id 7 .* contra id 21 \(forma 0\)" 60',
+  'log "misiones: saga_b1 paso 6 estado del combate 4" 90',
+  'esperar 2000', 'captura 05_combate_recoome',
+  'log "misiones: saga_b1 paso 6 estado del combate 7" 90',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: saga_b1 combate: id 7 .* contra id 27 \(forma 0\)" 60',
+  'log "misiones: saga_b1 paso 9 estado del combate 4" 90',
+  'esperar 2000', 'captura 06_combate_freezer_primera',
+  'log "misiones: saga_b1 paso 9 estado del combate 7" 90',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: saga_b1 combate: id 7 .* contra id 27 \(forma 3\)" 60',
+  'log "misiones: saga_b1 paso 12 estado del combate 4" 90',
+  'esperar 2000', 'captura 07_combate_freezer_final',
+  'log "misiones: saga_b1 paso 12 estado del combate 7" 90',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: saga_b1 paso 13/13 \(final\)" 30',
+  'esperar 1500', 'captura 08_final',
+  'log "misiones: saga_b1 completado" 15',
+]

@@ -1,0 +1,12 @@
+# Bu (Piccolo absorbido): traje extra de Super Bu (ID 35) con el modelo del juego del Bu absorbido (entrada 116 de
+# data_cmn de la copia del jugador: el mod no trae arte). Ficha 21 (Las absorciones de Super Bu, entrada Pasarela del
+# HUB); en la seleccion es un traje mas de Super Bu y el 1.o sigue siendo el de siempre.
+# modelos = uno por forma de Super Bu (tabla de combate, medida 2026-10-15):
+#   0 el Bu de este traje; 1-3 las absorciones de serie (modelos 84 Piccolo = 116, 78 Gotenks = 107, 79 Gohan = 104);
+#   4-7 formas que usan el modelo de otro personaje (11 Piccolo, 64 Gotenks, 4 Gohan, 90 Bu fantasma): su modelo de
+#   serie, para que el traje no cambie a esos personajes. Ojo: roster_ext escribe el traje 4 (los 2 de Super Bu
+#   + el orden de las carpetas) tambien en la tabla de Piccolo, que tiene 4: por eso el 350 (su traje 1).
+[traje]
+personaje = 35
+nombre = "Bu (Piccolo absorbido)"
+modelos = ["juego:116", "juego:116", "juego:107", "juego:104", "juego:350", "juego:307", "juego:227", "juego:114"]

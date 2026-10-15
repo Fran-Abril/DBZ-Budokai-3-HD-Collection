@@ -15,6 +15,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -41,7 +42,9 @@ XBDEC = next((p for p in (
                  "xbdecompress.exe"),
     os.path.join(ROOT, "mod center hd", "tools", "xbdecompress.exe"),   # kit de modding (release)
 ) if os.path.exists(p)), os.path.join(ROOT, "mod center hd", "tools", "xbdecompress.exe"))
-CACHE = os.path.join(tempfile.gettempdir(), "afs_pair_cache")
+# fuera de C: si hay sitio de trabajo (mismo orden que roster_build.work_dir); si no, el TEMP de siempre
+CACHE = os.path.join(next((c for c in (os.environ.get("DBZ3_TMP"), "E:/DBZ3HD_trabajo/tmp", "D:/tmp")
+                          if c and os.path.isdir(c)), tempfile.gettempdir()), "afs_pair_cache")
 LZX_MAGIC = b"\x0f\xf5\x12\xee"
 
 _tables = {}
@@ -117,7 +120,18 @@ def iw(n, afs="DATA_CMN.AFS"):
 
 
 def hd(n, afs="data_cmn.afs", region=HD_US):
-    return decompress(entry(os.path.join(region, afs), n), "%s_%d" % (afs, n))
+    # swap_b3.b3_afs: si `region` no es la us/ del Budokai 3 HD (otro juego, cortada, o no hay us/ junto al Kit)
+    # se usa la buena que encuentre (carpeta del launcher, assets/us, DBZ3/us...) o sale un error claro. Antes un
+    # data_cmn.afs ajeno daba plantillas basura (Heroes sin imagen 3D) y quedaban en la cache: la clave lleva
+    # ahora el fichero de origen.
+    mch = os.path.join(ROOT, "mod center hd")
+    if mch not in sys.path:
+        sys.path.append(mch)
+    import swap_b3  # noqa: PLC0415
+    path = swap_b3.b3_afs(os.path.join(region, afs))
+    st = os.stat(path)
+    src = "%08x" % (zlib.crc32(("%s|%d|%d" % (os.path.abspath(path), st.st_size, st.st_mtime_ns)).encode()))
+    return decompress(entry(path, n), "%s_%d_%s" % (afs, n, src))
 
 
 def magics(b, limit=64):

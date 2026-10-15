@@ -86,8 +86,12 @@ class Model:
         # translucido (lente del rastreador)
         a0 = self.avb.awg0
         mt = a0 + be32(self.data, a0 + 0x20)
+        # vtype 0xF5 (bit 0x40; 0xB5 el normal) = reflejo: el VS del juego (2DD4268D7EE12280) no usa la uv de la
+        # malla sino la normal en camara, uv = (0.5 + 0.5 nx, 0.5 - 0.5 ny) (sphere map / matcap): cupula y
+        # hombreras de Freezer y Cooler, visera del Gran Saiyaman, Cell...
         self.mats = [dict(m_, diffuse=np.array([be_f(self.data, mt + k * 0x50 + 4 * c) for c in range(3)],
-                                               np.float32), blend=bool(m_["flags"][0] & 0x80000000))
+                                               np.float32), blend=bool(m_["flags"][0] & 0x80000000),
+                          env=bool(m_["flags"][0] & 0x40))
                      for k, m_ in enumerate(self.table.materials)]
         self.labels = self.avb.bone_labels()
         self.local, self.parent = self._locals()
@@ -389,7 +393,10 @@ def _shade(model, tris, mats, T, w1, w2, Nc, light):
         if mat["tex"] >= len(model.tex):      # sin textura: color plano del material
             col[sel] = mat["diffuse"]
             continue
-        base = _sample(model.tex[mat["tex"]], uv[sel, 0], uv[sel, 1])
+        if mat["env"]:
+            base = _sample(model.tex[mat["tex"]], 0.5 + 0.5 * n[sel, 0], 0.5 - 0.5 * n[sel, 1])
+        else:
+            base = _sample(model.tex[mat["tex"]], uv[sel, 0], uv[sel, 1])
         rgb = base[:, :3]
         if mat["shader"] != 0xFFFFFFFF and mat["shader"] < len(model.tex):
             ramp = model.tex[mat["shader"]]
@@ -480,6 +487,11 @@ def core_bones(model, hb):
             if i == hb or any(t in model.labels[i] for t in ("_M_", "FACE", "JAW"))}
 
 
+def _top(P):
+    """Lo mas alto del modelo (18 % de la altura): la cabeza cuando no hay nada pegado al hueso HEAD."""
+    return P[:, 1] > P[:, 1].max() - 0.18 * np.ptp(P[:, 1])
+
+
 def head_info(model, pose=None, core=False):
     """Caja de la cabeza (hueso HEAD y descendientes) en model-space. core=True se queda
     con el craneo y la cara (hueso HEAD + huesos faciales M_*/FACE/JAW): sin pelo,
@@ -487,13 +499,14 @@ def head_info(model, pose=None, core=False):
     hb = model.bone("HEAD")
     P, _ = model.posed(pose)
     if hb is None:
-        top = P[:, 1].max()
-        sel = P[:, 1] > top - 0.18 * np.ptp(P[:, 1])
+        sel = _top(P)
     else:
         bones = core_bones(model, hb) if core else model.descendants(hb)
         sel = np.isin(model.vbone, list(bones))
         if (sel & model.skull).any():   # sin mallas sueltas de pelo ni accesorios
             sel &= model.skull
+    if not sel.any():   # nada pegado a la cabeza (algunos de Heroes): como sin hueso HEAD (antes: error, sin imagen 3D)
+        sel = _top(P)
     hp = P[sel]
     return hp.min(0), hp.max(0), hb
 
@@ -661,6 +674,8 @@ def make_portraits(model, size, yaw=None, pitch=None, zoom=1.0, dx=0.0, dy=0.0, 
         sel = np.isin(model.vbone, list(core_bones(model, hb))) if hb is not None else np.ones(len(P), bool)
         if (sel & model.skull).any():
             sel &= model.skull
+        if not sel.any():
+            sel = _top(P)
         C = P[sel] @ view.T
         clo, chi = C.min(0), C.max(0)
         # cabezas anchas (ninos, cupulas, cuernos): manda la anchura vista en 3/4

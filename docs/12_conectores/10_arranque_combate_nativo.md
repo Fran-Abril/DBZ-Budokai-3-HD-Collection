@@ -369,3 +369,14 @@ Riesgos propios de este camino: `sub_8218BA00` fuera de su sitio (comprobar en l
 del menú `sub_8218C5D8` deja de correr); `sub_821D27C8` llama a `sub_821652D0(10)` (¿sonido/fundido?);
 modo 5 frente a 1 (Duelo) en reglas del combate: comparar en la prueba. Prueba mínima = §6 paso 6 con
 la secuencia de log `5 → 25 → 5`.
+
+### 9.4 Combates encadenados sin menú principal (hecho 2026-10-15, `src/hub.cpp`)
+
+`ChainBattleEx(...)` durante un combate nuestro → en `sub_821D3628` la fase pasa a 4 (resultado 2, como siempre) →
+la tarea llega al estado 0x821D6A08 (ya en negro), que con la 5 pedida llama a `sub_821D7D18(5)` (crea el menú
+principal). Gancho de `sub_821D7D18`: en fase 4 se libera la petición (`kReqCur` y `kReqCur-4` a -1:
+`sub_821D2778` solo escribe la actual si está libre), se rellena la CFG y se pide la 25 con T+28 = 0x821D7400,
+igual que desde el menú (sin `sub_8218BA00`, no hay menú). `HoldChain(true)` vuelve a dejar T+28 = 0x821D6A08 cada
+tick (espera en negro). Se llama a `tag::OnScreen(5)` y `campaigns::ForgetStoryBattle()` (lo que hace la llegada al
+menú principal). El contador de victorias "V n" del juego sigue (como en la revancha). Prueba:
+`DBZ3_TEST_CHAIN=1` + `DBZ3_TEST_BATTLE`, PASS `D:\DBZ3HD\_pruebas\20261015-091335_coord_test_encadenado`.

@@ -90,7 +90,8 @@ final abierta), `ranking` y `laboratorio` (busy = su pantalla abierta).
 - Torneo: el humano puede ser el lado 2 (`partida+31+p` sigue a `G+36688+p`).
 
 ## Pendiente
-- Encadenar sin pasar por el menú principal (hoy se ve la pantalla propia encima del menú unos 2,5 s).
+- ~~Encadenar sin pasar por el menú principal~~: hecho en la ronda 2 (frente rpg, `hub::ChainBattleEx` del
+  coordinador; ver `rpg.md`). Elegir luchador, premios y retos nuevos: también en `rpg.md` (selector del HUB).
 - El marcador del juego enseña ∞ aunque haya límite de tiempo (el combate sí acaba a su hora).
 - `regen` sube la barra en curso (la vida del luchador es por barra), no devuelve barras perdidas.
 - Elegir luchador para el reto (hoy: el último del Duelo); premios y desbloqueos por completar.

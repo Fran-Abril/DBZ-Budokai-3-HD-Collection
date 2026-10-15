@@ -1,0 +1,29 @@
+# Ficha 20: mision original "Fusion fallida" con Gotenks gordo (port de B2, mod vis_b2_fat_gotenks en la copia):
+# contra Majin Bu en la ciudad y contra Super Bu en la sala del espiritu y del tiempo.
+# python tools/pruebas.py correr campanas_test docs/16_pasarela_modos/pruebas/mision_gotenks.toml
+descripcion = "Pasarela: mision Fusion fallida con Gotenks gordo"
+env = ["DBZ3_TEST_MISIONES=2,auto,reset", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games", "DBZ3_TEST_RINGOUT=1"]
+pasos = [
+  'log "misiones: prueba: modo gotenks listo true" 60',
+  'log "misiones: gotenks paso 1/7 \(charla\)" 15',
+  'esperar 1200', 'captura 01_charla_piccolo',
+  'log "misiones: gotenks paso 2/7 \(charla\)" 15',
+  'esperar 1200', 'captura 02_charla_gotenks_gordo',
+  'log "misiones: gotenks paso 3/7 \(combate\)" 15',
+  'esperar 1200', 'captura 03_tarjeta',
+  'log "misiones: gotenks combate: id 23 .* contra id 34 \(forma 0\), escenario 3" 20',
+  'log "misiones: gotenks paso 3 estado del combate 4" 90',
+  'esperar 2000', 'captura 04_combate_majin_bu',
+  'log "misiones: gotenks paso 3 estado del combate 7" 90',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: gotenks paso 5/7 \(charla\)" 40',
+  'esperar 1200', 'captura 05_charla_super_bu',
+  'log "misiones: gotenks combate: id 23 .* contra id 35 \(forma 0\), escenario 1" 30',
+  'log "misiones: gotenks paso 6 estado del combate 4" 90',
+  'esperar 2000', 'captura 06_combate_super_bu',
+  'log "misiones: gotenks paso 6 estado del combate 7" 90',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: gotenks paso 7/7 \(final\)" 30',
+  'esperar 1500', 'captura 07_final',
+  'log "misiones: gotenks completado" 15',
+]

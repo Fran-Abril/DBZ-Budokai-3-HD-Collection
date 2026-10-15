@@ -2,6 +2,180 @@
 
 Fecha: 2026-10-15. Solo US (como hub.cpp). Estado vivo: este documento.
 
+# Ronda 2 (2026-10-15): fichas 10, 19, 22 y extra E1
+
+Todo **apagado por defecto** (opción de `dbz3_user.toml` o regla de reto), solo US, **fuera en online** (solo se
+vería en un PC). Ningún combate de serie cambia si no se enciende. Pruebas en `D:\DBZ3HD\escenarios_test{,2,3}`.
+
+## Puntuación (entregable mínimo probado en el juego)
+| Ficha | Qué ve el jugador ahora | Prueba (capturas en `D:\DBZ3HD\_pruebas\`) | Nota |
+|---|---|---|---|
+| 10 clima | Con `dbz3_clima = true`: a los 20 s de pelea el cielo y el escenario se van oscureciendo (40 s, suave) hasta una noche; los luchadores siguen con su luz; el fondo lejano se apaga con una niebla azul oscura. Usa el oscurecimiento del propio juego (el de entrar en modo hiper), que sigue funcionando igual. | `clima_namek` (prueba rápida 3 s + 8 s): `01_antes`, `02_medio`, `03_oscuro` (ver §R5) | **1** |
+| 19 gigantes | Con `dbz3_jefe_gigante = 1.8`: el rival COM sale 1,8 veces más grande (modelo, huesos y sombra, pies en el suelo) y la cámara abre el campo de visión para que se le vea entero. Los golpes llegan en los dos sentidos y se le puede tumbar. | `gigante` (vida de los dos baja: golpes de ida y vuelta), `gigante_ko` (Goku tumba al jefe gigante, combate acabado) (ver §R5) | **1** (contacto, cámara y victoria; sin ataques nuevos de jefe: ver pendiente) |
+| 22 cine | Con `dbz3_cine_intro = true` (o `Pedir()` desde un reto): al empezar la pelea, 10 s de cine con bandas negras: plano del escenario con su nombre, Goku de cerca con su nombre, "VS Vegeta" de cerca; vuelve a la cámara del juego fundiéndose. Los dos esperan en guardia. **A** la salta; terminada o saltada, la pelea sigue igual. | `cine_intro` (fin natural, la pelea sigue), `cine_salto` (A a los 2 s, misma pelea hasta el ring out) (ver §R5) | **1** |
+| E1 nombres | `dbz3::escenarios::Nombre(registro[, idioma])`: "Planeta Namek", "Ring de Cell"... en los 6 idiomas del juego (las altas con su `titulo`). Lo usa ya la intro de cine (rótulo del escenario). | `nombres_idioma` (francés en el log) + log de cada arranque en español; rótulos comprobados contra la textura del juego (data_spn 2043) | **1** |
+
+`stage_ext.cpp` revalidado (ficha 29 lo pedía): ya no tiene ganchos temporales de diagnóstico (solo aplica
+`stage.toml` y llama a `escenarios::CargarDeMods`); compila y las pruebas `sin_mods` y `hub_alta` siguen en PASS.
+
+## R1. API para otros frentes (retos, HUB, campañas)
+```cpp
+#include "escenarios.h"   // dbz3::escenarios
+std::string Nombre(int registro);              // en el idioma del jugador (dbz3::settings::Language())
+std::string Nombre(int registro, int idioma);  // 1 EN, 2 JP (= inglés: el juego no trae texto japonés y la letra es latina), 3 DE, 4 FR, 5 ES, 6 IT
+int Total();                                   // 17 de serie + altas de mods (registros 17+)
+#include "clima.h"        // dbz3::clima::Activar(true) durante un reto (false al salir)
+#include "gigantes.h"     // dbz3::gigantes::Activar(lado, escala) (0 = quitar; 0.5..3); lado 1 = jugador 2
+#include "cine.h"         // dbz3::cine::Pedir()  -> intro de 10 s en el combate siguiente (una vez)
+```
+Opciones (`dbz3_user.toml`, todas apagadas): `dbz3_clima = true`, `dbz3_jefe_gigante = 1.8` (rival COM),
+`dbz3_cine_intro = true`. Pruebas: `DBZ3_CLIMA=1|rapido`, `DBZ3_GIGANTE=<escala>` (jugador 2), `DBZ3_CINE=1`.
+Sondas: `DBZ3_SONDA_CLIMA=1` (niebla/luz de los 17 registros y valores cada 2 s), `DBZ3_SONDA_GIGANTE=1` (vida y
+cámara cada 2 s), `DBZ3_SONDA_VOLCADO=f1,f2,...` (vuelca 0x82300000-0x82500000 en esos fotogramas de pelea, para
+medir comparando volcados).
+
+## R2. Medidas nuevas (US)
+- **Cámara de la pelea**: `mgr = *0x823D6CF4` (0x823CE1E0, estático). `mgr+0x60` matriz de vista 4×4 de mano
+  derecha (filas `der.x arr.x atr.x 0 / … / -der·ojo -arr·ojo -atr·ojo 1`), copia en 0x824E6720 (la usa el recorte de
+  objetos); `mgr+0x190` ojo, `+0x1A0` objetivo, `+0x1B0` arriba, `+0x1C4` fov vertical (0,785). Escribir ojo,
+  objetivo y matriz al empezar el dibujo (`sub_820C2058`) mueve la cámara de todo el fotograma. **El juego parte de
+  su ojo anterior**: alejarlo en cada fotograma lo manda al infinito (medido: 1e16 a los 2 s) → para volver, fundirse.
+  En la presentación (estados 1-2) manda la cámara del guion del escenario (ojo `+0x150`, objetivo `+0x160`, fov
+  `+0x184`) y la matriz que dibuja no es ninguna de esas (probado escribiendo las tres): ahí no se puede mover.
+- **Luchador**: `X = mgr+2096+8240·lado` empieza con su **matriz de mundo** (filas 0-2 giro, fila 3 = posición, X+48);
+  el juego la rehace cada fotograma. Escalar sus filas 0-2 **solo mientras se dibuja** (`sub_82109D90`, dibujo del
+  luchador; se restaura después) agranda todo el modelo desde los pies; la lógica no la ve cambiada. `X+5028` mando
+  (-1 COM; un mando vacío = en guardia quieto). En la presentación están ocultos (`X+3261 = 1`) hasta su entrada.
+- **Oscurecimiento del escenario** (el del modo hiper, cielo incluido, luchadores no): `mgr+35180` cuánto (el juego
+  sube a 0,75 y baja a 0) y `mgr+35184` su fundido 0..1. Hallado con volcados antes/durante/después del modo hiper
+  (rival quieto con `X+5028 = 1`). El efecto común 300 (`sub_82127B20` caso 0) es el que lo pide.
+- **Niebla**: `sub_820C2058` borra y pone la niebla del escenario (`G+76 & 0x20`): `sub_82085650` (activa,
+  0x8238941C), `sub_82085670` (color 0x82389424), `sub_82085688` (inicio/fin 0x823106B4/B8). Tabla por registro:
+  `0x82323760 + i·92 + 0x1C + variante·32` → `[0]` luz (0x82322B30, 80 B) y `[1]` niebla (0x823232A0, 20 B). Namek:
+  color 0x0057D7FF, 0..3800. La niebla no llega al cielo.
+- **No sirve** para oscurecer: el color de los materiales del #AWO del escenario (no se usa al dibujar; probado con
+  los 57 materiales de Namek). `G+0x20` = #ZDD cargado; en memoria la cabecera del #AWO empieza en su marca (en el
+  fichero, +0x40).
+- Namek B (registro 14) es el Namek que explota (cielo rojo oscuro); otra entrada del AFS, no un estado del mismo mapa.
+
+## R3. Ficheros
+`src/clima.cpp/.h` (nuevo; gancho `sub_820C2058`, del que cuelgan también cine y gigantes), `src/cine.cpp/.h`
+(nuevo), `src/gigantes.cpp/.h` (nuevo; gancho `sub_82109D90`; no estaba en la lista de RONDA2: es un fichero propio
+nuevo, nadie más lo engancha), `src/escenarios.cpp/.h` (E1: 6 idiomas, `Nombre(registro)`, log de nombres al
+arrancar; avisa a clima al pedir escenario), `CMakeLists.txt` (los 3 .cpp en `DBZ3_SOURCES` y en el `REMOVE_ITEM`
+solo-EU). `stage_ext.cpp` sin cambios. Pruebas nuevas en `escenarios_pruebas/`: `clima_namek`, `gigante`,
+`gigante_ko`, `cine_intro`, `cine_salto`, `nombres_idioma`, `cine_gigante` (R6b). Las de medida (ya sin sonda en el código) movidas a
+`_respaldo/escenarios_pruebas_medida_2026-10-15/`.
+
+## R4. Pendiente
+- 10: un solo disparador (tiempo). Ráfagas de ki o daño como disparador, lluvia/relámpagos (efectos #AME) y cambiar
+  la textura del cielo: sin hacer. Fuera del combate (pose final) el cielo sigue oscuro hasta el combate siguiente.
+- 19: es escala de un luchador normal: sin ataques propios de jefe (pisotón, ráfaga de área) ni inmunidad a
+  agarres (los agarres se ven algo desplazados). El alcance y el cuerpo de golpe ya escalan (WL-19). En la pose final
+  la cámara vuelve a su campo de visión normal.
+- 22: la intro va al empezar la pelea, no sobre la presentación del juego (allí la cámara no se deja mover). Planos
+  fijos por código (sin editor de línea de tiempo ni voces); el tiempo del combate (si lo hay) corre durante la intro.
+
+## R5. Pruebas (copias `escenarios_test`, `escenarios_test2`, `escenarios_test3`)
+`python tools/pruebas.py correr <copia> docs/14_frentes/escenarios_pruebas/<prueba>.toml`. Resultados: §R6.
+
+## R6. Resultados (build `python tools/compilar.py` OK; todas en PASS)
+| Prueba | Carpeta (`D:\DBZ3HD\_pruebas\`) | Lo que demuestra |
+|---|---|---|
+| `clima_namek` | `20261015-122154_escenarios_test_clima_namek` | log `oscuro 0.02 → 0.17 → 0.38 → 0.53 → 0.55`, niebla `0057D7FF → 0012142C`, 3800 → 570; capturas: cielo verde → oscuro, luchadores con su luz |
+| `gigante` | `20261015-122154_escenarios_test2_gigante` | Vegeta ×1,8, campo de visión 0,785 → 1,100; vida 3000/3000 → 2759/2903 (golpes de ida y vuelta); agarre y modo hiper del gigante en captura |
+| `gigante_ko` | `20261015-122154_escenarios_test3_gigante_ko` | `combate acabado: … gana el lado 1, motivo 0` (KO) y "WINNER!" de Goku |
+| `cine_intro` | `20261015-122552_escenarios_test_cine_intro` | `empieza la intro ('Planeta Namek', Goku contra Vegeta)` → `terminada en el fotograma 601`; 3 planos con rótulos y "A Saltar"; la pelea sigue |
+| `cine_salto` | `20261015-122552_escenarios_test2_cine_salto` | A a los 2 s: `saltada en el fotograma 170`; Goku no ataca con esa A; mismo combate hasta el final (`motivo 4`) |
+| `nombres_idioma` | `20261015-122552_escenarios_test3_nombres_idioma` | `nombres (idioma 4): 0 Niveau Champ. du Monde, … 7 Planète Namek, 8 Anneau de Cell…` (y en español en todas las demás) |
+| `hub_alta`, `sin_mods` | `20261015-123051_escenarios_test_hub_alta`, `…test2_sin_mods` | sin regresiones: altas de mods (HUB con presentación y ring out) y selector de siempre |
+| `python tools/pruebas.py todo` | `20261015-125253_todo.txt` y, tras el arreglo de R6b, `20261015-143036_todo.txt` | 5/5 PASS: tag_swap, campana, du_continuar, batalla, menu (online y Tag Team sin cambios) |
+
+## R6b. Gigante + intro a la vez (aviso del hub, 2026-10-15 tarde)
+- **Antes**: con "Intro de cine" y "Jefe gigante" encendidos, el rival salía normal durante la intro y crecía al
+  acabar. Causa: la intro le cambiaba el mando al COM (para dejarlo en guardia) y el gigante solo crece si el lado es
+  el COM. Además la intro escribía `X+5028` como 32 bits (hub midió que es de 16: `X+5030` va aparte), así que en
+  realidad los dos luchadores quedaban con el mando 1.
+- **Ahora**: `cine::Mando(lado)` da el mando de antes de la intro y `gigantes::Escala` lo usa (se conserva el arreglo
+  de hub: lectura de 16 bits). La intro solo toca al COM (16 bits, mando 1 conectado: un mando vacío saca el aviso de
+  "mando desconectado") y lo devuelve a su IA al acabar. Los planos de la intro encuadran con la escala de cada lado
+  (`gigantes::EscalaDe`): "VS Vegeta" muestra al gigante entero.
+- Presentación del juego: el gigante ya sale gigante (el dibujo escala en todos los estados), pero sus cámaras son
+  las del guion y no se pueden abrir: a veces se le corta la cabeza.
+- Prueba `cine_gigante` (opciones `dbz3_jefe_gigante = 1.8` y `dbz3_cine_intro = true`, presentación completa):
+  `D:\DBZ3HD\_pruebas\20261015-141729_escenarios_test_cine_gigante` (presentación con el gigante, 3 planos de la
+  intro con el gigante, pelea con campo de visión 1,100). Con ella, `cine_intro` y `gigante` otra vez en PASS.
+- Límite: durante la intro el COM obedece al mando 1, así que si el jugador mueve el mando antes de saltarla, los dos
+  se mueven igual (sin tocar nada, los dos esperan en guardia).
+
+## WL. Casos de `studies/11_vision_futura/INTEGRACION_SEGURA.md` (2026-10-15 tarde)
+
+### WL-22 (intro original, fin natural y skip; misma escena siguiente, limpieza y sin recompensa doble) — **PASS**
+Reto de 1 combate con `intro = true` y `premio = 777` (`escenarios_pruebas/wl22_kumite.toml`, copiado a
+`user_data/dbz3/modos/kumite.toml` de la copia; `DBZ3_TEST_MODO=kumite,0,0`, `DBZ3_TEST_KO=1`).
+| Prueba | Carpeta (`D:\DBZ3HD\_pruebas\`) | Resultado |
+|---|---|---|
+| `wl22_reto_intro` (intro entera) | `20261015-164941_escenarios_test_wl22_reto_intro` | `intro terminada en el fotograma 601` → KO → `kumite terminado: victoria (1 de 1)` → `premio de 777 Zenie (monedero 777)` **una vez** |
+| `wl22_reto_salto` (A a los 2 s) | `20261015-164941_escenarios_test2_wl22_reto_salto` | `intro saltada en el fotograma 187` → KO → misma escena (`kumite terminado: victoria (1 de 1)`) → `premio de 777` **una vez** |
+Limpieza: al acabar o saltar, la cámara vuelve a la del juego (fundido o en seco), el COM recupera su IA (`X+5028`
+de 16 bits, restaurado) y `Pedir()` vale para un solo combate (`NuevoCombate()` en cada carga de escenario). La intro
+no toca resultados ni premios: el premio lo da `modos.cpp` al acabar el reto, igual con y sin intro.
+
+### WL-19 (jefe grande: esquive/colisión/cámara y victoria finita; malla grande sola no acredita) — **PASS**
+- **RE (medido)**. El golpe lo deciden `sub_8211B738(V)` (cuerpo a cuerpo) y `sub_82112588(V)` (efectos pegados):
+  cada **nodo de golpe** del atacante `A = [V+4948]` (lista `[A+2752]`, siguiente `+44`; `+0` posición de mundo,
+  `+16` la anterior, `[+32]` su línea de golpe: `+8` banderas, `+12` radio u8) contra cada **punto de cuerpo** de V
+  (`V+1616 + 16·i`, 22 puntos que saca `sub_820F9548` de los huesos de la lógica) con su radio
+  `[[V+2996] + 24 + 4·i]`: entra si `distancia² ≤ (radio_i + radio_golpe · [[A+2996]+0])²`. Los nodos salen de los
+  huesos de la lógica **sin escalar** (`sub_82112AB0`): de ahí el tope (~22) de un luchador normal.
+- **Hecho** (`src/gigantes.cpp`, solo para un gigante, US y EU con parejas verificadas): puntos de cuerpo escalados
+  desde sus pies (`sub_820F9548`) y, **solo durante esas dos comprobaciones**, sus nodos de golpe alejados de sus pies
+  (horizontal ×escala; vertical ×escala del golpeado, para que su puño no pase por encima de un rival normal), su
+  radio de golpe ×escala y, si es el golpeado, sus radios de cuerpo ×escala. Después todo vuelve a como estaba; un
+  combate sin gigante no pasa por nada de esto. (Probado y quitado: escalar los huesos de la lógica; el puño iba a
+  23 de altura y no le daba a un rival normal.)
+- **Medido** (los dos clavados en su sitio con `DBZ3_GIGANTE_DISTANCIA`; pruebas en `E:\DBZ3HD_trabajo\escenarios\alc_*.toml`;
+  8 puñetazos, golpes que entran):
+  | Quién pega a quién | 12 | 18 | 21 | 24 | 30 | 36 | 40 |
+  |---|---|---|---|---|---|---|---|
+  | normal → normal | 7 | 7 | 3 | **0** | 0 | | |
+  | gigante ×2 → normal | 7 | 7 | 4 | | **7** | **3** | |
+  | gigante ×2 → gigante ×2 | | | | | | | **3** |
+  | normal → gigante ×2 quieto | | | | **7** | | | |
+  Carpetas: `20261015-181710_*_alc_g{21,30,36}`, `20261015-182053_*_alc_{n24,gg40,victima_g24}` y las de normal
+  `20261015-161710_*_alc_n{12,18,24}`, `…173533…`/`…174311…` (n21, n30).
+- **Juego** (`20261015-182349_*`): `gigante` (Vegeta COM ×1,8 contra Goku): 8 golpes a Goku y 4 al gigante en 12 s;
+  `gigante_ko` (KO, "WINNER!"), `cine_gigante` (gigante en presentación, intro y pelea). Cámara: campo de visión e
+  intro. Esquive: el gigante es el COM del juego (esquiva y se cubre como siempre).
+- Límite: sin ataques propios de jefe (pisotón, ondas); el puño de un gigante contra un rival normal pega a la altura
+  del rival aunque se vea más arriba.
+- Compilación OK; `python tools/pruebas.py todo` 5/5 PASS (`20261015-183417_todo.txt`).
+- Nota: entre las 17:15 y las 17:36 faltaron los datos del juego (`us\`, aviso del coordinador); las pruebas de ese
+  intervalo (pantalla de carga) se repitieron después.
+
+## R7. Propuestas para otros frentes
+- **rpg/modos (`modos.h`, `Reglas`)**: tres reglas de reto con lo de este frente, p. ej. en el TOML del reto
+  `clima = true`, `gigante = 1.8`, `intro = true`; al empezar cada combate del reto:
+  ```diff
+  +#include "cine.h"
+  +#include "clima.h"
+  +#include "gigantes.h"
+  +  dbz3::clima::Activar(r.clima);
+  +  dbz3::gigantes::Activar(1, r.gigante);     // 0 = sin gigante
+  +  if (r.intro) dbz3::cine::Pedir();
+  ```
+  y al acabar el reto `Activar(false)` / `Activar(1, 0)`. Un "jefe gigante" de verdad = `gigante` + la armadura de
+  jefe que ya tiene `Reglas`.
+- **HUB / retos / torneo**: mostrar el escenario por su nombre: `dbz3::escenarios::Nombre(c.escenario)` en vez de
+  "escenario N" (hoy solo aparece el número en los logs de `hub.cpp`, `hub_menu.cpp`, `modos.cpp`, `pasarela.cpp`).
+- **hub (F1 / launcher)**: tres interruptores en "Mods nativos": `dbz3_clima`, `dbz3_jefe_gigante` (deslizador
+  1,0-2,5) y `dbz3_cine_intro` (textos: "Clima vivo: el cielo se oscurece durante el combate", "Jefe gigante",
+  "Intro de cine al empezar el combate").
+- **campañas**: `dbz3::cine::Pedir()` antes del primer combate de una campaña (intro propia con el nombre del
+  escenario y de los luchadores).
+
+# Ronda 1
+
 ## Qué ve el jugador
 - **Antes**: el escenario convertido de Budokai 2 cerraba el juego al empezar el combate, y solo podía entrar
   sustituyendo uno de serie.
@@ -52,7 +226,7 @@ menu = 5107                    # imágenes de la casilla (entrada + 100)
 id_se = 45                     # sonido/ambiente del donante
 tema = 16                      # luz y cielo genéricos
 ```
-**Nombres** (extra E1): `dbz3::escenarios::Nombre(registro, idioma)` da el nombre oficial de los 17 de serie en
+**Nombres** (extra E1, ampliado en la ronda 2 a los 6 idiomas y `Nombre(registro)`): `dbz3::escenarios::Nombre(registro, idioma)` da el nombre oficial de los 17 de serie en
 inglés/alemán/francés/español/italiano (copiado de los rótulos del selector, data_<idioma> 2043) y el `titulo`
 de las altas; `Total()` = 17 + altas. Las variantes (ISLAND B, TOWN B, NAMEC B, KAIOU B, EARTH) llevan el
 nombre de su mapa.
@@ -108,9 +282,7 @@ causa).
 - Vista previa automática mejorable en algunos escenarios de B1 (se puede pasar `--foto`).
 - R&R BASE (anfitrión) tras un alta: el código lo devuelve siempre; no se pudo elegir en el juego porque está
   bloqueado en la partida de prueba (sí se probó Llanuras tras un alta).
-- Extra E2 (oscurecer poco a poco un escenario, interruptor apagado): **no hecho**. Plan: el tema del escenario
-  (0x82323D80 → `sub_820C34B0` → `sub_820C11B0/1228/12A0/1320`) pone luz y niebla; falta medir qué globales lee
-  cada fotograma y escalarlas con el tiempo desde un gancho por fotograma. Estimación: medio día.
+- Extra E2 (oscurecer poco a poco un escenario): hecho en la ronda 2 (ficha 10, `clima.cpp`).
 
 ## 8. Propuestas para otros frentes
 - **campaigns.cpp** (`sub_82096FF0`): su control lee `REX_LOAD_U32(res)` aunque `res` sea basura (no mapeada)

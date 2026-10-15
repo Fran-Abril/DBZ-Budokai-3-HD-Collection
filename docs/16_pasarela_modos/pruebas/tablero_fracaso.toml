@@ -1,0 +1,16 @@
+# Ficha 17, condicion de fracaso: sin ring out Goku no hace nada contra los Saibaman y pierde (por tiempo o K.O.): el
+# tablero dice "Fracaso", vuelve a Kame House y las casillas se reinician.
+# python tools/pruebas.py correr campanas_test docs/16_pasarela_modos/pruebas/tablero_fracaso.toml
+descripcion = "Pasarela: tablero, perder un combate reinicia el tablero"
+env = ["DBZ3_TEST_MISIONES=1,auto,reset", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games"]
+pasos = [
+  'log "misiones: tablero: turno 1, casilla 1 \(Llanura\)" 90',
+  'log "misiones: tablero turno 1 paso 2 estado del combate 4" 120',
+  'esperar 2000', 'captura 01_combate',
+  'log "misiones: tablero turno 1 paso 2 estado del combate 7" 200',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: tablero: fracaso en el turno 1" 30',
+  'log "misiones: tablero paso 2/2: perdido" 10',
+  'esperar 1200', 'captura 02_fracaso',
+  'esperar 5000', 'captura 03_tablero_reiniciado',
+]

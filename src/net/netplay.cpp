@@ -4,8 +4,9 @@
 //   MODREQ / MODLIST   lista "mod|hash" troceada
 //   SAVE_REQ idx  ->  SAVE_DATA idx size bytes[<=1024]
 //   START / START_ACK
-//   INPUT  n x {tick, pad[12]} + {rng_tick, rng}
+//   INPUT  n x {tick, pad[12]} + {rng_tick, rng} + {stamp u32, eco u32, espera u16, retardo u8 (+0x80 AUTO)}
 //   BYE
+//   TEAM n ids u16 / ROOM elo u16 tramo u8 reglas u8 reversion u16 (cada 0,5 s antes de jugar)
 #include "netplay.h"
 #include "room.h"
 #include "../tagteam.h"
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +26,7 @@
 #include <stdexcept>
 #include <thread>
 
+#include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/hash.h>
 #include <rex/logging.h>
@@ -31,6 +34,7 @@
 #include "../launcher/mod_pipeline.h"
 #include "../launcher/settings.h"
 #include "../guest_region.h"
+#include "../eu_map.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -63,11 +67,14 @@ uint32_t NewNonce() {
 }
 namespace T = dbz3::i18n;
 
-constexpr uint8_t kProto = 3;   // F4: full identity, challenge and directional session nonces
+constexpr uint8_t kProto = 4;   // 4: INPUT con ping y retardo (adaptativo); 3: identidad, reto y nonces
+constexpr size_t kInputBase = 34;   // INPUT sin mandos: cabecera 6 + nonces 8 + n 1 + rng 8 + ping/retardo 11
 constexpr char kMagic[4] = {'D', 'B', 'Z', '3'};
 enum Msg : uint8_t {
   kHello = 1, kHelloAck, kModReq, kModList, kSaveReq, kSaveData, kStart, kStartAck, kInput, kBye,
-  kTeam, kChallenge, kReject   // equipo de Tag Team de quien lo manda (n, n ids u16); al final: los PCs viejos lo ignoran
+  kTeam, kChallenge, kReject,  // equipo de Tag Team de quien lo manda (n, n ids u16); al final: los PCs viejos lo ignoran
+  kRoom                        // sala: rango (elo u16, tramo u8: 0-4, 255 = sin combates) y reglas de combate
+                               // (u8: bit0 v0, bit1 definitiva directa, bits2-3 cancelacion lb/rb; u16 reversion)
 };
 constexpr uint32_t kChunk = 1024;
 constexpr uint64_t kLostMs = 10000;
@@ -151,6 +158,9 @@ std::vector<std::string> ModFingerprints() {
     const std::string name = rex::path_to_utf8(it->path().filename());
     // ".respaldo", ".install_*": carpetas internas del launcher, no mods
     if (name.empty() || name[0] == '.' || name.ends_with(".disabled") || fs::exists(it->path() / ".disabled", ec)) continue;
+    // _forma_unica: lo genera el juego en cada PC (nombres en el idioma de cada uno, src/transformaciones.cpp) y
+    // la capsula unica no actua en online: contarlo rechazaba a dos jugadores con distinto idioma
+    if (name == "_forma_unica") continue;
     mods.push_back(it->path());
   }
   std::sort(mods.begin(), mods.end());
@@ -238,7 +248,7 @@ bool Session::ValidPacket(const std::vector<uint8_t>& pkt) const {
     const auto region = r.u8();
     const auto nonce = r.u32(), echo = r.u32();
     return r.ok && r.o == pkt.size() && identity_ready_ && build == identity_ &&
-           HexDigest(mods, 32) && delay >= 1 && delay <= 10 && !save && !region &&
+           HexDigest(mods, 32) && delay >= 1 && delay <= 10 && !save && region <= 1 &&   // 0 US, 1 EU (distinta: Handle avisa)
            nonce && (!peer_nonce_ || peer_nonce_ == nonce) &&
            echo == local_nonce_;
   }
@@ -264,8 +274,15 @@ bool Session::ValidPacket(const std::vector<uint8_t>& pkt) const {
       if (team_ready_ && ids != peer_team_) return false;
       return r.ok && r.o == pkt.size();
     }
+    case kRoom: {
+      if (state != Link::kConnected && state != Link::kStarting) return false;
+      r.u16();
+      const auto tramo = r.u8(), reglas = r.u8();
+      r.u16();
+      return r.ok && r.o == pkt.size() && (tramo <= 4 || tramo == 255) && !(reglas & 0xF0) && (reglas & 0x0C) != 0x0C;
+    }
     case kStart: {
-      if (role_ != Role::kGuest || !mods_match_ || !team_ready_ ||
+      if (role_ != Role::kGuest || !mods_match_ || !team_ready_ || !peer_profile_ ||
           (state != Link::kConnected && state != Link::kStarting)) return false;
       const auto seed = r.u32();
       const auto n = r.u16();
@@ -279,7 +296,7 @@ bool Session::ValidPacket(const std::vector<uint8_t>& pkt) const {
     case kInput: {
       if (state != Link::kPlaying && !(role_ == Role::kHost && state == Link::kStarting)) return false;
       const auto n = r.u8();
-      if (!n || n > 8 || pkt.size() != 23u + 16u * n) return false;
+      if (!n || n > 8 || pkt.size() != kInputBase + 16u * n) return false;
       const uint32_t now = tick_.load();
       uint32_t prev = 0;
       for (int i = 0; i < n; ++i) {
@@ -295,7 +312,9 @@ bool Session::ValidPacket(const std::vector<uint8_t>& pkt) const {
         prev = t;
       }
       const auto rt = r.u32(); r.u32();
-      return r.ok && r.o == pkt.size() && (rt == 0xFFFFFFFFu ||
+      r.u32(); r.u32(); r.u16();   // marca, eco y espera: cualquier valor (solo miden el ping)
+      const auto d = r.u8() & 0x7F;
+      return r.ok && r.o == pkt.size() && d >= 1 && d <= Session::kMaxDelay && (rt == 0xFFFFFFFFu ||
           (rt % 60 == 0 && uint64_t(rt) <= uint64_t(now) + 32 && uint64_t(rt) + 240 >= now));
     }
     case kBye: return r.ok && r.o == pkt.size();
@@ -402,7 +421,7 @@ bool Session::Recv(std::vector<uint8_t>& pkt) {
     const auto identity = hello.str(40), mods = hello.str(40);
     const auto delay = hello.u8(); const auto save = hello.u32(); const auto region = hello.u8();
     const auto nonce = hello.u32(), echo = hello.u32();
-    if (!hello.ok || !nonce || delay < 1 || delay > 10 || save || region || !HexDigest(mods, 32)) return true;
+    if (!hello.ok || !nonce || delay < 1 || delay > 10 || save || region > 1 || !HexDigest(mods, 32)) return true;   // region 0 US, 1 EU
     if (identity != identity_) {
       Writer reject(kReject); reject.u32(nonce);
       ::sendto(decltype(::socket(0, 0, 0))(sock_), reinterpret_cast<const char*>(reject.b.data()),
@@ -436,9 +455,9 @@ bool Session::Host(uint16_t port, uint8_t delay, std::string* error) {
     return false;
   }
   Close();
-  if (!identity_ready_ || !identity_admission_ || dbz3::g_guest_eu) {
-    if (error) *error = T::T("Online: no se pudo verificar este juego (solo la version US)",
-                             "Online: this game could not be verified (US version only)");
+  if (!identity_ready_ || !identity_admission_) {
+    if (error) *error = T::T("Online: no se pudo verificar este juego",
+                             "Online: this game could not be verified");
     return false;
   }
   identity_admission_ = false;
@@ -455,7 +474,9 @@ bool Session::Host(uint16_t port, uint8_t delay, std::string* error) {
     return false;
   }
   role_ = Role::kHost;
-  delay_ = uint8_t(std::clamp<int>(delay, 1, 10));
+  auto_delay_ = delay == 0;
+  auto_view_ = auto_delay_;
+  delay_ = auto_delay_ ? kAutoStart : uint8_t(std::clamp<int>(delay, 1, kMaxDelay));
   if (!OpenSocket(port, error)) { role_ = Role::kNone; return false; }
   link_ = Link::kWaiting;
   last_recv_ms_ = NowMs();
@@ -515,9 +536,9 @@ bool Session::Join(const std::string& ip, uint16_t port, std::string* error) {
     return false;
   }
   Close();
-  if (!identity_ready_ || !identity_admission_ || dbz3::g_guest_eu) {
-    if (error) *error = T::T("Online: no se pudo verificar este juego (solo la version US)",
-                             "Online: this game could not be verified (US version only)");
+  if (!identity_ready_ || !identity_admission_) {
+    if (error) *error = T::T("Online: no se pudo verificar este juego",
+                             "Online: this game could not be verified");
     return false;
   }
   identity_admission_ = false;
@@ -534,6 +555,8 @@ bool Session::Join(const std::string& ip, uint16_t port, std::string* error) {
     return false;
   }
   role_ = Role::kGuest;
+  auto_delay_ = false;   // el retardo lo marca el anfitrion
+  auto_view_ = false;
   sockaddr_in a{};
   a.sin_family = AF_INET;
   a.sin_port = htons(port);
@@ -698,16 +721,37 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
       break;
     case kInput: {
       const uint8_t n = r.u8();
+      uint32_t newest = 0;
       for (uint8_t k = 0; k < n; ++k) {
         const uint32_t t = r.u32();
         const Pad p = r.pad();
         if (!r.ok) return;
         Slot& s = theirs_[t % kRing];
         if (s.tick == 0xFFFFFFFFu || t > s.tick) s = {t, p};
+        newest = t;   // en orden creciente (ValidPacket)
       }
       const uint32_t rt = r.u32(), rv = r.u32();
+      const uint32_t stamp = r.u32(), echo = r.u32();
+      const uint16_t held = r.u16();
+      const uint8_t dly = r.u8();
+      if (!r.ok) return;
+      const uint64_t now = NowMs();
+      // su marca mas nueva (los paquetes pueden llegar desordenados) se le devuelve como eco
+      if (!peer_stamp_ || int32_t(stamp - peer_stamp_) > 0) { peer_stamp_ = stamp; peer_stamp_at_ = now; }
+      // ping = ahora - mi marca que vuelve - lo que el otro la tuvo guardada antes de contestar
+      if (echo) {
+        const uint32_t rtt = uint32_t(now) - echo - held;
+        if (rtt < 5000) batch_rtt_ = std::min(batch_rtt_, rtt);   // cuenta el mas fresco de la tanda (FlushRtt)
+      }
+      // invitado: el retardo lo marca el anfitrion (solo de paquetes mas nuevos que el ultimo aplicado)
+      if (role_ == Role::kGuest && link_ == Link::kPlaying && newest > peer_delay_tick_) {
+        peer_delay_tick_ = newest;
+        auto_view_ = (dly & 0x80) != 0;
+        if ((dly & 0x7F) != delay_) SetDelay(dly & 0x7F, "lo marca el anfitrion");
+      }
       if (r.ok && rt != 0xFFFFFFFFu) {
         const int i = int((rt / 60) % kRing);
+        if (their_rng_tick_[i] != rt && my_rng_tick_[i] == rt && my_rng_[i] == rv) ++rng_ok_;   // una vez por punto
         their_rng_tick_[i] = rt;
         their_rng_[i] = rv;
         if (my_rng_tick_[i] == rt && my_rng_[i] != rv && !desync_.exchange(true)) {
@@ -729,6 +773,17 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
       if (team_ready_ && peer_team_ != ids) return; // frozen agreement
       peer_team_ = ids;
       team_ready_ = true;
+      break;
+    }
+    case kRoom: {
+      const uint16_t elo = r.u16();
+      const uint8_t tramo = r.u8(), reglas = r.u8();
+      const uint16_t reversion = r.u16();
+      std::lock_guard<std::mutex> lock(mu_);
+      peer_elo_ = elo;
+      peer_tramo_ = tramo == 255 ? -1 : tramo;
+      peer_rules_ = {reglas, reversion};
+      peer_profile_ = true;
       break;
     }
     case kBye:
@@ -792,6 +847,15 @@ void Session::Poll() {
       w.u8(uint8_t(std::min<size_t>(team.size(), 3)));
       for (size_t i = 0; i < team.size() && i < 3; ++i) w.u16(uint16_t(team[i]));
       Send(w.b);
+      Writer pf(kRoom);   // y mi rango y mis reglas de combate para la sala (tambien cada medio segundo)
+      {
+        std::lock_guard<std::mutex> lock(mu_);
+        pf.u16(uint16_t(std::clamp(my_elo_, 0, 65535)));
+        pf.u8(my_tramo_ < 0 ? 255 : uint8_t(std::min(my_tramo_, 4)));
+        pf.u8(my_rules_.flags);
+        pf.u16(my_rules_.reversion);
+      }
+      Send(pf.b);
     }
     if (now - last_recv_ms_ > kLostMs) Fail(Link::kLost, T::T("sin respuesta del otro PC", "no reply from the other PC"));
   }
@@ -820,6 +884,10 @@ std::vector<uint8_t> StartPacket(uint32_t seed, const std::vector<uint8_t>& snap
 void Session::RequestStart() {
   std::lock_guard<std::recursive_mutex> io(io_mu_);
   if (role_ != Role::kHost || link_ != Link::kConnected || !mods_match_ || !team_ready_ || ui_snap_.size() != kUiSnapSize) return;
+  {   // sin la sala del otro (sus reglas) no se empieza: los dos tienen que decidir lo mismo en TakeStart
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!peer_profile_) return;
+  }
   link_ = Link::kStarting;
   start_sent_ = true;
   seed_ = uint32_t(NowMs() * 2654435761u) | 1u;
@@ -829,10 +897,10 @@ void Session::RequestStart() {
 
 void Session::ReseedBattle(uint8_t* base) {
   std::lock_guard<std::recursive_mutex> io(io_mu_);
-  if (!active() || !base || dbz3::g_guest_eu) return;
+  if (!active() || !base) return;
   const uint32_t v = (seed_ ^ (++battles_ * 0x9E3779B9u)) | 1u;   // nunca 0 (el LFSR se quedaria)
   const uint8_t be[4] = {uint8_t(v >> 24), uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)};
-  std::memcpy(base + 0x82310670u, be, 4);
+  std::memcpy(base + dbz3::GA(0x82310670u), be, 4);
   REXLOG_INFO("dbz3 online: combate {}: semilla del RNG igualada", battles_);
 }
 
@@ -861,7 +929,7 @@ bool Session::TakeStart(uint8_t* base) {
   // tenia, p. ej. con el DNS de RoomCode o el hash de los mods del HELLO, el juego esperaba: tirones en los menus)
   if (!launch_.load() || link_.load() != Link::kStarting) return false;
   std::lock_guard<std::recursive_mutex> io(io_mu_);
-  if (link_ != Link::kStarting || !mods_match_ || !team_ready_ ||
+  if (link_ != Link::kStarting || !mods_match_ || !team_ready_ || !peer_profile_ ||
       ui_snap_.size() != kUiSnapSize || !base || !launch_.exchange(false)) return false;
   guest_owner_ = true; // explicit handoff under io_mu_; Poll now excluded
   {
@@ -872,9 +940,9 @@ bool Session::TakeStart(uint8_t* base) {
                   std::min<size_t>(ui_snap_.size(), kUiSnapSize));
     }
   }
-  if (base && !dbz3::g_guest_eu) {   // misma semilla del RNG del juego (LFSR, US 0x82310670)
+  if (base) {   // misma semilla del RNG del juego (LFSR, 0x82310670 en US y EU)
     const uint8_t be[4] = {uint8_t(seed_ >> 24), uint8_t(seed_ >> 16), uint8_t(seed_ >> 8), uint8_t(seed_)};
-    std::memcpy(base + 0x82310670u, be, 4);
+    std::memcpy(base + dbz3::GA(0x82310670u), be, 4);
   }
   {   // Tag Team: lado 1 el anfitrion, lado 2 el invitado, igual en los dos PCs (sin COM)
     std::vector<int> mine = local_team_, peer;
@@ -891,6 +959,23 @@ bool Session::TakeStart(uint8_t* base) {
   for (auto& s : theirs_) s.tick = 0xFFFFFFFFu;
   my_rng_tick_.fill(0xFFFFFFFFu);
   their_rng_tick_.fill(0xFFFFFFFFu);
+  {   // reglas opcionales del combate: activas solo si las dos fotos son iguales (los dos PCs deciden lo mismo)
+    std::lock_guard<std::mutex> lock(mu_);
+    rules_agreed_ = my_rules_ == peer_rules_;
+    play_rules_ = my_rules_;
+    REXLOG_INFO("dbz3 online: reglas de combate {} (aqui {:02X}/{}, el otro {:02X}/{})",
+                rules_agreed_ ? "iguales: activas en la partida" : "distintas: apagadas (combate original)",
+                my_rules_.flags, my_rules_.reversion, peer_rules_.flags, peer_rules_.reversion);
+  }
+  delay0_ = delay_;   // el invitado ya tiene el del anfitrion (HELLO): los dos empiezan igual
+  sched_ = delay0_;
+  peer_delay_tick_ = 0;
+  rtt_n_ = rtt_sum_ = rtt_max_ = stalls_ = 0;
+  batch_rtt_ = UINT32_MAX;
+  down_votes_ = 0;
+  no_down_until_ = 0;
+  rng_ok_ = 0;
+  ping_ms_ = -1;
   link_ = Link::kPlaying;
   last_recv_ms_ = NowMs();
   REXLOG_INFO("dbz3 online: empieza la partida ({} , retardo {})", role_ == Role::kHost ? "anfitrion" : "invitado",
@@ -954,11 +1039,67 @@ void Session::ResetTransport() {
   dbz3::tag::NetApplied(0, 0); dbz3::tag::NetApplied(1, 0);
   for (auto& s : mine_) s = {};
   for (auto& s : theirs_) s = {};
+  sched_ = peer_stamp_ = peer_delay_tick_ = 0;
+  peer_stamp_at_ = 0;
+  rtt_n_ = rtt_sum_ = rtt_max_ = stalls_ = 0;
+  batch_rtt_ = UINT32_MAX;
+  down_votes_ = 0;
+  no_down_until_ = 0;
+  rng_ok_ = 0;
+  ping_ms_ = -1;
   mod_req_ms_ = 0;
   std::lock_guard<std::mutex> lock(mu_);
   peer_mods_.clear();
   peer_mods_known_ = false;
+  peer_profile_ = false;
+  peer_rules_ = {};
+  rules_agreed_ = false;
   error_.clear();
+}
+
+void Session::SetProfile(int elo, int tramo) {
+  const CombatRules now = CombatRules::Now();
+  std::lock_guard<std::mutex> lock(mu_);
+  my_elo_ = elo;
+  my_tramo_ = tramo;
+  my_rules_ = now;   // foto de las reglas al crear/unirse: es la que se compara y la que vale en la partida
+}
+
+void Session::MyRoom(int* elo, int* tramo, CombatRules* rules) const {
+  std::lock_guard<std::mutex> lock(mu_);
+  *elo = my_elo_;
+  *tramo = my_tramo_;
+  *rules = my_rules_;
+}
+
+bool Session::PeerRoom(int* elo, int* tramo, CombatRules* rules) const {
+  std::lock_guard<std::mutex> lock(mu_);
+  if (!peer_profile_) return false;
+  *elo = peer_elo_;
+  *tramo = peer_tramo_;
+  *rules = peer_rules_;
+  return true;
+}
+
+// Por nombre: combate.cpp (dueno de las opciones) no entra en la build solo EU.
+CombatRules CombatRules::Now() {
+  auto on = [](const char* n) {
+    const std::string v = rex::cvar::GetFlagByName(n);
+    return v == "true" || v == "1";
+  };
+  const std::string c = rex::cvar::GetFlagByName("dbz3_combate_boton_cancel");
+  CombatRules r;
+  r.flags = uint8_t((on("dbz3_combate_reglas_v0") ? 1 : 0) | (on("dbz3_combate_definitiva_directa") ? 2 : 0) |
+                    (c == "lb" ? 4 : c == "rb" ? 8 : 0));
+  r.reversion = uint16_t(std::clamp(std::atoi(rex::cvar::GetFlagByName("dbz3_combate_reversion").c_str()), 0, 65535));
+  return r;
+}
+
+void CombatRules::Apply() const {
+  rex::cvar::SetFlagByName("dbz3_combate_reglas_v0", (flags & 1) ? "true" : "false");
+  rex::cvar::SetFlagByName("dbz3_combate_definitiva_directa", (flags & 2) ? "true" : "false");
+  rex::cvar::SetFlagByName("dbz3_combate_boton_cancel", (flags & 4) ? "lb" : (flags & 8) ? "rb" : "no");
+  rex::cvar::SetFlagByName("dbz3_combate_reversion", std::to_string(reversion));
 }
 
 void Session::Fail(Link l, const std::string& why) {
@@ -1114,21 +1255,101 @@ void Session::RestoreSave() {
 
 // ---------------------------------------------------------------- lockstep
 void Session::SendInputs() {
+  if (sched_ == 0) return;   // aun sin mandos propios
   Writer w(kInput);
-  const uint32_t last = tick_ + delay_;
+  const uint32_t last = sched_ - 1;   // la casilla mas nueva (con D recien bajado puede pasar de tick + D)
   const uint32_t first = last >= 7 ? last - 7 : 0;
   std::vector<const Slot*> v;
   for (uint32_t t = first; t <= last; ++t) {
     const Slot& s = mine_[t % kRing];
     if (s.tick == t) v.push_back(&s);
   }
+  if (v.empty()) return;
   w.u8(uint8_t(v.size()));
   for (const Slot* s : v) { w.u32(s->tick); w.pad(s->pad); }
   const int i = int((tick_ / 60) % kRing);
   w.u32(my_rng_tick_[i]);
   w.u32(my_rng_[i]);
+  const uint64_t now = NowMs();
+  w.u32(uint32_t(now) | 1u);   // marca (nunca 0: 0 = sin eco)
+  w.u32(peer_stamp_);
+  w.u16(uint16_t(peer_stamp_ ? std::min<uint64_t>(now - peer_stamp_at_, 0xFFFF) : 0));
+  w.u8(uint8_t(delay_ | (auto_delay_ ? 0x80 : 0)));
   Send(w.b);
 }
+
+void Session::Drain() {
+  std::vector<uint8_t> pkt;
+  for (int i = 0; i < 1024 && active() && Recv(pkt); ++i) {   // hasta vaciarlo (tras una carga hay muchos)
+    if (!pkt.empty()) Handle(pkt, true);
+    pkt.clear();
+  }
+  FlushRtt();
+}
+
+// Un paquete que espero en el socket mientras este PC cargaba parece ping (medido 2026-10-15: el retardo subia a
+// 10 al entrar en cada combate). De cada tanda leida de golpe solo cuenta la muestra mas pequena: la del ultimo
+// en llegar.
+void Session::FlushRtt() {
+  if (batch_rtt_ == UINT32_MAX) return;
+  ++rtt_n_;
+  rtt_sum_ += batch_rtt_;
+  rtt_max_ = std::max(rtt_max_, batch_rtt_);
+  batch_rtt_ = UINT32_MAX;
+}
+
+void Session::SetDelay(uint8_t d, const char* why) {
+  const uint8_t was = delay_;
+  if (d == was) return;
+  delay_ = d;
+  delay_changed_ms_ = NowMs();
+  REXLOG_INFO("dbz3 online: retardo {} -> {} en el tick {} ({}; ping {} ms)", was, d, tick_.load(), why,
+              ping_ms_.load());
+}
+
+void Session::AdaptDelay(uint32_t t) {
+  std::lock_guard<std::recursive_mutex> io(io_mu_);
+  const uint32_t n = rtt_n_, worst = rtt_max_, stalls = stalls_;
+  if (n) ping_ms_ = int(rtt_sum_ / n);
+  rtt_n_ = rtt_sum_ = rtt_max_ = stalls_ = 0;
+  if (t % 600 == 0)   // cada 10 s: estado de la conexion en el log (para diagnosticar cortes y tirones)
+    REXLOG_INFO("dbz3 online: tick {}: retardo {}{}, ping {} ms (peor {}), {} esperas, {} comprobaciones del RNG iguales",
+                t, delay_.load(), auto_view_.load() ? " AUTO" : "", ping_ms_.load(), worst, stalls, rng_ok_);
+  if (role_ != Role::kHost || !auto_delay_ || !n) return;
+  // D cubre medio ping (el peor del segundo, con la espera de un cuadro a cada lado ya dentro) + 4 ms;
+  // con un tick de 1/60 s. ponytail: 60 Hz fijos; medir el ritmo real si algun modo corre a 30.
+  const int d = delay_;
+  auto need = [worst](double margin_ms) {
+    return std::clamp(int(std::ceil((worst * 0.5 + margin_ms) * 60.0 / 1000.0)), int(kMinDelay), int(kMaxDelay));
+  };
+  int want = need(4.0);
+  const bool stalled = stalls >= 6;   // >= 10 % de los ticks esperando al otro: falta retardo
+  if (stalled) {
+    want = std::max(want, std::min(d + 1, int(kMaxDelay)));
+    no_down_until_ = t + 600;   // 10 s sin bajar: si no, sube y baja sin parar
+  }
+  if (want > d) {
+    down_votes_ = 0;
+    SetDelay(uint8_t(want), stalled ? "esperas" : "ping");
+  } else if (need(12.0) < d && !stalls && t >= no_down_until_) {   // 8 ms de margen: sin ir y venir 8 <-> 9
+    if (++down_votes_ >= 3) {   // tras 3 s seguidos sobrando, baja uno por segundo mientras siga sobrando
+      down_votes_ = 3;
+      SetDelay(uint8_t(d - 1), "sobra retardo");
+    }
+  } else {
+    down_votes_ = 0;
+  }
+}
+
+namespace {
+// Misma pulsacion para el juego: botones, gatillos y palancas por direccion (una muestra asi se puede
+// saltar al bajar el retardo sin perder nada; el valor analogico exacto da igual un cuadro).
+bool SameInput(const Pad& a, const Pad& b) {
+  auto dir = [](int16_t v) { return v > 8000 ? 1 : v < -8000 ? -1 : 0; };
+  return a.buttons == b.buttons && (a.lt > 30) == (b.lt > 30) && (a.rt > 30) == (b.rt > 30) &&
+         dir(a.lx) == dir(b.lx) && dir(a.ly) == dir(b.ly) && dir(a.rx) == dir(b.rx) && dir(a.ry) == dir(b.ry);
+}
+}  // namespace
 
 void Session::RunTick(const Pad& local, uint32_t rng) {
   armed_ = false;
@@ -1141,18 +1362,46 @@ void Session::RunTick(const Pad& local, uint32_t rng) {
     return;
   }
   const uint32_t t = tick_;
-  mine_[(t + delay_) % kRing] = {t + delay_, local};
+  if (rules_agreed_ && !(CombatRules::Now() == play_rules_)) {
+    play_rules_.Apply();
+    REXLOG_INFO("dbz3 online: las reglas de combate quedan fijas durante el online (las de la sala)");
+  }
+  // todo lo llegado, cada tick (antes solo al esperar): el ping no cuenta lo que espera en el socket y el
+  // invitado ve enseguida el retardo nuevo del anfitrion
+  Drain();
+  if (!active()) return;
+  if (t && t % 60 == 0) AdaptDelay(t);
+  // casillas propias: cada una una vez y en orden (ver netplay.h). D subio: la muestra va tambien a la casilla
+  // siguiente, como mucho una de mas por tick (cada casilla viaja en varios paquetes: aguanta perdidas); D bajo:
+  // se salta la muestra si es igual a la anterior (si no, se guarda y la bajada espera)
+  const uint32_t target = t + delay_;
+  if (sched_ <= target) {
+    for (int k = 0; k < 2 && sched_ <= target; ++k, ++sched_) mine_[sched_ % kRing] = {sched_, local};
+  } else if (!SameInput(local, mine_[(sched_ - 1) % kRing].pad)) {
+    mine_[sched_ % kRing] = {sched_, local};
+    ++sched_;
+  }
   if (t % 60 == 0 && rng) {
-    my_rng_tick_[(t / 60) % kRing] = t;
-    my_rng_[(t / 60) % kRing] = rng;
+    const int i = int((t / 60) % kRing);
+    my_rng_tick_[i] = t;
+    my_rng_[i] = rng;
+    // el del otro pudo llegar antes que el propio (antes ese segundo no se comparaba)
+    if (their_rng_tick_[i] == t && their_rng_[i] != rng && !desync_.exchange(true)) {
+      REXLOG_WARN("dbz3 online: DESINCRONIA en el tick {} (rng {:08X} / {:08X})", t, rng, their_rng_[i]);
+      Fail(Link::kError, T::T("DESINCRONIA: los dos PCs ya no veian lo mismo", "DESYNC: both PCs no longer saw the same thing"));
+      return;
+    }
+    if (their_rng_tick_[i] == t) ++rng_ok_;
   }
   SendInputs();
-  const Pad mine = t < delay_ ? Pad{} : mine_[t % kRing].pad;
+  const Pad mine = mine_[t % kRing].tick == t ? mine_[t % kRing].pad : Pad{};
   Pad theirs{};
-  if (t >= delay_) {
+  if (t >= delay0_) {
     std::vector<uint8_t> pkt;
     uint64_t start = NowMs();
+    bool waited = false;
     while (theirs_[t % kRing].tick != t) {
+      waited = true;
       if (leave_req_.load()) {
         std::lock_guard<std::recursive_mutex> io(io_mu_);
         guest_owner_ = false; ResetTransport(); return;
@@ -1163,17 +1412,22 @@ void Session::RunTick(const Pad& local, uint32_t rng) {
         if (!active()) return;   // BYE u otro fallo: sin esperar 10 s a que caduque
         pkt.clear();
       }
+      FlushRtt();
       if (theirs_[t % kRing].tick == t) break;
       const uint64_t now = NowMs();
       if (now - last_send_ms_ > 15) SendInputs();
       // el primer tick espera a que el otro PC termine de arrancar
-      if (now - start > (t <= delay_ ? 30000 : kLostMs)) {
+      if (now - start > (t <= delay0_ ? 30000 : kLostMs)) {
         Fail(Link::kLost, T::T("sin respuesta del otro PC", "no reply from the other PC"));
         REXLOG_WARN("dbz3 online: conexion perdida en el tick {}", t);
         return;
       }
       if (!got) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      (void)start;
+    }
+    // espera por la red (3-100 ms): falta retardo. Mas larga es una carga del otro PC, no la conexion
+    if (waited) {
+      const uint64_t w = NowMs() - start;
+      if (w >= 3 && w < 100) ++stalls_;
     }
     theirs = theirs_[t % kRing].pad;
   }

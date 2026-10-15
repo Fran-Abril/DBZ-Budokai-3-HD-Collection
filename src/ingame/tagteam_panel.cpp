@@ -732,11 +732,8 @@ void TagTeamPanel::DrawPicking(ImGuiIO& io) {
   const int cur = mode == 1 ? -1 : (done[0] ? 1 : 0);
   const float since = float(Now() - notice.at);
   // la bandeja "Custom Tray" de Edit Skills (abierta de verdad, no solo resaltada: WheelTray) y las pantallas 5-7
-  // tapan esa mitad: ni tira ni ayuda encima de ellas. En la EU (sin WheelTray) se sigue ocultando al resaltarla.
-  auto skills_open = [](int k) {
-    if (dbz3::tag::WheelMenu(k) >= 5 || dbz3::tag::WheelTray(k)) return true;
-    return dbz3::g_guest_eu && dbz3_select_capsule_option(k) == 2;
-  };
+  // tapan esa mitad: ni tira ni ayuda encima de ellas (US y EU: WheelTray ya va en las dos, tagteam.cpp).
+  auto skills_open = [](int k) { return dbz3::tag::WheelMenu(k) >= 5 || dbz3::tag::WheelTray(k); };
   const bool skills = skills_open(0) || skills_open(1);
   for (int side = 0; side < 2; ++side) {
     const int need = Need(side);

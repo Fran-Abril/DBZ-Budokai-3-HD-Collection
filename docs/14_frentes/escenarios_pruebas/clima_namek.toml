@@ -1,0 +1,3 @@
+descripcion = "Ficha 10: en Namek el cielo se oscurece durante el combate (prueba rapida: empieza a los 3 s y tarda 8 s)"
+env = ["DBZ3_TEST_BATTLE=0,7,7", "DBZ3_HUB_MODE=5", "DBZ3_CLIMA=rapido", "DBZ3_SONDA_CLIMA=1"]
+pasos = ["log \"hub: combate nativo\" 60", "log \"tag: empieza un combate\" 60", "esperar 1500", "captura 01_antes", "log \"sonda clima: 4 s: oscuro\" 20", "esperar 3000", "captura 02_medio", "log \"sonda clima: 10 s: oscuro\" 20", "esperar 1500", "captura 03_oscuro"]

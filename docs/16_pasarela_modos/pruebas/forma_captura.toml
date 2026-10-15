@@ -1,0 +1,9 @@
+# Captura de un combate pedido con DBZ3_TEST_BATTLE (--env "DBZ3_TEST_BATTLE=id1,id2,escenario,0,0,0,forma1,forma2")
+# sin presentacion (DBZ3_HUB_MODE=5): para medir que forma inicial es cual.
+descripcion = "Pasarela: captura de las formas de un combate de prueba"
+env = ["DBZ3_HUB_MODE=5"]
+pasos = [
+  'log "hub: combate nativo" 90',
+  'esperar 9000', 'captura 01_forma',
+  'esperar 4000', 'captura 02_forma',
+]

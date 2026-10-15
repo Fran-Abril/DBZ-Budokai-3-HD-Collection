@@ -1,0 +1,18 @@
+descripcion = "Edit Skills: la capsula unica en la lista y en la bandeja; panel de descripcion (X en la lista y en la bandeja)"
+env = ["DBZ3_TEST_INV=1,2,3,4,5", "DBZ3_TEST_OWN=1,2"]
+pasos = [
+  "esperar 2500", "tecla S 1200", "tecla Space 0", "esperar_pantalla 14 10", "esperar 2500",
+  "tecla Space 8000",
+  "tecla Space 5000", "tecla S 2000", "tecla S 2000",
+  "tecla Space 5000", "captura 01_bandeja_vacia",
+  "tecla Space 4000", "captura 02_lista",
+  "tecla L 0", "esperar 600", "captura 03_x_en_lista_kaioken", "esperar 2000", "captura 04_x_en_lista_kaioken_2",
+  "tecla Backspace 2500", "captura 05_tras_b",
+  "tecla S 1500", "tecla S 1500", "captura 06_cursor_unica",
+  "tecla L 0", "esperar 600", "captura 07_x_en_lista_unica", "esperar 2000", "captura 08_x_en_lista_unica_2",
+  "tecla Space 3000", "captura 09_unica_equipada",
+  "tecla P 3000", "captura 10_bandeja",
+  "tecla W 1200", "tecla W 1200", "tecla W 1200", "tecla W 1200", "captura 11_bandeja_arriba",
+  "tecla L 0", "esperar 600", "captura 12_x_bandeja", "esperar 2000", "captura 13_x_bandeja_2",
+  "tecla Z 0", "esperar 600", "captura 14_back", "esperar 2000", "captura 15_back_2",
+]

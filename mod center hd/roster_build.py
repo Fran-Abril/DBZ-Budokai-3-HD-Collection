@@ -51,7 +51,7 @@ Un personaje nuevo es un mod "fuente" con `personaje.toml` (sin numeros de entra
                                    # o ui/hud.png / ui/hud_1.png... terminadas de 256x128)
     capsulas_nativas = [6, 7]      # opcional: capsulas de B3 que pide el moveset de un port de B3
     voces = "iw:JANENBA"           # opcional: voces de combate (iw:NOMBRE | b3:ID | donante | ninguna)
-    gritos = "iw:JANENBA"          # opcional: gritos de los golpes (por defecto, la fuente de `voces`;
+    gritos = "iw:JANENBA"          # opcional ("wav:gritos" = los .wav de esa carpeta del mod): gritos de los golpes (por defecto, la fuente de `voces`;
                                    # "b1:13" = banco de Budokai 1 del personaje 13 del ELF)
 
     [[capsula]]                    # opcional, varias: capsulas propias (ver Capsules mas abajo)
@@ -186,13 +186,23 @@ def default_us():
     return os.path.dirname(swap_b3.DEFAULT_AFS)
 
 
+def us_dir(us=None):
+    """La carpeta us/ del Budokai 3 HD: `us` si su data_cmn.afs es el bueno; si no, la que encuentre
+    swap_b3.find_us (carpeta del launcher, DBZ3/us...). Sin ninguna: swap_b3.NoGameData (mensaje claro)."""
+    return os.path.dirname(swap_b3.b3_afs(os.path.join(us or default_us(), "data_cmn.afs")))
+
+
 # ---------------------------------------------------------------- AFS / LZX
 class Afs:
     def __init__(self, path, work):
-        self.path, self.work = path, work
-        self.index = swap_b3.read_afs_index(path)
+        # todos los lectores pasan por aqui: un data_cmn.afs de otro juego (IW, B1, PS2) o cortado se
+        # cambia por el bueno o da un error claro (antes: IndexError en la vista previa)
+        self.path, self.work = swap_b3.b3_afs(path), work
+        self.index = swap_b3.read_afs_index(self.path)
 
     def raw(self, n):
+        if not 0 <= n < len(self.index):
+            raise IndexError("%s: no tiene la entrada %d (%d entradas)" % (self.path, n, len(self.index)))
         a, s = self.index[n]
         with open(self.path, "rb") as f:
             f.seek(a)
@@ -451,6 +461,70 @@ def to_hd(b, work):
     raise ValueError("version de #AMB desconocida")
 
 
+def bsp_cst_records(bsp):
+    """Offsets de los registros #CST (0xF0 B) de un BSP HD."""
+    out = []
+
+    def walk(o):
+        mg = bsp[o:o + 4]
+        if mg == b"#AMB":
+            n, tbl = struct.unpack_from(">II", bsp, o + 0x10)
+            for k in range(n):
+                off, size = struct.unpack_from(">II", bsp, o + tbl + 16 * k)
+                if size:
+                    walk(o + off)
+        elif mg == b"#CST":
+            n = struct.unpack_from(">I", bsp, o + 8)[0]
+            out.extend(o + 16 + 0xF0 * r for r in range(n))
+    try:
+        walk(0)
+    except struct.error:
+        return []
+    return out
+
+
+CST_BANK_FIELDS = (32, 48, 88, 172, 174)   # tipo (+32) y bancos de los efectos de un #CST; 6 = el de aura de SSJ
+
+
+def bsp_bank6_fix(bsp, donor_bsp):
+    """Ports de IW: registros #CST con efectos del banco 6 (lo usan los nativos de aura Super Saiyan: Goku,
+    Vegeta, Gohan...; Yamcha de IW lo pide en sus rafagas 360/361) cuando el donante no lo usa: el juego pedia
+    el efecto 12 que no existe y se cerraba al lanzar la tecnica (Yamcha amarillo con capsulas, 2026-10-15).
+    Esos registros toman todo (salvo nombre y codigo, bytes 0..20) del primer registro del BSP sin banco 6: con
+    solo los efectos el tipo (+32 = 6) seguia pidiendo el banco y el juego se cerraba igual. -> (bsp, n)."""
+    def usa6(b, r):
+        return any(struct.unpack_from(">h", b, r + o)[0] == 6 for o in CST_BANK_FIELDS)
+    if not bsp or any(usa6(donor_bsp, r) for r in bsp_cst_records(donor_bsp)):
+        return bsp, 0
+    recs = bsp_cst_records(bsp)
+    base = next((r for r in recs if not usa6(bsp, r)), None)
+    if base is None:
+        return bsp, 0
+    out, n = bytearray(bsp), 0
+    for r in recs:
+        if usa6(bsp, r):
+            out[r + 20:r + 0xF0] = bsp[base + 20:base + 0xF0]
+            n += 1
+    return bytes(out), n
+
+
+def cam_pad_clips(cam, donor_cam):
+    """La presentacion del combate (modo 1 del Duelo) pide clips de camara por indice del donante: Vegeta saga
+    Saiyan de IW tiene 30 clips y la entrada pedia el 30 (Vegeta tiene 35) -> clip nulo y cierre del juego al
+    acabar el vuelo por el escenario (2026-10-15). Los clips que faltan se copian del donante. -> (cam, n)."""
+    try:
+        sys.path.insert(0, os.path.join(HERE, "studio"))
+        import studio_core  # noqa: PLC0415
+        mine, theirs = studio_core.CamBin(cam), studio_core.CamBin(donor_cam)
+    except Exception:  # noqa: BLE001
+        return cam, 0
+    n = len(theirs.clips) - len(mine.clips)
+    if n <= 0 or mine.e != theirs.e:
+        return cam, 0
+    mine.clips += theirs.clips[len(mine.clips):]
+    return mine.build(), n
+
+
 def bsp_resources(bsp):
     """Recursos que el juego apunta al procesar un BSP de tecnicas (sub_82126490): hijos de [0] y de [1] y hijos
     de la raiz desde el 2. La ranura tiene sitio para 64."""
@@ -465,7 +539,7 @@ def bsp_resources(bsp):
         return 0
 
 
-def b3_ramps(hdb, name):
+def b3_ramps(hdb, name, c=None):
     """Rampas de sombreado de Budokai 2 (sombra en el alfa, RGB negro y ultima columna blanca) -> estilo B3
     (awo_tools/rampas.py). Sin esto la piel salia sin sombra (muy blanca) y con manchas negras (Tenshinhan B2).
     Los modelos nativos, de IW, SB y SDBH no cambian (se detecta por el formato de la rampa)."""
@@ -477,6 +551,16 @@ def b3_ramps(hdb, name):
         return hdb
     if "convertidas" in rep:
         log("   %s: %s" % (name, rep))
+    out, n_b1 = rampas.desde_b1(out)          # B1: sin rampas, salia blanco entero (Zarbon B1)
+    if n_b1:
+        log("   %s: modelo de Budokai 1: %d rampas de sombreado nuevas" % (name, n_b1))
+        out, n = rampas.sombrear_planas(out)
+        if n:
+            log("   %s: %d texturas planas pasan a sombreadas" % (name, n))
+    if c is not None and c.get("origen_fuente") == "sdbh":
+        out, n = rampas.sombrear_planas(out)      # SDBH: texturas sin sombrear (pelo de Goku gris claro)
+        if n:
+            log("   %s: %d texturas de SDBH pasan a sombreadas (pelo)" % (name, n))
     return out
 
 
@@ -716,8 +800,8 @@ def select_images(c, ui, hd_model, portrait_size, want=("icono", "retrato"), fet
             notes.append("icono: el modelo no se pudo renderizar (%s); se usa ui/cara.png" % e)
     if icon is None:
         art = os.path.join(ui, "cara.png")
-        if not os.path.exists(art):
-            raise RuntimeError("falta ui/cara.png para el icono")
+        if not os.path.exists(art):     # con la causa: antes solo "falta ui/cara.png" y no se sabia por que
+            raise RuntimeError("falta ui/cara.png para el icono" + ("" if not notes else " (%s)" % notes[-1]))
         icon = mr.make_icon(None, zoom=z, dx=dx, dy=dy, art=Image.open(art))
     # retratos
     src = image_source(c, ui, "retrato") if "retrato" in want else "-"
@@ -736,7 +820,7 @@ def select_images(c, ui, hd_model, portrait_size, want=("icono", "retrato"), fet
         art = next((os.path.join(ui, f) for f in ("retrato.png", "cara.png")
                     if os.path.exists(os.path.join(ui, f))), None)
         if art is None:
-            raise RuntimeError("falta ui/retrato.png para los retratos")
+            raise RuntimeError("falta ui/retrato.png para los retratos" + ("" if not notes else " (%s)" % notes[-1]))
         pors = mr.make_portraits(None, portrait_size, zoom=z, dx=dx, dy=dy, art=Image.open(art))
     return icon, pors, notes
 
@@ -897,10 +981,11 @@ def traje_mods(mods_dir):
     return out
 
 
-def build_trajes(trajes, cmn, out_dir, next_fid, work, toml, manifest):
+def build_trajes(trajes, cmn, out_dir, next_fid, work, toml, manifest, ids=None):
     """Trajes extra: un modelo por forma (en el orden de las formas del personaje). El
     runtime coloca cada uno donde lo busca el juego (incluidas las formas que son otro
     ID, como Goku SSJ4 = ID 91) y suma el traje al select."""
+    extra_n = {}
     for name, d, c in trajes:
         cid = int(c.get("personaje", -1))
         if cid not in IDS or not IDS[cid].get("models"):
@@ -925,8 +1010,21 @@ def build_trajes(trajes, cmn, out_dir, next_fid, work, toml, manifest):
                 next_fid += 1
             fids.append(cache[rel])
         dn = IDS[cid]
+        numero = dn.get("costumes", 1) + extra_n.get(cid, 0)     # numero del traje en el select (0 = el 1.o)
+        extra_n[cid] = extra_n.get(cid, 0) + 1
+        link = []
+        enl = c.get("enlazado")
+        if enl:
+            # traje de epoca con golpes, capsulas y color propios: al combatir con este traje, el juego carga el
+            # personaje del mod enlazado (src/ports_guard.cpp, peticion de la escena 25)
+            tid = (ids or {}).get(enl)
+            if tid is None:
+                log("!! %s: enlazado = %r no es un personaje montado: traje sin enlace" % (name, enl))
+            else:
+                link = ["traje_enlazado = [%d, %d]" % (numero, tid)]
+                log("   %s: traje %d de %s enlazado al personaje %d (%s)" % (name, numero + 1, dn["name"], tid, enl))
         toml += ["[[personaje]]", "# %s: traje extra (mod %s)" % (dn["name"], name), "id = %d" % cid,
-                 "traje_formas = %s" % toml_list(fids), ""]
+                 "traje_formas = %s" % toml_list(fids)] + link + [""]
         manifest.append("%s (id %d): traje extra %s, modelos por forma %s"
                         % (dn["name"], cid, c.get("nombre", name), fids))
         log("+ " + manifest[-1])
@@ -1077,6 +1175,10 @@ def write_rgba(path, img):
         f.write(np.ascontiguousarray(img[..., :4], dtype=np.uint8).tobytes())
 
 
+class VistaError(RuntimeError):
+    """Vista previa fallida, con un mensaje claro (main lo deja como ultima linea, sin traceback suelto)."""
+
+
 def preview(a):
     """Vista previa de icono, rotulo y retratos de un mod fuente (sin construir nada)
     en <mod>/ui/_vista/ (PNG + .rgba). --guardar escribe los ajustes en personaje.toml."""
@@ -1120,52 +1222,77 @@ def preview(a):
         set_toml_keys(tf, edits)
     work = work_dir("roster_v_")
     try:
-        cmn = Afs(os.path.join(a.us or default_us(), "data_cmn.afs"), work)
-        dn = IDS[int(c.get("donante", 21))]
-        tpl_fids = DB["data_cmn_portrait_by_slot"][dn["slot"] if dn["slot"] < 39 else 21]
-        tpls = [cmn.entry(tpl_fids[v] & 0xFFFF) for v in (0, 1)]
-        files = c.get("modelos", [])
-        out = os.path.join(ui, "_vista")
-        os.makedirs(out, exist_ok=True)
-        hd = None
-        if files:   # cache del modelo convertido (la conversion PS2->HD es lo mas lento)
-            src = os.path.join(d, files[0])
-            st = os.stat(src)
-            key = "%s|%d|%d|rampas2" % (files[0], st.st_size, int(st.st_mtime))   # rampas2: B2 con sombra
-            cache, ckey = os.path.join(out, ".modelo_hd.bin"), os.path.join(out, ".modelo_hd.key")
-            if os.path.exists(cache) and os.path.exists(ckey) and open(ckey).read() == key:
-                hd = open(cache, "rb").read()
-            else:
-                hd = b3_ramps(to_hd(open(src, "rb").read(), work), a.mod)
-                open(cache, "wb").write(hd)
-                open(ckey, "w").write(key)
-        want = ("icono", "retrato") if not a.solo else (a.solo,)
-        ic, pors, notes = select_images(c, ui, hd, portrait_size(tpls[0]), want, cmn.entry)
-        imgs = {"rotulo": np.array(make_name(c.get("nombre", a.mod), 48, 504))}
-        if "icono" in want:
-            imgs["icono"] = ic
-        cw, ch = portrait_size(tpls[0])
-        for v in ((0, 1) if "retrato" in want else ()):
-            ready = os.path.join(ui, "retrato_p%d.png" % (v + 1))
-            raw = portrait_ready(tpls[v], Image.open(ready)) if pors[v] is None else portrait_bin(tpls[v], pors[v])
-            o = struct.unpack(">I", raw[0x20:0x24])[0]
-            e = struct.unpack(">3I2H2H7I", raw[o:o + 0x30])
-            full = np.array(Image.open(io.BytesIO(raw[e[7]:e[7] + e[8]])).convert("RGBA"))
-            imgs["retrato_p%d" % (v + 1)] = full[:ch, :cw]
-        if not a.solo and (hd is not None or os.path.exists(os.path.join(ui, "hud.png"))):
-            try:                  # cara de la barra de vida (forma base)
-                imgs["hud"] = hud_images(c, ui, [hd], cmn.entry)[0][:mr_hud_h(), :mr_hud_w()]
-            except Exception as e:  # noqa: BLE001
-                notes.append("cara de la barra de vida: %s" % e)
-        for k_, img in imgs.items():
-            Image.fromarray(img).save(os.path.join(out, k_ + ".png"))
-            write_rgba(os.path.join(out, k_ + ".rgba"), img)
-        for n_ in notes:
-            log("aviso: " + n_)
-        log("vista previa -> %s" % out)
-        return 0
+        return _preview(a, c, d, ui, work)
+    except swap_b3.NoGameData as e:      # sin el data_cmn.afs bueno (el icono y el rotulo ya estan hechos)
+        raise VistaError(str(e)) from None
+    except Exception as e:  # noqa: BLE001  (el detalle en el registro y una ultima linea clara)
+        import traceback  # noqa: PLC0415
+        traceback.print_exc()
+        raise VistaError("ERROR: vista previa: %s: %s" % (type(e).__name__, e)) from None
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _preview(a, c, d, ui, work):
+    """Cuerpo de preview() (con la carpeta temporal ya creada)."""
+    # sin los datos del juego (data_cmn.afs) no hay plantillas de retrato ni accesorios nativos,
+    # pero el icono y el rotulo salen igual; los retratos dan el mensaje claro de swap_b3.
+    missing = None
+    try:
+        cmn = Afs(os.path.join(a.us or default_us(), "data_cmn.afs"), work)
+    except swap_b3.NoGameData as e:
+        cmn, missing = None, e
+        if a.solo == "icono":
+            log("aviso: %s" % str(e).replace("ERROR: ", "", 1))
+    dn = IDS[int(c.get("donante", 21))]
+    tpl_fids = DB["data_cmn_portrait_by_slot"][dn["slot"] if dn["slot"] < 39 else 21]
+    tpls = [cmn.entry(tpl_fids[v] & 0xFFFF) for v in (0, 1)] if cmn else None
+    fetch = cmn.entry if cmn else None
+    files = c.get("modelos", [])
+    out = os.path.join(ui, "_vista")
+    os.makedirs(out, exist_ok=True)
+    hd = None
+    if files:   # cache del modelo convertido (la conversion PS2->HD es lo mas lento)
+        src = os.path.join(d, files[0])
+        st = os.stat(src)
+        key = "%s|%d|%d|rampas3" % (files[0], st.st_size, int(st.st_mtime))   # rampas3: B2 y SDBH con sombra
+        cache, ckey = os.path.join(out, ".modelo_hd.bin"), os.path.join(out, ".modelo_hd.key")
+        if os.path.exists(cache) and os.path.exists(ckey) and open(ckey).read() == key:
+            hd = open(cache, "rb").read()
+        else:
+            hd = b3_ramps(to_hd(open(src, "rb").read(), work), a.mod, c)
+            open(cache, "wb").write(hd)
+            open(ckey, "w").write(key)
+    want = ("icono", "retrato") if not a.solo else (a.solo,)
+    if tpls is None:
+        want = tuple(w for w in want if w != "retrato")
+    size = portrait_size(tpls[0]) if tpls else (0, 0)
+    ic, pors, notes = select_images(c, ui, hd, size, want, fetch)
+    imgs = {"rotulo": np.array(make_name(c.get("nombre", a.mod), 48, 504))}
+    if "icono" in want:
+        imgs["icono"] = ic
+    cw, ch = size
+    for v in ((0, 1) if "retrato" in want else ()):
+        ready = os.path.join(ui, "retrato_p%d.png" % (v + 1))
+        raw = portrait_ready(tpls[v], Image.open(ready)) if pors[v] is None else portrait_bin(tpls[v], pors[v])
+        o = struct.unpack(">I", raw[0x20:0x24])[0]
+        e = struct.unpack(">3I2H2H7I", raw[o:o + 0x30])
+        full = np.array(Image.open(io.BytesIO(raw[e[7]:e[7] + e[8]])).convert("RGBA"))
+        imgs["retrato_p%d" % (v + 1)] = full[:ch, :cw]
+    if not a.solo and (hd is not None or os.path.exists(os.path.join(ui, "hud.png"))):
+        try:                  # cara de la barra de vida (forma base)
+            imgs["hud"] = hud_images(c, ui, [hd], fetch)[0][:mr_hud_h(), :mr_hud_w()]
+        except Exception as e:  # noqa: BLE001
+            notes.append("cara de la barra de vida: %s" % e)
+    for k_, img in imgs.items():
+        Image.fromarray(img).save(os.path.join(out, k_ + ".png"))
+        write_rgba(os.path.join(out, k_ + ".rgba"), img)
+    for n_ in notes:
+        log("aviso: " + n_)
+    log("vista previa -> %s" % out)
+    if missing is not None and a.solo != "icono":
+        raise missing           # icono y rotulo hechos; los retratos necesitan el juego
+    return 0
 
 
 def inputs_hash(srcs):
@@ -1420,10 +1547,18 @@ class Capsules:
         nativas = [int(x) for x in c.get("capsulas_nativas", []) if 0 < int(x) < len(self.recs)]
         inherit += [x for x in nativas if x not in inherit]
         if not own and not iw:
+            # con una sola forma (formas = 1: Fat Gotenks, Ghost Gotenks, sin modelo de Super Saiyan) las
+            # transformaciones del donante no se heredan: se podian equipar y "transformaban" sin cambiar de modelo
+            one_form = int(c.get("formas") or 0) == 1
+            trans = {x for x in dn.get("form_caps", []) if x} if one_form else set()
+            inherit = [x for x in inherit if x not in trans]
             lines.append("hereda = %s" % toml_list(inherit))
-            if nativas:
-                dflt = (nativas + [x for x in dn.get("caps", []) if x not in nativas])[:7]
+            if nativas or trans:
+                dflt = [x for x in (nativas + [x for x in dn.get("caps", []) if x not in nativas]) if x not in trans][:7]
                 lines.append("capsulas = %s" % toml_list(dflt))
+            if trans:
+                lines.append("capsulas_forma = [0]")
+                notes.append("sin las transformaciones del donante %s (una sola forma)" % sorted(trans))
             if dn.get("skills"):        # su ficha de habilidades (pausa y rotulos en combate)
                 lines.append("habilidades_indice = %d" % dn["skills"]["indice"])
             notes.append("capsulas: las del donante (%s)" % dn["name"])
@@ -1719,6 +1854,7 @@ def build(a):
     from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
     _POOL = ThreadPoolExecutor(max_workers=max(2, (os.cpu_count() or 4)))
     try:
+        us = us_dir(us)     # aqui y no arriba: sin personajes no hace falta el juego
         cmn = Afs(os.path.join(us, "data_cmn.afs"), work)
         # EU/PAL no trae data_usi.afs (su ingles es data_eng, misma estructura): se parte de
         # data_eng; lo escrito en data_usi no lo lee el juego EU (inofensivo).
@@ -1792,7 +1928,7 @@ def build(a):
                     except Exception as e:  # noqa: BLE001
                         log("   %s: aviso: altura de las formas sin ajustar (%s)" % (name, e))
                 for rel, raw in zip(files, raws):
-                    hdbs.append(b3_ramps(to_hd(raw, work), name))
+                    hdbs.append(b3_ramps(to_hd(raw, work), name, c))
             except Exception as e:  # noqa: BLE001
                 log("!! %s: modelo no valido (%s): personaje omitido" % (name, e))
                 continue
@@ -1885,6 +2021,10 @@ def build(a):
             extra = list(hud_line)
             # capsulas: propias ([[capsula]]), las del donante o las de un port de IW
             cam = load_bin(os.path.join(d, c["camara"]), work) if c.get("camara") else None
+            if cam is not None and dn.get("cam") is not None:
+                cam, npad = cam_pad_clips(cam, cmn.entry(dn["cam"]))
+                if npad:
+                    log("   %s: camara: %d clips del donante anadidos al final (tenia menos que el)" % (name, npad))
             n_new = len(caps.new)
             caps.nforms = nforms
             cap_lines, cam, notes = caps.character(name, cid, donor, c, cam, cmn)
@@ -1898,11 +2038,19 @@ def build(a):
                 moves = caps.grafts.pop(-1)
                 anm_bins = [csk_copy_codes(b, moves) for b in anm_bins]
             try:
-                bsp = load_bin(os.path.join(d, c["tecnicas"]), work) if c.get("tecnicas") else None
+                # tecnicas = "donante": las del donante aunque el moveset sea de la fuente (Yamcha amarillo de IW: su
+                # BSP de IW pedia efectos que no existen en la definitiva y el juego se cerraba; sus tres tecnicas son
+                # las mismas que las del Yamcha del juego)
+                bsp = (load_bin(os.path.join(d, c["tecnicas"]), work)
+                       if c.get("tecnicas") and c["tecnicas"] != "donante" else None)
             except Exception as e:  # noqa: BLE001 (un BSP ilegible no tumba el montaje de todos)
                 log("   %s: aviso: tecnicas propias ilegibles (%s): las del donante" % (name, e))
                 bsp = None
             if bsp:
+                bsp, n6 = bsp_bank6_fix(bsp, cmn.entry(dn["bsp"]))
+                if n6:
+                    log("   %s: tecnicas: %d efectos del banco 6 (que su donante no carga) con los del primer rayo"
+                        % (name, n6))
                 nres = bsp_resources(bsp)
                 if nres > 64:
                     # la ranura de tecnicas del juego guarda 64 recursos (los nativos llegan a 52): con mas, el
@@ -2141,6 +2289,9 @@ def build(a):
                                     with gritos.np.load(saved) as z:
                                         b1_cache[gl] = [z["arr_%d" % i] for i in range(len(z.files))]
                             sounds = gritos.fit(lens, b1_cache[gl])
+                        elif gl.startswith("wav:"):
+                            # WAV propios del mod (p. ej. las voces de Heroes que saca importar.py), por duracion
+                            sounds = gritos.assign(lens, gritos.wav_pool(os.path.join(d, gspec[4:].strip())))
                         elif gl.startswith(("sb1:", "sb2:")):
                             import sb_voces  # noqa: PLC0415  (Shin Budokai: tonos PPHD -> huecos)
                             sounds = sb_voces.gritos_sounds(gspec, lens, lk, entry[bank[0]:bank[0] + bank[1]])
@@ -2172,7 +2323,7 @@ def build(a):
                             % (nombre, cid, donor, dn["name"], model_fids, sorted(set(lips_fids)), por, h, scale))
             log("+ " + manifest[-1])
         progress(len(srcs), steps, "trajes")
-        next_fid = build_trajes(trajes, cmn, out_dir, next_fid, work, toml, manifest)
+        next_fid = build_trajes(trajes, cmn, out_dir, next_fid, work, toml, manifest, ids)
         azt_write(sel, icon_tex, icon_img)
         # plantilla que cuadre en ESTE #AZT (con data_usi es la fija; con data_eng de base, EU, otra)
         sel, name_idx = azt_append(sel, [(im, lg, hd, azt_template(sel, tp, im.shape[1], im.shape[0]))
@@ -2687,7 +2838,7 @@ def make_team(a):
     moveset y sus golpes solo en su forma (ccm_merge_forms). SELECT = relevo (el runtime elige al
     compañero vivo y guarda la vida de cada uno; ver src/tagteam.cpp)."""
     mods = a.mods or default_mods()
-    us = a.us or default_us()
+    us = us_dir(a.us)
     members = [int(x) for x in a.miembros][:4]
     if len(members) < 2 or any(m not in IDS or not IDS[m].get("models") or not IDS[m].get("cam")
                                for m in members):
@@ -2868,8 +3019,11 @@ def main():
     k.add_argument("--lista", help="nombres de las capsulas: .xlsx de IW, lista de B3 o 'ID: Nombre'")
     k.add_argument("--catalogo", help="catalogo #SKA del juego de origen (B1/B2: tipo de cada capsula)")
     a = ap.parse_args()
-    return {"construir": build, "nuevo": new_char, "equipo": make_team, "estado": status, "vista": preview,
-            "capsulas": caps_cmd}[a.cmd](a)
+    try:
+        return {"construir": build, "nuevo": new_char, "equipo": make_team, "estado": status, "vista": preview,
+                "capsulas": caps_cmd}[a.cmd](a)
+    except VistaError as e:
+        raise SystemExit(str(e)) from None
 
 
 if __name__ == "__main__":

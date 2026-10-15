@@ -43,12 +43,19 @@ set(DBZ3_SOURCES
     src/campaigns.cpp
     src/hub.cpp
     src/escenarios.cpp
+    src/clima.cpp
+    src/cine.cpp
+    src/gigantes.cpp
     src/pasarela.cpp
     src/pasarela_b1.cpp
+    src/pasarela_misiones.cpp
     src/hub_menu.cpp
     src/ingame/hub_panel.cpp
     src/modos.cpp
+    src/rpg.cpp
     src/ports_guard.cpp
+    src/combate.cpp
+    src/transformaciones.cpp
 )
 
 # Codegen output directory. Default is the US/NA build (generated/); a second
@@ -83,13 +90,17 @@ endif()
 if(DBZ3_GENERATED_DIR STREQUAL "generated_eu" AND NOT DBZ3_DUAL_REGION)
     list(REMOVE_ITEM DBZ3_SOURCES src/hooks.cpp)
     list(REMOVE_ITEM DBZ3_SOURCES src/roster_trace.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/combate.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/transformaciones.cpp)
     list(REMOVE_ITEM DBZ3_SOURCES src/roster_ext.cpp src/select_ext.cpp src/stage_ext.cpp)
-    list(REMOVE_ITEM DBZ3_SOURCES src/net/netplay_hooks.cpp src/tagteam.cpp src/tagteam_slots.cpp src/campaigns.cpp src/hub.cpp src/escenarios.cpp src/pasarela.cpp src/pasarela_b1.cpp src/hub_menu.cpp src/ingame/hub_panel.cpp src/modos.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/net/netplay_hooks.cpp src/tagteam.cpp src/tagteam_slots.cpp src/campaigns.cpp src/hub.cpp src/escenarios.cpp src/clima.cpp src/cine.cpp src/gigantes.cpp src/pasarela.cpp src/pasarela_b1.cpp src/pasarela_misiones.cpp src/hub_menu.cpp src/ingame/hub_panel.cpp src/modos.cpp src/rpg.cpp)
 endif()
 
 # src/escenarios_sel_gen.inc sale del codigo generado (US) y no va al repo publico: si falta, se crea aqui
 # (tools/gen_escenarios_sel.py lee generated/).
-if(src/escenarios.cpp IN_LIST DBZ3_SOURCES AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/escenarios_sel_gen.inc")
+# (y su gemela EU escenarios_sel_gen_eu.inc en el nucleo dual: generated_eu/ + src/eu_map_gen.h, frente eu)
+if(src/escenarios.cpp IN_LIST DBZ3_SOURCES AND (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/escenarios_sel_gen.inc" OR
+   (DBZ3_DUAL_REGION AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/escenarios_sel_gen_eu.inc")))
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_escenarios_sel.py"
                     RESULT_VARIABLE DBZ3_ESC_RC)

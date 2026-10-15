@@ -36,6 +36,7 @@ import sys
 import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -131,6 +132,49 @@ def pids_de_copia(dest):
         if sep and ruta.strip().lower().startswith(pref):
             pids.append(int(pid))
     return pids
+
+
+def _vivo(pid):
+    h = K32.OpenProcess(0x1000, False, pid)                     # QUERY_LIMITED_INFORMATION
+    if not h:
+        return False
+    code = wt.DWORD()
+    K32.GetExitCodeProcess(h, ctypes.byref(code))
+    K32.CloseHandle(h)
+    return code.value == 259                                    # STILL_ACTIVE
+
+
+@contextmanager
+def copia_en_uso(dest):
+    """Una prueba por copia a la vez, de principio a fin. comprobar_libre mira antes de la cola: dos agentes con la
+    misma copia esperaban turno y abrian los dos (teclas y ficheros pisados, tag_swap en FAIL, 2026-10-15)."""
+    lock, t0 = BASE / f"_en_uso_{dest.name}", time.time()
+    while True:
+        try:
+            lock.mkdir()
+            (lock / "pid").write_text(str(os.getpid()))
+            break
+        except FileExistsError:
+            try:
+                pid = int((lock / "pid").read_text())
+            except (OSError, ValueError):
+                pid = 0
+            viejo = not _vivo(pid) if pid else time.time() - lock.stat().st_mtime > 60
+            if viejo:                                           # de una prueba que murio: se aparta, no se borra
+                try:
+                    RESPALDO.mkdir(parents=True, exist_ok=True)
+                    lock.rename(RESPALDO / f"_en_uso_viejo_{dest.name}_{ts()}_{os.getpid()}")
+                except OSError:
+                    pass
+                continue
+            if time.time() - t0 > 3600:
+                raise SystemExit(f"una hora esperando la copia {dest.name} (la usa el proceso {pid})")
+            time.sleep(5)
+    try:
+        yield
+    finally:
+        (lock / "pid").unlink(missing_ok=True)
+        lock.rmdir()
 
 
 def comprobar_libre(dest):
@@ -592,6 +636,41 @@ def _du_continuar(j, par):
         raise Fallo("la campana no llego a acabar un combate")
 
 
+def _capsulas_custom(j, abiertos, seg=25):
+    """Menu de capsulas del jugador 1 (Tag Team): lleva el cursor a Custom (opcion 1) mirando el log y elige.
+    A ciegas (S + Space) fallaba con 3 juegos abiertos: el menu se abria en otra opcion y el Space abria la
+    bandeja de Edit Skills (2026-10-15)."""
+    ya = j.texto_log().count("menu de capsulas del jugador 1: elegido")
+    fin = time.time() + seg
+    while j.texto_log().count("menu de capsulas del jugador 1 abierto") < abiertos:   # el de este miembro
+        if time.time() > fin:
+            raise Fallo("no se abrio el menu de capsulas del jugador 1")
+        time.sleep(0.25)
+    time.sleep(1.0)                                     # su primera "opcion N" llega justo despues
+    while time.time() < fin:
+        t = j.texto_log()
+        if t.count("menu de capsulas del jugador 1: elegido") > ya:
+            return
+        ops = re.findall(r"menu de capsulas del jugador 1: opcion (\d)", t)
+        cur = int(ops[-1]) if ops else 1
+        j.tecla("W" if cur > 1 else "S" if cur < 1 else "Space", 2500)
+    raise Fallo("el menu de capsulas del jugador 1 no llego a elegir Custom")
+
+
+def _esperar_pelea(j, seg=60):
+    """Espera el estado 4 del combate (pelea: mgr = *0x823D6CF4, estado mgr+35128; misma direccion en US y EU).
+    Con 3 juegos abiertos la presentacion tarda mas y 8 s fijos dejaban el SELECT en ella (tag_swap en FAIL)."""
+    fin = time.time() + seg
+    while time.time() < fin:
+        b = leer(j.h, GBASE + 0x823D6CF4, 4)
+        mgr = int.from_bytes(b, "big") if b and len(b) == 4 else 0
+        e = leer(j.h, GBASE + mgr + 35128, 4) if mgr else None
+        if e and len(e) == 4 and int.from_bytes(e, "big") == 4:
+            return
+        time.sleep(0.25)
+    raise Fallo("el combate no llego a la pelea (estado 4)")
+
+
 def _tag_swap(j, par):
     swap = par.get("swap", "1") == "1"
     j.tecla("L", 3000)
@@ -600,12 +679,11 @@ def _tag_swap(j, par):
     j.captura("03_rueda")
     j.tecla("Space", 4000)
     j.captura("04_capsulas")
-    j.tecla("S", 2000)
-    j.tecla("Space", 6000)
+    _capsulas_custom(j, 1)
     j.captura("05_m1")
     j.tecla("S", 2000)
     j.tecla("Space", 4000)
-    j.tecla("Space", 6000)
+    _capsulas_custom(j, 2)
     j.captura("06_m2")
     for _ in range(int(par.get("rival_skip", 0))):
         j.tecla("S", 1500)
@@ -620,7 +698,8 @@ def _tag_swap(j, par):
     for _ in range(5):
         j.tecla("Space", 3000)
     j.log("tag: empieza un combate", 40)                # antes: 12 s fijos y luego el log
-    time.sleep(8)                                       # presentacion: un SELECT a los 4 s se perdia (2026-10-15)
+    _esperar_pelea(j)                                   # el SELECT durante la presentacion no releva
+    time.sleep(1)
     j.captura("09_combate")
     if swap:
         j.tecla_hasta_log("Z", r"relevo .* -> ")        # relevo pedido con SELECT, repetido si no llega
@@ -818,6 +897,11 @@ def cargar_escenario(esc, par):
 
 
 def correr(copia, escenario, env_extra=(), instantanea=None, par=None):
+    with copia_en_uso(BASE / copia):
+        return _correr(copia, escenario, env_extra, instantanea, par)
+
+
+def _correr(copia, escenario, env_extra=(), instantanea=None, par=None):
     par = par or {}
     desc, fn, env = cargar_escenario(escenario, par)
     env.update(_kv(x) for x in env_extra)

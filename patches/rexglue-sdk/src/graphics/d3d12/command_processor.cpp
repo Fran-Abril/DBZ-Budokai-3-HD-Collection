@@ -75,6 +75,25 @@ REXCVAR_DEFINE_BOOL(dbz3_motion_vectors, true, "DBZ3/Dev",
 REXCVAR_DEFINE_BOOL(dbz3_temporal_jitter, true, "DBZ3/Dev",
                     "Sub-pixel camera jitter for the temporal upscaler (off = debugging)");
 REXCVAR_DECLARE(double, dbz3_rim_light_scale);  // src/graphics/command_processor.cpp
+// Experimental "relight" (launcher: dbz3_relight): subtle ambient occlusion on
+// the 3D scene, never on the HUD or the menus. 0 = off (nothing runs), 1 = low
+// (4 directions), 2 = high (8 directions).
+REXCVAR_DEFINE_INT32(dbz3_relight_level, 0, "DBZ3/Video",
+                     "Ambient occlusion on the 3D scene: 0 = off, 1 = low, 2 = high (experimental)")
+    .range(0, 2)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_DOUBLE(dbz3_relight_strength, 0.4, "DBZ3/Dev",
+                      "Relight: maximum darkening of the occluded scene (0-1)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_DOUBLE(dbz3_relight_radius, 48.0, "DBZ3/Dev",
+                      "Relight: sampling radius in pixels at 720p")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_INT32(dbz3_relight_debug, 0, "DBZ3/Dev",
+                     "Relight: 1 = show the darkening factor, 2 = show the depth, instead of the scene")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_BOOL(dbz3_relight_split, false, "DBZ3/Dev",
+                    "Relight: only on the right half of the screen (before / after comparisons)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 REXCVAR_DEFINE_STRING(dbz3_gpu_build, DBZ3_RUNTIME_BUILD, "DBZ3/Dev",
                       "Build de rexgpu-xenos (lo comprueba el launcher)");
 
@@ -93,6 +112,9 @@ namespace shaders {
 #include "../shaders/bytecode/d3d12_5_1/fxaa_extreme_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_downscale_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/dbz3_depth_copy_cs.h"
+#include "../shaders/bytecode/d3d12_5_1/dbz3_relight_ao_cs.h"
+#include "../shaders/bytecode/d3d12_5_1/dbz3_relight_apply_ps.h"
+#include "../shaders/bytecode/d3d12_5_1/dbz3_relight_vs.h"
 }  // namespace shaders
 
 namespace {
@@ -1889,6 +1911,11 @@ void D3D12CommandProcessor::ShutdownContext() {
   resolve_downscale_root_signature_.Reset();
   dbz3_depth_copy_pipeline_.Reset();
   dbz3_depth_.Reset();
+  dbz3_relight_ao_.Reset();
+  dbz3_relight_depth_.Reset();
+  dbz3_relight_apply_pipelines_.clear();
+  dbz3_relight_ao_pipeline_.Reset();
+  dbz3_relight_root_signature_.Reset();
   dbz3_zero_motion_.Reset();
   dbz3_motion_.Reset();
   dbz3_reactive_.Reset();
@@ -2207,6 +2234,12 @@ void Dbz3CheckSustainedLowFps(double fps, double gpu_wait_ms_per_frame) {
       rex::cvar::GetFlagByName("draw_resolution_scale_y"), msaa ? 1 : 0, hd_tex ? 1 : 0, hints);
 }
 
+// Relight passes done in the current perf window (0 while it is off).
+static uint32_t g_dbz3_relight_passes = 0;
+// Frames with the scene depth copied but not darkened: [0] no bloom pass seen
+// after it, [1] no whole-frame color resolve after the bloom.
+static uint32_t g_dbz3_relight_missed[2] = {};
+
 static void Dbz3LogGuestPerformance(uint64_t upscaled_textures, uint64_t upscale_dynamic_refills,
                                     uint64_t texture_loads, uint64_t vram_usage,
                                     uint64_t vram_budget, uint32_t upscale_limit) {
@@ -2289,7 +2322,8 @@ static void Dbz3LogGuestPerformance(uint64_t upscaled_textures, uint64_t upscale
     REXGPU_INFO(
         "dbz3: perf fps={:.1f} frames={} window={:.2f}s max_frame_ms={:.1f} fg={} "
         "cfg=scale:{}x{} msaa:{} hdtex:{} area:{} min:{} aniso:{} upx={} upx_dyn={} "
-        "texload={} pack={} vram={}MB/{}MB lim={} gpu_wait={:.1f}ms/f syncs={} cp_wait={:.1f}ms/f",
+        "texload={} pack={} vram={}MB/{}MB lim={} gpu_wait={:.1f}ms/f syncs={} cp_wait={:.1f}ms/f "
+        "relight={} (sin_post={} sin_resolve={})",
         double(frames_in_window) / elapsed_s, frames_in_window, elapsed_s, max_frame_ms,
         foreground ? 1 : 0, rex::cvar::GetFlagByName("draw_resolution_scale_x"),
         rex::cvar::GetFlagByName("draw_resolution_scale_y"),
@@ -2300,8 +2334,11 @@ static void Dbz3LogGuestPerformance(uint64_t upscaled_textures, uint64_t upscale
         rex::cvar::GetFlagByName("anisotropic_override"), upscaled_textures,
         upscale_dynamic_refills, texture_loads_window, g_dbz3_pack_uploads.load(),
         vram_usage >> 20, vram_budget >> 20,
-        upscale_limit, gpu_wait_ms, fence_waits, cp_wait_ms);
+        upscale_limit, gpu_wait_ms, fence_waits, cp_wait_ms, g_dbz3_relight_passes,
+        g_dbz3_relight_missed[0], g_dbz3_relight_missed[1]);
   }
+  g_dbz3_relight_passes = 0;
+  g_dbz3_relight_missed[0] = g_dbz3_relight_missed[1] = 0;
   Dbz3CheckSustainedLowFps(double(frames_in_window) / elapsed_s, gpu_wait_ms);
   window_start = now;
   frames_in_window = 0;
@@ -2459,6 +2496,290 @@ void D3D12CommandProcessor::Dbz3TemporalOnCopy() {
   dbz3_depth_inverted_ = zfunc == xenos::CompareFunction::kGreater ||
                          zfunc == xenos::CompareFunction::kGreaterEqual;
   dbz3_scene_depth_captured_ = true;
+}
+
+// dbz3: relight (experimental ambient occlusion), see dbz3_relight.hlsl. The
+// scene depth is copied at the scene depth resolves; the composed scene
+// (after the bloom, before the HUD and the menus) is multiplied by the
+// occlusion at the resolve that stores it, once per frame.
+void D3D12CommandProcessor::Dbz3RelightOnCopy() {
+  const int32_t level = REXCVAR_GET(dbz3_relight_level);
+  if (level <= 0 || dbz3_relight_failed_ || !dbz3_output_size_[0] ||
+      !dbz3_frontbuffer_width_unscaled_) {
+    return;
+  }
+  const RegisterFile& regs = *register_file_;
+  if (regs.Get<reg::RB_SURFACE_INFO>().surface_pitch * 10 < dbz3_frontbuffer_width_unscaled_ * 9) {
+    return;  // Shadow maps and bloom passes.
+  }
+  const uint32_t source = regs.Get<reg::RB_COPY_CONTROL>().copy_src_select;
+  const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+  ID3D12Device* device = provider.GetDevice();
+  constexpr D3D12_RESOURCE_STATES kRead =
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+
+  if (source == 4) {
+    // The scene depth. Budokai 3 resolves it once per character shadow (stage
+    // and first character, shadow map, the other one, shadow map, effects):
+    // copied every time, the last copy is the whole scene. Frames without 3D
+    // draws aren't a scene (the pause screen restores the depth of its frozen
+    // picture and resolves it every frame).
+    if (!dbz3_relight_scene_draws_ || dbz3_relight_done_ || !dbz3_depth_copy_pipeline_) {
+      return;
+    }
+    const uint32_t width = dbz3_output_size_[0], height = dbz3_output_size_[1];
+    if (dbz3_relight_depth_) {
+      D3D12_RESOURCE_DESC desc = dbz3_relight_depth_->GetDesc();
+      if (desc.Width != width || desc.Height != height) {
+        resources_for_deletion_.emplace_back(GetCurrentSubmission(), dbz3_relight_depth_.Detach());
+      }
+    }
+    if (!dbz3_relight_depth_) {
+      D3D12_RESOURCE_DESC desc = {};
+      desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+      desc.Width = width;
+      desc.Height = height;
+      desc.DepthOrArraySize = 1;
+      desc.MipLevels = 1;
+      desc.Format = DXGI_FORMAT_R32_FLOAT;
+      desc.SampleDesc.Count = 1;
+      desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+      if (FAILED(device->CreateCommittedResource(
+              &ui::d3d12::util::kHeapPropertiesDefault, provider.GetHeapFlagCreateNotZeroed(),
+              &desc, kRead, nullptr, IID_PPV_ARGS(&dbz3_relight_depth_)))) {
+        return;
+      }
+    }
+    ID3D12Resource* depth_rt;
+    D3D12_CPU_DESCRIPTOR_HANDLE depth_rt_srv;
+    uint32_t depth_rt_width, depth_rt_height;
+    ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[2];
+    if (!render_target_cache_->Dbz3BeginReadLastDepth(depth_rt, depth_rt_srv, depth_rt_width,
+                                                      depth_rt_height) ||
+        !RequestOneUseSingleViewDescriptors(2, descriptors)) {
+      return;
+    }
+    device->CopyDescriptorsSimple(1, descriptors[0].first, depth_rt_srv,
+                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+    uav_desc.Format = DXGI_FORMAT_R32_FLOAT;
+    uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    device->CreateUnorderedAccessView(dbz3_relight_depth_.Get(), nullptr, &uav_desc,
+                                      descriptors[1].first);
+    PushTransitionBarrier(dbz3_relight_depth_.Get(), kRead, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    SubmitBarriers();
+    SetExternalPipeline(dbz3_depth_copy_pipeline_.Get());
+    deferred_command_list_.D3DSetComputeRootSignature(resolve_downscale_root_signature_.Get());
+    uint32_t constants[5] = {std::min(width, depth_rt_width), std::min(height, depth_rt_height), 0,
+                             0, 0};
+    deferred_command_list_.D3DSetComputeRoot32BitConstants(
+        UINT(ResolveDownscaleRootParameter::kConstants), 5, constants, 0);
+    deferred_command_list_.D3DSetComputeRootDescriptorTable(
+        UINT(ResolveDownscaleRootParameter::kSource), descriptors[0].second);
+    deferred_command_list_.D3DSetComputeRootDescriptorTable(
+        UINT(ResolveDownscaleRootParameter::kDestination), descriptors[1].second);
+    deferred_command_list_.D3DDispatch((constants[0] + 7) / 8, (constants[1] + 7) / 8, 1);
+    PushTransitionBarrier(dbz3_relight_depth_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kRead);
+    dbz3_relight_depth_ready_ = true;
+    dbz3_relight_post_ = false;
+    return;
+  }
+  // The first whole-frame color resolve once the post-processing has started
+  // (bloom, the character shadows at a quarter size) is the composed scene,
+  // before the HUD and the menus are drawn over it: darkened there, once.
+  if (source > 3 || !dbz3_relight_post_ || !dbz3_relight_depth_ready_ || dbz3_relight_done_) {
+    return;
+  }
+  dbz3_relight_done_ = true;
+
+  // b0 constants, t0 depth, t1 occlusion (apply), u0 occlusion (compute).
+  if (!dbz3_relight_root_signature_) {
+    D3D12_DESCRIPTOR_RANGE ranges[3] = {};
+    ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    ranges[1].BaseShaderRegister = 1;
+    ranges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    D3D12_ROOT_PARAMETER parameters[4] = {};
+    parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    parameters[0].Constants.Num32BitValues = 12;
+    for (uint32_t i = 0; i < 3; ++i) {
+      ranges[i].NumDescriptors = 1;
+      parameters[1 + i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+      parameters[1 + i].DescriptorTable.NumDescriptorRanges = 1;
+      parameters[1 + i].DescriptorTable.pDescriptorRanges = &ranges[i];
+    }
+    D3D12_ROOT_SIGNATURE_DESC desc = {};
+    desc.NumParameters = 4;
+    desc.pParameters = parameters;
+    *(dbz3_relight_root_signature_.ReleaseAndGetAddressOf()) =
+        ui::d3d12::util::CreateRootSignature(provider, desc);
+    if (dbz3_relight_root_signature_) {
+      *(dbz3_relight_ao_pipeline_.ReleaseAndGetAddressOf()) =
+          ui::d3d12::util::CreateComputePipeline(device, shaders::dbz3_relight_ao_cs,
+                                                 sizeof(shaders::dbz3_relight_ao_cs),
+                                                 dbz3_relight_root_signature_.Get());
+    }
+    if (!dbz3_relight_ao_pipeline_) {
+      REXGPU_WARN("dbz3: relight unavailable (root signature or compute pipeline failed)");
+      dbz3_relight_failed_ = true;
+      return;
+    }
+  }
+
+  D3D12_CPU_DESCRIPTOR_HANDLE color_rtv;
+  DXGI_FORMAT color_format;
+  uint32_t width, height;
+  if (!render_target_cache_->Dbz3BeginRelight(source, color_rtv, color_format, width, height)) {
+    return;
+  }
+  // Only targets that can hold a picture (not data such as a 32-bit float).
+  if (color_format != DXGI_FORMAT_R8G8B8A8_UNORM && color_format != DXGI_FORMAT_B8G8R8A8_UNORM &&
+      color_format != DXGI_FORMAT_R10G10B10A2_UNORM &&
+      color_format != DXGI_FORMAT_R16G16B16A16_UNORM &&
+      color_format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
+    return;
+  }
+  {
+    // The scene depth copy has the guest output size.
+    D3D12_RESOURCE_DESC depth_desc = dbz3_relight_depth_->GetDesc();
+    width = std::min(width, uint32_t(depth_desc.Width));
+    height = std::min(height, depth_desc.Height);
+  }
+
+  const uint32_t debug = uint32_t(std::clamp(REXCVAR_GET(dbz3_relight_debug), 0, 2));
+  const uint32_t apply_key = uint32_t(color_format) | (uint32_t(debug != 0) << 16);
+  auto apply_it = dbz3_relight_apply_pipelines_.find(apply_key);
+  if (apply_it == dbz3_relight_apply_pipelines_.end()) {
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
+    desc.pRootSignature = dbz3_relight_root_signature_.Get();
+    desc.VS.pShaderBytecode = shaders::dbz3_relight_vs;
+    desc.VS.BytecodeLength = sizeof(shaders::dbz3_relight_vs);
+    desc.PS.pShaderBytecode = shaders::dbz3_relight_apply_ps;
+    desc.PS.BytecodeLength = sizeof(shaders::dbz3_relight_apply_ps);
+    D3D12_RENDER_TARGET_BLEND_DESC& blend = desc.BlendState.RenderTarget[0];
+    // Scene color * factor, alpha kept. The debug view writes the factor.
+    blend.BlendEnable = debug ? FALSE : TRUE;
+    blend.SrcBlend = D3D12_BLEND_ZERO;
+    blend.DestBlend = D3D12_BLEND_SRC_COLOR;
+    blend.BlendOp = D3D12_BLEND_OP_ADD;
+    blend.SrcBlendAlpha = D3D12_BLEND_ZERO;
+    blend.DestBlendAlpha = D3D12_BLEND_ONE;
+    blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    blend.LogicOp = D3D12_LOGIC_OP_NOOP;
+    blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_RED | D3D12_COLOR_WRITE_ENABLE_GREEN |
+                                  D3D12_COLOR_WRITE_ENABLE_BLUE;
+    desc.SampleMask = UINT_MAX;
+    desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    desc.RasterizerState.DepthClipEnable = TRUE;
+    desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    desc.NumRenderTargets = 1;
+    desc.RTVFormats[0] = color_format;
+    desc.SampleDesc.Count = 1;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline;
+    if (FAILED(device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline)))) {
+      REXGPU_WARN("dbz3: relight unavailable (apply pipeline for format {} failed)",
+                  uint32_t(color_format));
+      dbz3_relight_failed_ = true;
+      return;
+    }
+    apply_it = dbz3_relight_apply_pipelines_.emplace(apply_key, std::move(pipeline)).first;
+  }
+
+  constexpr D3D12_RESOURCE_STATES kAoRead = kRead;
+  if (dbz3_relight_ao_) {
+    D3D12_RESOURCE_DESC desc = dbz3_relight_ao_->GetDesc();
+    if (desc.Width != width || desc.Height != height) {
+      resources_for_deletion_.emplace_back(GetCurrentSubmission(), dbz3_relight_ao_.Detach());
+    }
+  }
+  if (!dbz3_relight_ao_) {
+    D3D12_RESOURCE_DESC desc = {};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = width;
+    desc.Height = height;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    if (FAILED(device->CreateCommittedResource(
+            &ui::d3d12::util::kHeapPropertiesDefault, provider.GetHeapFlagCreateNotZeroed(), &desc,
+            kAoRead, nullptr, IID_PPV_ARGS(&dbz3_relight_ao_)))) {
+      return;
+    }
+  }
+
+  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[3];
+  if (!RequestOneUseSingleViewDescriptors(3, descriptors)) {
+    return;
+  }
+  D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+  srv_desc.Format = DXGI_FORMAT_R32_FLOAT;
+  srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srv_desc.Texture2D.MipLevels = 1;
+  device->CreateShaderResourceView(dbz3_relight_depth_.Get(), &srv_desc, descriptors[0].first);
+  srv_desc.Format = DXGI_FORMAT_R8_UNORM;
+  device->CreateShaderResourceView(dbz3_relight_ao_.Get(), &srv_desc, descriptors[1].first);
+  D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+  uav_desc.Format = DXGI_FORMAT_R8_UNORM;
+  uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+  device->CreateUnorderedAccessView(dbz3_relight_ao_.Get(), nullptr, &uav_desc,
+                                    descriptors[2].first);
+
+  struct {
+    uint32_t size[2];
+    float tan_half[2];
+    float radius_px;
+    float strength;
+    uint32_t samples;
+    float far_depth;
+    uint32_t debug;
+    uint32_t unused[3];
+  } constants = {};
+  static_assert(sizeof(constants) == 12 * sizeof(uint32_t));
+  constants.size[0] = width;
+  constants.size[1] = height;
+  // ponytail: assumed vertical field of view (~50 degrees), the game's
+  // projection isn't read; only the shape of the normals depends on it.
+  constants.tan_half[1] = 0.466f;
+  constants.tan_half[0] = 0.466f * float(width) / float(height);
+  constants.radius_px =
+      float(std::clamp(REXCVAR_GET(dbz3_relight_radius), 1.0, 64.0)) * float(height) / 720.0f;
+  constants.strength = float(std::clamp(REXCVAR_GET(dbz3_relight_strength), 0.0, 1.0));
+  constants.samples = level >= 2 ? 32 : 16;  // 8 or 4 directions, 4 steps each
+  constants.far_depth = 0.99995f;
+  constants.debug = debug;
+
+  // Occlusion.
+  PushTransitionBarrier(dbz3_relight_ao_.Get(), kAoRead, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  SubmitBarriers();
+  deferred_command_list_.D3DSetComputeRootSignature(dbz3_relight_root_signature_.Get());
+  SetExternalPipeline(dbz3_relight_ao_pipeline_.Get());
+  deferred_command_list_.D3DSetComputeRoot32BitConstants(0, 12, &constants, 0);
+  deferred_command_list_.D3DSetComputeRootDescriptorTable(1, descriptors[0].second);
+  deferred_command_list_.D3DSetComputeRootDescriptorTable(3, descriptors[2].second);
+  deferred_command_list_.D3DDispatch((width + 7) / 8, (height + 7) / 8, 1);
+  PushTransitionBarrier(dbz3_relight_ao_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, kAoRead);
+  SubmitBarriers();
+
+  // Blur and multiply into the scene color.
+  SetExternalGraphicsRootSignature(dbz3_relight_root_signature_.Get());
+  SetExternalPipeline(apply_it->second.Get());
+  deferred_command_list_.D3DSetGraphicsRoot32BitConstants(0, 12, &constants, 0);
+  deferred_command_list_.D3DSetGraphicsRootDescriptorTable(1, descriptors[0].second);
+  deferred_command_list_.D3DSetGraphicsRootDescriptorTable(2, descriptors[1].second);
+  D3D12_VIEWPORT viewport = {0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f};
+  SetViewport(viewport);
+  D3D12_RECT scissor = {REXCVAR_GET(dbz3_relight_split) ? LONG(width / 2) : 0, 0, LONG(width),
+                        LONG(height)};
+  SetScissorRect(scissor);
+  SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  deferred_command_list_.D3DOMSetRenderTargets(1, &color_rtv, FALSE, nullptr);
+  deferred_command_list_.D3DDrawInstanced(3, 1, 0, 0);
+  render_target_cache_->Dbz3InvalidateBoundRenderTargets();
+  ++g_dbz3_relight_passes;
 }
 
 void D3D12CommandProcessor::Dbz3MotionAfterDraw(
@@ -3142,6 +3463,21 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
       });
   dbz3_output_size_[0] = guest_output_width;
   dbz3_output_size_[1] = guest_output_height;
+  if (dbz3_relight_depth_ready_ && !dbz3_relight_done_) {
+    ++g_dbz3_relight_missed[dbz3_relight_post_ ? 1 : 0];
+    // Tests (DBZ3_RELIGHT_TRACE): frame trace of the next frame, a few times.
+    static const bool trace_misses = std::getenv("DBZ3_RELIGHT_TRACE") != nullptr;
+    static uint32_t traced_misses = 0;
+    if (trace_misses && traced_misses < 3 && g_dbz3_ft_frames == 0) {
+      ++traced_misses;
+      g_dbz3_ft_frames = 1;
+      REXLOG_INFO("dbz3: ft begin (relight sin aplicar, post={})", dbz3_relight_post_);
+    }
+  }
+  dbz3_relight_done_ = false;
+  dbz3_relight_depth_ready_ = false;
+  dbz3_relight_post_ = false;
+  dbz3_relight_scene_draws_ = 0;
   Dbz3TemporalEndFrame(frontbuffer_width_unscaled ? frontbuffer_width_unscaled
                                                   : frontbuffer_width);
 
@@ -3242,6 +3578,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   reg::RB_DEPTHCONTROL normalized_depth_control = draw_util::GetNormalizedDepthControl(regs);
   Dbz3FrameTraceDraw(regs, vertex_shader, pixel_shader,
                      primitive_processing_result.host_draw_vertex_count, normalized_depth_control);
+  // Relight: depth-writing 3D draws of this frame (not the "always" clears).
+  dbz3_relight_scene_draws_ += normalized_depth_control.z_enable &&
+                               normalized_depth_control.z_write_enable &&
+                               normalized_depth_control.zfunc != xenos::CompareFunction::kAlways;
 
   // Shader modifications.
   uint32_t ps_param_gen_pos = UINT32_MAX;
@@ -3362,6 +3702,18 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   // Update viewport, scissor, blend factor and stencil reference.
   UpdateFixedFunctionState(viewport_info, scissor, primitive_polygonal, normalized_depth_control);
   Dbz3TemporalApplyJitter(viewport_info, normalized_depth_control.z_enable != 0);
+  // Relight: after the scene depth, the first smaller pass with the aspect of
+  // the screen (the bloom downsample) starts the post-processing; square
+  // passes in between are shadow maps. The guest viewport registers, as the
+  // post passes are screen-space quads (no host viewport transform).
+  if (dbz3_relight_depth_ready_ && !dbz3_relight_post_) {
+    const float w = float(dbz3_frontbuffer_width_unscaled_);
+    const float h = w * float(dbz3_output_size_[1]) / float(dbz3_output_size_[0]);
+    const float vw = 2.0f * std::abs(regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_XSCALE));
+    const float vh = 2.0f * std::abs(regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_YSCALE));
+    dbz3_relight_post_ =
+        vw > 0.0f && vw < 0.9f * w && std::abs(vw * h - vh * w) <= 0.02f * w * vh;
+  }
 
   // Update system constants before uploading them.
   // TODO(Triang3l): With ROV, pass the disabled render target mask for safety.
@@ -3787,6 +4139,7 @@ bool D3D12CommandProcessor::IssueCopy() {
     return false;
   }
   Dbz3TemporalOnCopy();
+  Dbz3RelightOnCopy();
   ReadbackResolveMode readback_mode = GetReadbackResolveMode(REXCVAR_GET(d3d12_readback_resolve));
   if (readback_mode == ReadbackResolveMode::kDisabled) {
     uint32_t written_address = 0, written_length = 0;

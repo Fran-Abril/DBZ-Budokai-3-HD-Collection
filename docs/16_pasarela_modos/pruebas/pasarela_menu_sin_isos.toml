@@ -1,0 +1,16 @@
+# Sin ISOs (carpeta vacia): la saga de B1 y los retos de IW salen en gris con lo que falta en el bocadillo.
+# Menu de la entrada "Pasarela" del HUB: los cinco modos (saga de B1, tablero, Gotenks gordo, absorciones de Bu, retos de IW) y
+# en el registro las formas de los personajes que usan y los escenarios de B3 (para las tablas del codigo).
+# python tools\pruebas.py correr campanas_test docs\16_pasarela_modos\pruebas\pasarela_menu.toml
+descripcion = "Pasarela: menu de modos sin las copias de B1 e IW"
+env = ["DBZ3_TEST_MISIONES=menu", "DBZ3_PS2_GAMES=E:/DBZ3HD_trabajo/pasarela/sin_isos"]
+pasos = [
+  'log "misiones: prueba: escenario 16" 60',
+  'log "misiones: prueba: abierta" 15',
+  'esperar 2000', 'captura 01_menu_saga',
+  'tecla S 900', 'esperar 600', 'captura 02_menu_tablero',
+  'tecla S 900', 'esperar 600', 'captura 03_menu_gotenks',
+  'tecla S 900', 'esperar 600', 'captura 04_menu_bu',
+  'tecla S 900', 'esperar 600', 'captura 04b_menu_iw',
+  'tecla Backspace 1500', 'esperar 1000', 'captura 05_fuera',
+]

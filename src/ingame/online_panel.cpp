@@ -22,7 +22,7 @@
 #include <rex/input/input_system.h>
 #include <rex/runtime.h>
 
-#include "../guest_region.h"
+#include "../eu_map.h"
 #include "generated/dbz3_init.h"
 #include "../launcher/i18n.h"
 #include "../launcher/launcher_state.h"
@@ -33,6 +33,9 @@
 #include "game_style.h"
 #include "native_ui.h"
 #include "tagteam_panel.h"
+#ifndef DBZ3_EU_VARIANT
+#include "../modos.h"   // rango del ranking local (modos.cpp no entra en la build solo EU)
+#endif
 
 #include <rex/logging.h>
 
@@ -104,7 +107,7 @@ void EntryBadge(ImGuiIO& io, const char* text) {
 // E:\DBZ3HD_trabajo\bugs\analiza_fundido.py). Lo lee OnlineTick (hilo del juego) en cada cuadro. Con el
 // la fila ONLINE ya no sale sobre el negro (el byte de pantalla cambia con la pantalla aun negra y el negro
 // dura mas o menos segun lo que cargue). EU (sin medir): la cuenta de tiempo de antes, con una espera.
-constexpr uint32_t kGameFadeUs = 0x8243A278;
+constexpr dbz3::GA kGameFade = 0x8243A278;   // misma direccion en US y EU (tools/eu_map.py)
 std::atomic<float> g_game_fade{0.0f};
 std::atomic<int64_t> g_enter_ms{0}, g_leave_ms{0};   // 0 = sin salida pendiente
 std::atomic<int> g_enter_delay_ms{0};                 // EU: espera antes de salir de negro (por pantalla)
@@ -114,9 +117,7 @@ int64_t NowMs() {
 }
 float MenuFade() {
   const int64_t now = NowMs(), leave = g_leave_ms.load();
-  float a = dbz3::g_guest_eu
-                ? std::clamp(float(now - g_enter_ms.load() - g_enter_delay_ms.load()) / 1500.0f, 0.0f, 1.0f)
-                : 1.0f - g_game_fade.load();
+  float a = 1.0f - g_game_fade.load();
   if (leave) a *= std::clamp(1.0f - float(now - leave) / 300.0f, 0.0f, 1.0f);
   return a;
 }
@@ -126,6 +127,118 @@ void FadeFrom(ImDrawList* dl, int v0, float alpha) {
     ImU32& c = dl->VtxBuffer[i].col;
     c = (c & 0x00FFFFFF) | (ImU32(float(c >> 24) * alpha) << 24);
   }
+}
+
+// Indicador del online mientras se juega (menus y combate), abajo a la izquierda del area del juego: retardo
+// actual (AUTO si se ajusta solo), barras de la conexion y ping. Marco y letra de los menus del juego; al cambiar
+// el retardo se ilumina 2 s. Solo dibuja.
+void NetBadge(ImGuiIO& io, const Session& s) {
+  namespace S = dbz3::ingame::style;
+  const S::Area a = S::GameArea(io);
+  auto* dl = ImGui::GetForegroundDrawList();
+  ImFont* font = dbz3::launcher::ui::GetFonts().menu ? dbz3::launcher::ui::GetFonts().menu : ImGui::GetFont();
+  const float h = 26 * a.s, gap = 12 * a.s, bar = 7 * a.s, step = 10 * a.s;
+  const int ping = s.ping_ms();
+  char left[48], right[24];
+  std::snprintf(left, sizeof(left), T::T("RETARDO %d%s", "DELAY %d%s"), s.delay(), s.auto_delay() ? " AUTO" : "");
+  std::snprintf(right, sizeof(right), ping >= 0 ? "%d ms" : "- ms", ping);
+  const float w1 = font->CalcTextSizeA(h, FLT_MAX, 0, left).x, w2 = font->CalcTextSizeA(h, FLT_MAX, 0, right).x;
+  const ImVec2 p0 = a.At(40, 806);   // encima de la linea de reglas de combate.cpp (y 868, centrada)
+  const ImVec2 p1(p0.x + 2 * gap + w1 + gap + 4 * step + gap + w2, p0.y + 36 * a.s);
+  const float cy = (p0.y + p1.y) * 0.5f;
+  S::Frame(dl, p0, p1, a.s * 0.5f);
+  // retardo recien cambiado: la franja de la fila elegida de los menus del juego, 2 s
+  if (NowMs() - int64_t(s.delay_changed_ms()) < 2000) S::Highlight(dl, p0, p1, float(ImGui::GetTime()));
+  float x = p0.x + gap;
+  S::MenuText(dl, ImVec2(x + w1 * 0.5f, cy), h, left, true, false);
+  x += w1 + gap;
+  // 4 barras con buen ping, 1 con muy malo (doradas como el marco; las que faltan, oscuras)
+  const int bars = ping < 0 ? 0 : ping < 50 ? 4 : ping < 100 ? 3 : ping < 160 ? 2 : 1;
+  for (int i = 0; i < 4; ++i) {
+    const ImVec2 b0(x + i * step, cy + 9 * a.s - (i + 1) * 4.5f * a.s), b1(x + i * step + bar, cy + 9 * a.s);
+    dl->AddRectFilled(b0, b1, i < bars ? IM_COL32(240, 190, 50, 255) : IM_COL32(40, 45, 70, 210), 1.5f * a.s);
+    dl->AddRect(b0, b1, IM_COL32(30, 20, 10, 255), 1.5f * a.s, 0, 1.2f * a.s);
+  }
+  x += 4 * step + gap;
+  S::MenuText(dl, ImVec2(x + w2 * 0.5f, cy), h, right, true, false);
+}
+
+// Sala: rango de los dos (ficha 01, "reto que muestra el rango") con la medalla y el Elo, como las filas de la pagina
+// de Ranking del HUB (modos.cpp): TU arriba, RIVAL debajo (llega del otro PC al conectar). Si caben, una tercera fila
+// con las reglas opcionales del combate (F1 > COMBATE): iguales en los dos = van activas; distintas = apagadas.
+using dbz3::net::CombatRules;
+std::string RulesText(const CombatRules& r) {
+  std::string out;
+  auto add = [&out](const char* x) { out += (out.empty() ? "" : "  ") + std::string(x); };
+  if (r.flags & 1) add("V0");
+  if (r.flags & 2) add(T::T("DEF. DIRECTA", "DIRECT ULT."));
+  if (r.flags & 4) add(T::T("CANCELACION LB", "CANCEL LB"));
+  if (r.flags & 8) add(T::T("CANCELACION RB", "CANCEL RB"));
+  if (r.reversion) add(T::T("PIERDE FORMA", "FORM LOSS"));
+  return out;
+}
+
+void RoomRows(ImDrawList* dl, const dbz3::ingame::style::Area& a, float y0, int filas, const Session& s, float t) {
+  namespace S = dbz3::ingame::style;
+  static const char* const kMedallas[] = {"retos/medalla_1_bronce", "retos/medalla_2_plata", "retos/medalla_3_oro",
+                                          "retos/medalla_4_platino", "retos/medalla_5_diamante"};
+  auto nombre = [](int tramo) {   // los tramos de modos.cpp: cada 100 de Elo desde 1000
+    switch (tramo) {
+      case 0: return T::T("Guerrero Z", "Z Fighter");
+      case 1: return "Super Saiyan";
+      case 2: return T::T("Kaio", "King Kai");
+      case 3: return T::T("Kaio-shin", "Supreme Kai");
+      default: return "Shenron";
+    }
+  };
+  int elo[2] = {1000, 1000}, tramo[2] = {-1, -1};
+  CombatRules reglas[2];
+  s.MyRoom(&elo[0], &tramo[0], &reglas[0]);
+  const bool peer = s.PeerRoom(&elo[1], &tramo[1], &reglas[1]);
+  constexpr float paso = 44;
+  S::Frame(dl, a.At(330, y0), a.At(870, y0 + 16 + paso * float(filas)), a.s);
+  const float k = 30 * a.s;
+  for (int i = 0; i < 2; ++i) {
+    const float y = y0 + 8 + paso * (float(i) + 0.5f);
+    if (i == 0) S::Highlight(dl, a.At(330, y - paso * 0.5f + 2), a.At(870, y + paso * 0.5f - 2), t);
+    S::MenuText(dl, a.At(395, y), k, i == 0 ? T::T("TÚ", "YOU") : T::T("RIVAL", "RIVAL"), i == 0, false);
+    if (i == 1 && !peer) {
+      S::MenuText(dl, a.At(640, y), k, T::T("Esperando...", "Waiting..."), false, true);
+      continue;
+    }
+    if (tramo[i] < 0) {
+      S::MenuText(dl, a.At(640, y), k, T::T("Sin combates", "No fights yet"), i == 0, false);
+      continue;
+    }
+    if (const S::Pic md = S::Img(kMedallas[std::clamp(tramo[i], 0, 4)])) {
+      const float r = paso * 0.42f;
+      S::DrawPic(dl, md, a.At(470 - r, y - r), a.At(470 + r, y + r));
+    }
+    S::MenuText(dl, a.At(630, y), k, nombre(tramo[i]), i == 0, false);
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d", elo[i]);
+    S::MenuText(dl, a.At(800, y), k, buf, i == 0, false);
+  }
+  if (filas < 3) return;
+  const float y = y0 + 8 + paso * 2.5f;
+  S::MenuText(dl, a.At(395, y), k * 0.8f, T::T("REGLAS", "RULES"), false, false);
+  std::string val;
+  bool on = false, off = false;
+  if (!peer) {
+    val = T::T("Esperando...", "Waiting...");
+    off = true;
+  } else if (!(reglas[0] == reglas[1])) {
+    val = T::T("Distintas: combate original", "Different: original combat");
+    off = true;
+  } else if (!reglas[0].any()) {
+    val = T::T("Combate original", "Original combat");
+  } else {
+    val = RulesText(reglas[0]);
+    on = true;
+  }
+  ImFont* font = dbz3::launcher::ui::GetFonts().menu ? dbz3::launcher::ui::GetFonts().menu : ImGui::GetFont();
+  const float w = font->CalcTextSizeA(k, FLT_MAX, 0, val.c_str()).x, max = 380 * a.s;   // que quepa en la fila
+  S::MenuText(dl, a.At(660, y), w > max ? k * max / w : k, val.c_str(), on, off);
 }
 
 // Quinta fila "ONLINE" del menu de Duelo. Medidas de una captura a 1600x900 (area 4:3 desde
@@ -332,8 +445,8 @@ void OnlineTick(uint8_t* base, uint16_t p1_buttons) {
   auto& s = Session::Get();
   constexpr uint16_t kX = 0x4000;
   const int screen = base[dbz3::GuestAddr(0x824BA110, 0x824BA100)];
-  if (!dbz3::g_guest_eu) {
-    const uint32_t bits = REX_LOAD_U32(kGameFadeUs);
+  {
+    const uint32_t bits = REX_LOAD_U32(kGameFade);
     float f;
     std::memcpy(&f, &bits, 4);
     g_game_fade = std::isfinite(f) ? std::clamp(f, 0.0f, 1.0f) : 0.0f;
@@ -467,6 +580,7 @@ void OnlinePanel::OnDraw(ImGuiIO& io) {
                                                    "ONLINE: the match with the other PC was cut. You will see why when the fight ends."));
     }
     editing_ = false;
+    if (s.link() == Link::kPlaying) NetBadge(io, s);   // retardo y ping, en menus y en combate
     // entradas propias en los menus del juego: rotulo con el boton X, como los avisos del juego
     const int screen = g_screen.load();
     // jugando online, en el menu de Duelo: X sale del online (lo lee este PC, no el lockstep)
@@ -515,11 +629,6 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
   // comparan aparte en el HELLO. 1 contra 1: Tag Team online sigue sin autorizar (falta el relevo guest).
   std::string admission_reason;
   auto admission_ready = [&admission_reason]() {
-    if (dbz3::g_guest_eu) {
-      admission_reason = T::T("Online: solo con la version US del juego.", "Online: US version of the game only.");
-      REXLOG_WARN("dbz3 online: {}", admission_reason);
-      return false;
-    }
     const std::filesystem::path exe = rex::filesystem::GetExecutablePath();
     std::vector<std::filesystem::path> files = {exe};
 #ifdef _WIN32
@@ -542,6 +651,13 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
                               "Online: close the previous session and try again.");
       return false;
     }
+    // rango propio para la sala (ficha 01): el del ranking local (combates.csv); sin combates, sin rango
+    int elo = 1000, tramo = -1;
+#ifndef DBZ3_EU_VARIANT
+    if (!dbz3::modos::PerfilJugador(&elo, &tramo, nullptr)) elo = 1000, tramo = -1;
+#endif
+    Session::Get().SetProfile(elo, tramo);
+    REXLOG_INFO("dbz3 online: rango propio para la sala: elo {}, tramo {}", elo, tramo);
     return true;
   };
 
@@ -594,7 +710,7 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
   const Row cur = rows[size_t(row_)];
   const int step = (pressed & kRight) ? 1 : (pressed & kLeft) ? -1 : 0;
   if (cur == kPortRow && step) port_ = std::clamp(port_ + step, 1024, 65535);
-  if (cur == kDelayRow && step) delay_ = std::clamp(delay_ + step, 1, 8);
+  if (cur == kDelayRow && step) delay_ = std::clamp(delay_ + step, 0, 8);   // 0 = AUTO
   const bool can_start = link == Link::kConnected && s.mods_match();
   if (pressed & kA) {
     last_err_.clear();   // una accion nueva borra el error anterior
@@ -658,6 +774,7 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
   constexpr float kStep = 72;
   const ImVec2 f0 = a.At(330, 175), f1 = a.At(870, 175 + kStep * n + 20);
   S::Frame(dl, f0, f1, a.s);
+  if (!idle) RoomRows(dl, a, 175 + kStep * n + 44, n >= 3 ? 2 : 3, s, t);   // sala: rango y reglas de los dos
   char buf[96];
   for (int i = 0; i < n; ++i) {
     const ImVec2 r0(f0.x, f0.y + (10 + kStep * i) * a.s), r1(f1.x, r0.y + (kStep - 2) * a.s);
@@ -667,10 +784,10 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
     const char* label = "";
     bool disabled = false;
     switch (rows[size_t(i)]) {
-      case kHostRow: label = T::T("CREAR PARTIDA", "HOST A MATCH"); disabled = dbz3::g_guest_eu; break;
+      case kHostRow: label = T::T("CREAR PARTIDA", "HOST A MATCH"); break;
       case kJoinRow:
         label = T::T("UNIRSE", "JOIN");
-        disabled = !ip_[0] || dbz3::g_guest_eu;
+        disabled = !ip_[0];
         break;
       case kIpRow:
         std::snprintf(buf, sizeof(buf), T::T("CODIGO  %s", "CODE  %s"), ip_[0] ? ip_ : "- - -");
@@ -681,7 +798,8 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
         label = buf;
         break;
       case kDelayRow:
-        std::snprintf(buf, sizeof(buf), T::T("RETARDO  %d", "DELAY  %d"), delay_);
+        if (delay_ == 0) std::snprintf(buf, sizeof(buf), "%s", T::T("RETARDO  AUTO", "DELAY  AUTO"));
+        else std::snprintf(buf, sizeof(buf), T::T("RETARDO  %d", "DELAY  %d"), delay_);
         label = buf;
         break;
       case kStartRow:
@@ -728,8 +846,7 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
   if (!last_err_.empty()) say = last_err_ + "\n";
   if (idle) {
     if (link != Link::kIdle) say += s.Status() + "\n";
-    if (dbz3::g_guest_eu) say += T::T("Online: solo con la version US del juego.", "Online: US version of the game only.");
-    else switch (cur) {
+    switch (cur) {
       case kHostRow:
         say += T::T("Crea la partida: te dara un codigo de sala para pasarselo al otro jugador. Necesitais la misma version y los mismos mods.",
                     "Host the match: you get a room code to give to the other player. You both need the same version and mods.");
@@ -744,8 +861,11 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
                     "UDP port. When you host, the game tries to open it on your router; if it can't, forward it by hand.");
         break;
       default:
-        say += T::T("Mas retardo, mas suave con mala conexion: 2-3 en casa, 4-6 por internet.",
-                    "More delay is smoother on a bad connection: 2-3 at home, 4-6 online.");
+        say += delay_ == 0
+                   ? T::T("AUTO: el juego ajusta el retardo a la conexion, tambien en pleno combate. Lo decide quien crea la partida.",
+                          "AUTO: the game adjusts the delay to the connection, even mid-fight. The host decides it.")
+                   : T::T("Retardo fijo. Mas retardo, mas suave con mala conexion: 2-3 en casa, 4-6 por internet.",
+                          "Fixed delay. More delay is smoother on a bad connection: 2-3 at home, 4-6 online.");
         break;
     }
   } else {
@@ -787,6 +907,15 @@ void OnlinePanel::DrawScreen(ImGuiIO& io, uint16_t pressed) {
                            "\nSame mods. Press START: you both go to character select (1P VS 2P).")
                     : T::T("\nMods iguales. Esperando a que el anfitrion empiece...",
                            "\nSame mods. Waiting for the host to start...");
+        int e0, t0, e1, t1;
+        CombatRules r0, r1;
+        s.MyRoom(&e0, &t0, &r0);
+        if (s.PeerRoom(&e1, &t1, &r1) && (r0.any() || r1.any())) {   // reglas opcionales del combate (F1)
+          say += r0 == r1 ? T::T("\nReglas de combate iguales en los dos: van activas.",
+                                 "\nSame combat rules on both PCs: they are on.")
+                          : T::T("\nReglas de combate distintas: se juega el combate original.",
+                                 "\nDifferent combat rules: the original combat is played.");
+        }
       } else if (!diff_ready) {
         say += T::T("\nMods distintos: comparando las listas...", "\nDifferent mods: comparing the lists...");
       } else {

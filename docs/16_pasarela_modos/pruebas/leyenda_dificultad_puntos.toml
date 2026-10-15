@@ -1,0 +1,24 @@
+# Leyenda de Mr. Satan como en B1: dificultad (aqui Avanzado: el COM con el nivel 2 de la IA, mgr+35573), puntos al
+# ganar (LIFE + TIME / 2) y pantalla de resultado del original (Challenger Nth, Now!!, You have, caras de los 11).
+# python tools/pruebas.py correr campanas_test docs/16_pasarela_modos/pruebas/leyenda_dificultad_puntos.toml
+descripcion = "Pasarela: leyenda en Avanzado, puntos y resultado de B1"
+env = ["DBZ3_TEST_PASARELA=auto,desde=0,dificultad=2", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games", "DBZ3_TEST_RINGOUT=1"]
+pasos = [
+  'log "pasarela: paso 1/26 \(presentacion" 60',
+  'esperar 1500', 'captura 01_presentacion_dificultad',
+  'log "pasarela: dificultad Avanzado \(nivel del COM 2\)" 20',
+  'log "pasarela: ronda 1 \(1/1\): id 14 contra id 13 .*reglas: Avanzado \(COM 2\)" 20',
+  'log "pasarela: paso 2: nivel del COM [0-9] -> 2" 60',
+  'log "pasarela: paso 2 estado del combate 4" 60',
+  'esperar 1500', 'captura 02_combate_yamcha',
+  'log "pasarela: paso 2 estado del combate 7" 60',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "pasarela: puntos del combate [0-9]+ .*total [0-9]+" 20',
+  'log "pasarela: paso 2/26 \(combate ronda 1\): resultado" 10',
+  'esperar 1500', 'captura 03_resultado_retador_1',
+  'log "pasarela: paso 3/26 \(charla ronda 2\)" 20',
+  'log "pasarela: paso 4 estado del combate 7" 120',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "pasarela: paso 4/26 \(combate ronda 2\): resultado" 30',
+  'esperar 1500', 'captura 04_resultado_retador_2',
+]

@@ -10,7 +10,49 @@ tabla en §1). Hay mucho hecho que **no estaba en las fichas** y las supera (§2
 tareas pequeñas por frente (§3). De los 222 assets propuestos solo hacen falta de verdad unos 10, y casi todos se
 pueden generar por código como CC0 (§4).
 
-## 1. Matriz de estado (comparado con el código y las pruebas de hoy)
+## 0. Estado tras la ronda 2 (2026-10-15, coordinador; sustituye a la puntuación de §1)
+
+Cada ficha cuenta 1 si su **entregable mínimo** funciona en el juego y está probado (capturas en `D:\DBZ3HD\_pruebas\`).
+Detalle y pruebas en el `.md` de cada frente (`RONDA2.md`). WL = caso de aceptación de
+`studies/11_vision_futura/INTEGRACION_SEGURA.md`, cerrado en el juego por su frente (sección "WL" de su `.md`).
+
+| # | Ficha | Nota | Frente y prueba | WL |
+|---|---|---|---|---|
+| 01 | Ranking + pantalla de rango | 1 | rpg (perfil, medallas, rango en la lista) + online (rango en la sala) | — |
+| 02 | Retardo adaptativo / relight / minijuego IW | 1 | A online (AUTO, `online_lag` PASS), B grafico (SSAO opcional), C campanas (retos de IW) | — |
+| 03 | Torneo de 4 con bots | 1 | rpg `torneo` | — |
+| 04 | Saga B1 propia | 1 | campanas `saga_b1` | — |
+| 05 | Ruleset competitivo v0 | 1 | combate (F1, apagado de serie) | — |
+| 06 | Z-Counter: sonda y aviso | 1 | combate | — |
+| 07 | Traje de época con moveset/cápsulas | 1 | ports: 5.º traje de Vegeta con golpes, Galick Gun, cápsulas, aura y rótulo "Traje de época" | — |
+| 08 | Goku Black (SDBH) | 1 | ports (Rosé, aura, definitiva) | — |
+| 09 | 10 oleadas + 2 modificadores + contador + premio | 1 | rpg `supervivencia09` | — |
+| 10 | Clima | 1 | escenarios `clima_namek` + F1/launcher (hub) | — |
+| 11 | Lector de frame data | 1 | combate `studies/tools/frame_data.py` (+ `--medido`) | — |
+| 12 | Lab: 2 ataques medidos en ambos lados | 1 | combate + rpg (pantalla, muñeco, sin cápsulas) | PASS (sin hitstop en el juego; geometría no inventada) |
+| 13 | Roshi jugable | 1 | ports (SDBH, golpes de Krilin, voces propias de SDBH) | PASS (12 casos; terrestre bloqueado como pide la ficha) |
+| 14 | Cápsula de transformación única | 1 | transformaciones (P+K+G real, generada por el juego) | PASS |
+| 15 | Técnica directa sin Hyper | 1 | combate | PASS (KO en el arranque: por equivalencia) |
+| 16 | Cancel accesible | 1 | combate | PASS |
+| 17 | Tablero de 6 nodos | 1 | campanas `tablero`, `tablero_fracaso` | PASS |
+| 18 | Reversión por daño | 1 | combate (también ki blasts) | PASS (sin armadura en el juego base) |
+| 19 | Jefes gigantes | 1 | escenarios: escala, cuerpo y alcance de golpes a escala (gigante acierta a 30-40) | PASS (sin ataques propios de jefe) |
+| 20 | Fusión de B2 como personaje + misión | 1 | ports (Fat/Ghost Gotenks, Yamhan) + campanas `mision_gotenks` | PASS |
+| 21 | Buu absorbido elegible | 1 | campanas `mision_buu`, `bu_tecnica` | PASS |
+| 22 | Intro de 10 s con skip | 1 | escenarios `cine_intro`, `cine_salto` | PASS |
+| 23 | 3 días + 1 jefe | 1 | rpg `simulacion` | PASS |
+| 24 | Vida persistente + Zeni + tienda | 1 | rpg `tienda`, `tienda_cadena` | PASS |
+| 25 | Modo héroe | 1 | rpg `heroe`, `wl25` (lanza su técnica) | PASS |
+| 26 | Torres + rotación semanal | 1 | rpg `torres`, `torre_saiyan_ki` | PASS |
+| 27 | Abyss: 3 pisos y 3 cartas | 1 | rpg `abyss`, `abyss_cadena` | PASS |
+| 28 | Kumite de jefes | 1 | rpg `jefes`, `jefes_flujo` | PASS |
+| 29 | Plan + prototipos | 1 | `test_wishlist.py` 33 OK + todos los casos WL-12..28 ejecutados en el juego | — |
+
+**Suma 29 / 29 = 100 %** (antes 23 %). Límites documentados (no forman parte de los mínimos): sin ataques propios
+de jefe gigante, Roshi terrestre bloqueado, voces de los ports comprobadas en sus bancos (falta oírlas), Pan (GT, sin
+publicar) con un cierre raro por la reserva de efectos del juego. US y EU (frente eu; online EU en su última prueba).
+
+## 1. Matriz de estado (ronda 1, histórico) (comparado con el código y las pruebas de hoy)
 
 Estado: **HECHO** (entregable mínimo en el juego), **A MEDIAS** (parte en el juego o solo base), **OFFLINE**
 (solo prototipo/documento), **SIN EMPEZAR**. Las pruebas `D:\DBZ3HD\_pruebas\<fecha>_...` son capturas + log.

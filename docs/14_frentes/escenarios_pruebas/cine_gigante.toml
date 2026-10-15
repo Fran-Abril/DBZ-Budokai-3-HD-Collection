@@ -1,0 +1,3 @@
+descripcion = "Fichas 19+22 juntas con las opciones del jugador (dbz3_jefe_gigante = 1.8, dbz3_cine_intro): el rival COM ya es gigante en la presentacion del juego y en la intro de cine, y sigue gigante en la pelea"
+env = ["DBZ3_TEST_BATTLE=0,7,7", "REX_DBZ3_CINE_INTRO=true", "REX_DBZ3_JEFE_GIGANTE=1.8", "DBZ3_SONDA_GIGANTE=1"]
+pasos = ["log \"tag: empieza un combate\" 60", "esperar 9000", "captura 01_presentacion", "esperar 4500", "captura 02_presentacion", "log \"cine: empieza la intro\" 40", "esperar 1500", "captura 03_intro_escenario", "esperar 2500", "captura 04_intro_goku", "esperar 2500", "captura 05_intro_vegeta", "log \"cine: intro terminada\" 20", "esperar 1500", "captura 06_pelea"]

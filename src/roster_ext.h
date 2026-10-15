@@ -100,6 +100,12 @@ uint32_t SkillSlot1();
 // keeps 2048 although the retail catalogue has 596).
 uint32_t CapsuleCount();
 void OwnNewCapsules(uint32_t inventory);
+// Capsula de transformacion unica (ficha 14, ID forms::UnifiedId): bit f = la forma f la da (agrupable y
+// desbloqueada, con las anteriores tambien); 0 si el personaje no tiene o el mod no esta activo.
+uint8_t UnifiedForms(int id);
+// Edit Skills: la capsula unica del personaje (su ID) si da 2+ formas desbloqueadas, si no 0. Cuenta como tuya
+// sin escribir el inventario: la partida guardada no cambia (WL-14).
+uint32_t UnifiedListed(int id);
 
 // "Custom" capsule list of a roster character (7 x u16, 0xFFFF = empty). The save
 // keeps one per select SLOT; a new cell shares its host slot, so the select swaps

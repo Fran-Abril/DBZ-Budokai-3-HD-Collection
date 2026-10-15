@@ -1,0 +1,3 @@
+descripcion = "WL-22: reto de 1 combate con intro (user_data/dbz3/modos/kumite.toml de escenarios_pruebas/wl22_kumite.toml) y premio 777: intro saltada con A a los 2 s, victoria y premio una sola vez"
+env = ["DBZ3_TEST_MODO=kumite,0,0", "DBZ3_HUB_MODE=5", "DBZ3_TEST_KO=1"]
+pasos = ["log \"modos: prueba: kumite\" 90", "log \"cine: empieza la intro\" 60", "esperar 2000", "captura 01_intro", "tecla Space 300", "log \"cine: intro saltada\" 10", "tecla D:500 100", "tecla L 300", "tecla L 300", "tecla L 300", "tecla L 300", "tecla L 300", "tecla L 300", "tecla L 300", "tecla L 300", "tecla L 300", "tecla L 300", "log \"kumite terminado\" 30", "log \"rpg: premio de 777\" 30", "esperar 6000", "captura 02_fin"]

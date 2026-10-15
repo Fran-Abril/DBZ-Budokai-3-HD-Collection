@@ -22,6 +22,7 @@ partir del de su donante (mismas secuencias y huecos) con sus propios sonidos:
 
     gritos = "iw:JANENBA"    # sus grabaciones de Infinite World, repartidas por duracion
     gritos = "sb2:GHF"       # su banco de Shin Budokai, tono a hueco (sb_voces.py)
+    gritos = "wav:gritos"    # los .wav de esa carpeta del mod (voces de Heroes, importar.py), por duracion
     gritos = "donante"       # los del donante (por defecto si no hay fuente)
     gritos = "ninguno"       # sin gritos (silencio)
 """
@@ -377,6 +378,27 @@ def iw_pool(iw, who, lang):
         seen.add(v)
         x, r = adx_decode(iw.adx(lang, v))
         pool.append(resample(x, r))
+    return pool
+
+
+def wav_pool(folder, rms=7000.0):
+    """Los .wav de una carpeta (cualquier frecuencia; estereo -> mono) a 16 kHz. Si la mediana de su volumen
+    (RMS) pasa de la de las grabaciones de IW (~6000-7000), se bajan todos a la vez."""
+    import glob  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    import wave  # noqa: PLC0415
+    pool = []
+    for f in sorted(glob.glob(os.path.join(folder, "*.wav"))):
+        with wave.open(f, "rb") as w:
+            if w.getsampwidth() != 2:
+                continue
+            x = np.frombuffer(w.readframes(w.getnframes()), "<i2").reshape(-1, w.getnchannels()).mean(axis=1)
+            pool.append(resample(x.astype(np.int16), w.getframerate()))
+    if not pool:
+        raise ValueError("sin .wav de 16 bits en %s" % folder)
+    med = float(np.median([np.sqrt(np.mean(x.astype(np.float64) ** 2)) for x in pool]))
+    if med > rms:
+        pool = [(x.astype(np.float64) * (rms / med)).astype(np.int16) for x in pool]
     return pool
 
 

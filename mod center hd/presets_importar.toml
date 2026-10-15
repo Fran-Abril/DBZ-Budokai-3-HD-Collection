@@ -76,6 +76,6 @@ golpes = "fuente"
 voces = "fuente"
 
 [sdbh.original]
-descripcion = "Dragon Ball Heroes: el modelo de SDBH sobre el cuerpo del donante (sus golpes no se portan)"
+descripcion = "Dragon Ball Heroes: el modelo de SDBH sobre el cuerpo del donante (sus golpes no se portan); gritos de los golpes con sus voces de Heroes si el juego de PC esta instalado"
 golpes = "donante"
-voces = "donante"
+voces = "fuente"

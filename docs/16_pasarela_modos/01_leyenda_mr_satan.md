@@ -110,10 +110,10 @@ Sin las imágenes del banco (ISO de otra región con otra disposición) el modo 
 | Falta | Cómo | Coste |
 |---|---|---|
 | ~~Vida que no se recupera, 5 Cell Jr. de 1000, 60 s, sin tiempo, formas~~ | hecho con `RequestBattleEx` (2026-10-15) | — |
-| Ki inicial del rival (300-700 en B1) | el conector no lo tiene | bajo |
-| La vida arrastrada acorta también la barra (vida inicial = máxima) | el conector pone las dos; en B1 la máxima sigue en 3000 | bajo |
-| Reglas en código (armadura de A16, Mr. Satán herido, ki lento) | multiplicadores de daño/ki en combate (ganchos nuevos) | medio |
-| Dificultad Novato/Experto/Avanzado | nivel del COM por combate (sin localizar en B3) | medio |
-| Puntos y pantalla de resultado (Challenger Nth, NEXT BATTLE, caras chibi) | imágenes de la entrada 668 + vida/tiempo al acabar | bajo |
+| ~~Ki inicial del rival (300-700 en B1)~~ | hecho (ronda 2): `VigilarCombate` lo escribe al llegar al READY (`X+6100`; 1 barra = 1000 en B3, B1 300 = 3 barras) | — |
+| ~~La vida arrastrada acorta también la barra~~ | hecho antes: vida `< 0` = solo la inicial | — |
+| ~~Reglas en código (armadura de A16, Mr. Satán herido, ki lento)~~ | hecho (ronda 2) por memoria, sin ganchos: A16 anula la mitad del daño que recibe; contra Trunks el daño que no viene de gastar ki en los 1,5 s anteriores se queda en un 25 %; contra Piccolo Mr. Satán gana la mitad de ki. Los multiplicadores de B1 están en `satanmode.c` sin descifrar: los valores son nuestros | — |
+| ~~Dificultad Novato/Experto/Avanzado~~ | hecho (ronda 2): el título lleva el letrero de B1 (666 #6) con las 3 dificultades (666 #7-9); la elegida es el **nivel de la IA del COM** (`mgr+35573`: `sub_820FC9B0` lo pone de las opciones en el Duelo y del nivel en el Torneo; lo leen las tablas por personaje de `sub_8213E6C8`, como B1 `charfile+0x48[dificultad]`) | — |
+| ~~Puntos y pantalla de resultado~~ | hecho (ronda 2): puntos como B1 (`0x198E18`: LIFE = vida del ganador − la del otro, TIME = segundos que sobran × 20; la leyenda suma la mitad, `0x198F00`) y pantalla de resultado con las piezas de la 668 (#15 tablón y NEXT BATTLE, #16 "Challenger Nth", #19 "Now!!", #21 "You have", #22 cifras, #24 caras de los 11: vencidos en color, el resto en silueta) y total con récord al final (#18). Sin los puntos por golpe de B1 (HIT, COMBO FIN, THROW...: 14 sucesos más con `0x1AF6F0`; necesitan ganchos en el combate) | — |
 | Voces de Mr. Satán en las charlas | `ADX_JP.AFS` (solo japonés en B1 EU); sin mapa de clips | medio |
 | ISO americana de B1 | probar la firma de la tabla y del banco (no hay copia en disco) | bajo |

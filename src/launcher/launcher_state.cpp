@@ -2639,6 +2639,32 @@ void LauncherDialog::DrawUpscaleTab() {
         "Dithers the final image: fewer gradient bands, at the cost of a little "
         "noise."));
 
+  // Experimental relight (SSAO on the 3D scene, runtime dbz3_relight_level).
+  ImGui::Spacing();
+  PushSectionHeader(i18n::T("Iluminación (experimental)", "Lighting (experimental)"));
+  {
+    const char* relight_items[] = {i18n::T("No", "Off"), i18n::T("Baja", "Low"),
+                                   i18n::T("Alta", "High")};
+    int relight = dbz3::settings::Relight();
+    ui::RowLabel(i18n::T("Sombras de contacto (SSAO)", "Contact shadows (SSAO)"));
+    if (ImGui::Combo("##relight", &relight, relight_items, 3)) {
+      dbz3::settings::SetRelight(relight);
+      dbz3::settings::ApplyRuntimeSettingsToSdk(false);
+      dbz3::settings::SaveUserSettings();
+    }
+    ui::Tip(i18n::T(
+        "Oscurece un poco los rincones, los pliegues de la ropa y donde los personajes tocan el "
+        "suelo. Solo en la escena 3D: la interfaz y los menús no cambian. Solo con Direct3D 12. "
+        "Experimental: cuesta rendimiento (Alta, más). Si el juego va a tirones, bájalo o apágalo.",
+        "Slightly darkens corners, clothing folds and where the characters touch the ground. "
+        "Only on the 3D scene: the HUD and the menus don't change. Direct3D 12 only. "
+        "Experimental: costs performance (High, more). If the game stutters, lower it or turn "
+        "it off."));
+    ImGui::SameLine(0.0f, 10.0f);
+    ui::Pill(ICON_WARN, i18n::T("Experimental: cuesta rendimiento", "Experimental: costs performance"),
+             kWarn);
+  }
+
   ImGui::Spacing();
   ImGui::TextColored(kTextDim,
                      i18n::T("Se aplica al momento. En partida tambien puedes cambiarlo con F1 o "
@@ -2883,6 +2909,23 @@ constexpr FeatureText kFeatureTexts[] = {
     {"dbz3_form_select_enabled", "Selector de transformacion", "Transformation selector",
      "LT/RT en la seleccion de personaje: empiezas transformado (con su capsula). En online no se usa.",
      "LT/RT at character select: start transformed (needs its capsule). Not used online.", true},
+    // frente escenarios (clima.cpp, gigantes.cpp, cine.cpp): apagados de serie; el jefe gigante es un numero
+    // (escala: casilla + deslizador)
+    {"dbz3_clima", "Clima vivo", "Living weather",
+     "El cielo del escenario se oscurece poco a poco durante el combate. Solo se ve: no cambia el combate. No se "
+     "usa en el online.",
+     "The stage sky slowly darkens during the fight. Display only: the fight does not change. Not used "
+     "online.", false},
+    {"dbz3_jefe_gigante", "Jefe gigante", "Giant boss",
+     "El rival que controla la consola sale más grande, como un jefe gigante, y la cámara se abre para verlo. "
+     "Solo cambia su tamaño en pantalla. No se usa en el online.",
+     "The rival controlled by the console appears bigger, like a giant boss, and the camera widens to show it. "
+     "Only its on-screen size changes. Not used online.", false},
+    {"dbz3_cine_intro", "Intro de cine", "Cinematic intro",
+     "Al empezar cada combate, 10 s de cámara de cine sobre el escenario y los luchadores; A la salta. No se usa "
+     "en el online.",
+     "When each fight starts, 10 s of cinematic camera over the stage and the fighters; A skips it. Not used "
+     "online.", false},
 };
 
 // Categorias que ya tienen su pestana (Video, Audio...): sus cvars no se repiten en Juego.
@@ -2898,6 +2941,7 @@ struct Feature {
   std::string cvar, name, help;
   bool beta = false, test = false, restart = false;
   std::vector<std::string> values;   // cvar de texto con valores permitidos (un combo); vacio = interruptor
+  bool scale = false;                // cvar numerico de escala (0 = apagado): casilla + deslizador 100-250 %
 };
 
 // Lista de funciones registradas. El registro no cambia tras el arranque: se lee una vez por idioma.
@@ -2911,7 +2955,8 @@ const std::vector<Feature>& Features() {
   for (const FeatureText& t : kFeatureTexts) {
     if (const rex::cvar::FlagEntry* f = rex::cvar::GetFlagInfo(t.cvar)) {
       list.push_back({t.cvar, i18n::T(t.es, t.en), i18n::T(t.help_es, t.help_en), t.beta, false,
-                      f->lifecycle == rex::cvar::Lifecycle::kRequiresRestart, {}});
+                      f->lifecycle == rex::cvar::Lifecycle::kRequiresRestart, {},
+                      f->type == rex::cvar::FlagType::Double});
     }
   }
   for (const rex::cvar::FlagEntry& f : rex::cvar::GetRegistry()) {
@@ -2945,7 +2990,27 @@ const std::vector<Feature>& Features() {
 bool FeatureRow(const Feature& f) {
   ImGui::PushID(f.cvar.c_str());
   bool changed = false;
-  if (f.values.empty()) {
+  if (f.scale) {   // jefe gigante: casilla (0 = apagado) y, encendido, su tamano (125-250 %)
+    const double v = rex::cvar::Query<double>(f.cvar);
+    bool on = v > 0.0;
+    {
+      ui::FontScope b(ui::GetFonts().bold);
+      changed = ImGui::Checkbox(f.name.c_str(), &on);
+    }
+    if (changed) rex::cvar::SetFlagByName(f.cvar, on ? "1.75" : "0");
+    if (on && !changed) {
+      ImGui::SameLine(0.0f, 16.0f);
+      int pct = int(v * 100.0 + 0.5);
+      ImGui::SetNextItemWidth(160.0f);
+      if (ImGui::SliderInt("##escala", &pct, 125, 250, "%d %%")) {
+        pct = (pct + 12) / 25 * 25;
+        rex::cvar::SetFlagByName(f.cvar, std::to_string(pct / 100.0));
+        changed = true;
+      }
+      ImGui::SameLine(0.0f, 8.0f);
+      ImGui::TextUnformatted(i18n::T("Tamaño", "Size"));
+    }
+  } else if (f.values.empty()) {
     bool on = rex::cvar::Query<bool>(f.cvar);
     {
       ui::FontScope b(ui::GetFonts().bold);

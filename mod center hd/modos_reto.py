@@ -209,8 +209,11 @@ def escribir(modo, n, salida):
 # Los mismos retos por defecto que el juego (PorDefecto en src/modos.cpp): rivales, vida del primer rival y
 # cuanto sube en cada combate, si la vida del jugador pasa al siguiente combate y cuanta recupera entre medias.
 NATIVO = {"torre": dict(rivales=[42, 18, 19, 21, 20, 27, 33, 36], vida_rival=(2000, 300), arrastra=False, recupera=0),
+          # ficha 09: 1000 Zenie al completarla; oleadas 3/6/9 con 60 s y 4/7/10 con un rival que se regenera
           "supervivencia": dict(rivales=[42, 43, 29, 28, 30, 38, 37, 35, 40, 41], vida_rival=(1500, 150),
-                                arrastra=True, recupera=500),
+                                arrastra=True, recupera=500, premio=1000,
+                                por_combate={2: {"tiempo": 60}, 5: {"tiempo": 60}, 8: {"tiempo": 60},
+                                             3: {"regen": 25}, 6: {"regen": 25}, 9: {"regen": 25}}),
           "kumite": dict(rivales=[27, 33, 38, 40, 36], vida_rival=(5000, 500), arrastra=True, recupera=1000)}
 ESCENARIOS_NATIVO = [0, 1, 2, 3, 4, 5, 6, 7]   # indice de escenario del Duelo (0 = Torneo, con ring)
 VIDA_TOPE = 7000                                # 7 barras
@@ -218,10 +221,15 @@ RECORTADOS = {22, 23, 24, 25, 26, 31}           # sin modelo en el juego: solo c
 
 
 def nativo(tipo, rivales=None, escenarios=None, vida=3000, vida_inicial=0, vida_rival=None, arrastra=None,
-           recupera=None, pausa=False, nombre="", name="", tiempo=0, regen=0, objetivo=0):
+           recupera=None, pausa=False, nombre="", name="", tiempo=0, regen=0, objetivo=0, premio=None,
+           clima=False, gigante=0.0, intro=False, gigante_en=None):
     """Reto nativo (dict) con los valores por defecto del juego para lo que no se indique.
     tiempo = limite de cada combate (s); regen = vida por segundo que recupera el rival; objetivo = aguantar
-    esos segundos gana el combate (kumite de aguante). nombre/name = el nombre que ensenan el HUB y las pantallas."""
+    esos segundos gana el combate (kumite de aguante). nombre/name = el nombre que ensenan el HUB y las pantallas.
+    premio = Zenie del monedero del HUB al completarlo (src/rpg.cpp). Con los rivales por defecto, los
+    modificadores por oleada del juego (supervivencia). Reglas de escenario (docs/14_frentes/escenarios.md R1):
+    clima = el cielo se oscurece; gigante = escala del rival (0.5..3; 0 = normal) en todos los combates o, con
+    gigante_en = [indices], solo en esos; intro = intro de cine de 10 s antes de cada combate."""
     d = NATIVO[tipo]
     rivales, escenarios = rivales or d["rivales"], escenarios or ESCENARIOS_NATIVO
     v0, paso = vida_rival or d["vida_rival"]
@@ -233,11 +241,23 @@ def nativo(tipo, rivales=None, escenarios=None, vida=3000, vida_inicial=0, vida_
     doc.update({"vida": vida, "vida_inicial": vida_inicial,
                 "arrastra_vida": d["arrastra"] if arrastra is None else arrastra,
                 "recupera": d["recupera"] if recupera is None else recupera, "pausa": pausa})
-    for k, v in (("tiempo", tiempo), ("regen", regen), ("objetivo_tiempo", objetivo)):
+    premio = d.get("premio", 0) if premio is None else premio
+    if premio:
+        doc["premio"] = premio
+    for k, v in (("tiempo", tiempo), ("regen", regen), ("objetivo_tiempo", objetivo), ("clima", clima),
+                 ("intro", intro)):
         if v:
             doc[k] = v
+    if gigante and gigante_en is None:
+        doc["gigante"] = float(gigante)
     doc["combate"] = [{"rival": r, "escenario": escenarios[i % len(escenarios)],
                        "vida": min(VIDA_TOPE, v0 + paso * i)} for i, r in enumerate(rivales)]
+    if rivales is d["rivales"]:
+        for i, extra in d.get("por_combate", {}).items():
+            doc["combate"][i].update(extra)
+    if gigante and gigante_en is not None:
+        for i in gigante_en:
+            doc["combate"][i]["gigante"] = float(gigante)
     return doc
 
 
@@ -260,9 +280,14 @@ def comprobar_nativo(doc):
             err.append("combate %d: vida fuera de 0..%d" % (i, VIDA_TOPE))
     # modificadores (en el reto o en cada combate): mismos topes que el juego
     for d, donde in [(doc, "reto")] + [(c, "combate %d" % i) for i, c in enumerate(cs, 1)]:
-        for k, tope in (("tiempo", 999), ("regen", 1000), ("objetivo_tiempo", 999)):
+        for k, tope in (("tiempo", 999), ("regen", 1000), ("objetivo_tiempo", 999), ("premio", 100000)):
             if k in d and not (0 <= d[k] <= tope):
                 err.append("%s: %s fuera de 0..%d" % (donde, k, tope))
+        if "gigante" in d and not (d["gigante"] == 0 or 0.5 <= d["gigante"] <= 3):
+            err.append("%s: gigante fuera de 0.5..3 (0 = normal)" % donde)
+        for k in ("clima", "intro"):
+            if k in d and not isinstance(d[k], bool):
+                err.append("%s: %s tiene que ser true o false" % (donde, k))
     return err
 
 
@@ -282,7 +307,9 @@ def escribir_nativo(tipo, doc, salida):
               "# vida = maxima del jugador; vida_inicial = la del primer combate (0 = la maxima); arrastra_vida =",
               "# la vida que le queda pasa al siguiente (+ recupera); pausa = espera a la pantalla de resultados del HUB.",
               "# Por combate: rival (ID 0-63), traje, escenario (0-16) y vida del rival (0 = la normal, 3000).",
-              "# Opcional (reto o combate): tiempo = limite en s; regen = vida/s del rival; objetivo_tiempo = aguantar."]
+              "# Opcional (reto o combate): tiempo = limite en s; regen = vida/s del rival; objetivo_tiempo = aguantar.",
+              "# premio = Zenie del monedero del HUB al completarlo.",
+              "# clima = true (el cielo se oscurece), gigante = 1.8 (rival a esa escala, 0.5..3), intro = true (cine de 10 s)."]
     lineas += ["%s = %s" % (k, toml_val(v)) for k, v in doc.items() if k != "combate"]
     for c in doc["combate"]:
         lineas += ["", "[[combate]]"] + ["%s = %s" % (k, toml_val(v)) for k, v in c.items()]
@@ -357,6 +384,15 @@ def selftest():
         back = tomllib.load(open(s, "rb"))
         if back != doc or comprobar_nativo(back):
             err.append("nativo: modificadores sin ida y vuelta: %s" % comprobar_nativo(back))
+        jg = nativo("kumite", rivales=[33, 40, 36], clima=True, gigante=1.8, gigante_en=[2], intro=True)
+        if jg.get("clima") is not True or jg["combate"][2].get("gigante") != 1.8 or "gigante" in jg["combate"][0] \
+                or comprobar_nativo(jg):
+            err.append("nativo: reglas de escenario (clima, gigante, intro) sin ida y vuelta: %s" % comprobar_nativo(jg))
+        if not comprobar_nativo(dict(jg, gigante=9.0)):
+            err.append("nativo: gigante fuera de tope no se detecta")
+        sv = nativo("supervivencia")
+        if sv.get("premio") != 1000 or sv["combate"][2].get("tiempo") != 60 or sv["combate"][3].get("regen") != 25:
+            err.append("nativo: supervivencia sin premio o sin modificadores por oleada (ficha 09)")
         if not comprobar_nativo(dict(doc, regen=5000)):
             err.append("nativo: regen fuera de tope no se detecta")
         t = os.path.join(tmp, "torneo.toml")
@@ -435,6 +471,11 @@ def main(argv=None):
     nv.add_argument("--tiempo", type=int, default=0, help="limite de tiempo de cada combate (s)")
     nv.add_argument("--regen", type=int, default=0, help="vida por segundo que recupera el rival")
     nv.add_argument("--objetivo", type=int, default=0, help="aguantar estos segundos gana el combate")
+    nv.add_argument("--premio", type=int, help="Zenie del monedero del HUB al completarlo")
+    nv.add_argument("--clima", action="store_true", help="el cielo se oscurece durante los combates")
+    nv.add_argument("--gigante", type=float, default=0.0, help="escala del rival (0.5..3)")
+    nv.add_argument("--gigante-en", type=ints, help="solo en estos combates (indices desde 0)")
+    nv.add_argument("--intro", action="store_true", help="intro de cine de 10 s antes de cada combate")
     tn = sub.add_parser("torneo", help="Torneo Mundial con bots elegidos (user_data/dbz3/modos/torneo.toml)")
     tn.add_argument("--participantes", type=ints, required=True, help="IDs de los COM, en orden")
     dest_t = tn.add_mutually_exclusive_group()
@@ -450,7 +491,7 @@ def main(argv=None):
         vr = tuple(int(x) for x in a.vida_rival.split(":")) + (0,) if a.vida_rival else None
         doc = nativo(a.tipo, a.rivales, a.escenarios, a.vida, a.vida_inicial, vr[:2] if vr else None,
                      None if a.arrastra is None else a.arrastra == "si", a.recupera, a.pausa, a.nombre, a.name,
-                     a.tiempo, a.regen, a.objetivo)
+                     a.tiempo, a.regen, a.objetivo, a.premio, a.clima, a.gigante, a.intro, a.gigante_en)
         err = comprobar_nativo(doc)
         if err:
             p.error("; ".join(err))

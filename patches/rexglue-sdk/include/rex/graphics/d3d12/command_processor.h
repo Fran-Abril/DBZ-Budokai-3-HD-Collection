@@ -684,6 +684,27 @@ class D3D12CommandProcessor : public CommandProcessor {
   uint64_t dbz3_last_swap_us_ = 0;
   float dbz3_frame_time_ms_ = 16.666f;
 
+  // dbz3 relight (dbz3_relight_level, experimental): ambient occlusion on the
+  // composed scene, at the first whole-frame color resolve after the bloom
+  // started, so the HUD and the menus drawn after it are untouched. Nothing is
+  // created or run while it is off.
+  void Dbz3RelightOnCopy();
+  bool dbz3_relight_done_ = false;    // Already applied in this frame.
+  bool dbz3_relight_failed_ = false;  // Pipelines couldn't be created: stays off.
+  // This frame: scene depth copied (last scene depth resolve wins), and the
+  // post-processing started after it.
+  bool dbz3_relight_depth_ready_ = false, dbz3_relight_post_ = false;
+  // R32_FLOAT scene depth, guest output size, same state as dbz3_relight_ao_.
+  Microsoft::WRL::ComPtr<ID3D12Resource> dbz3_relight_depth_;
+  uint32_t dbz3_relight_scene_draws_ = 0;  // Depth-writing draws in this frame.
+  Microsoft::WRL::ComPtr<ID3D12RootSignature> dbz3_relight_root_signature_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> dbz3_relight_ao_pipeline_;
+  // Apply pipelines by color format (| 1 << 16 for the debug view).
+  std::unordered_map<uint32_t, Microsoft::WRL::ComPtr<ID3D12PipelineState>>
+      dbz3_relight_apply_pipelines_;
+  // R8_UNORM occlusion, NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE between uses.
+  Microsoft::WRL::ComPtr<ID3D12Resource> dbz3_relight_ao_;
+
   // PWL gamma ramp can result in values with more precision than 10bpc. Though
   // those sub-10bpc bits don't have any noticeable visual effect, so normally
   // R10G10B10A2_UNORM is enough. But what's the most important is that for the

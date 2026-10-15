@@ -6,7 +6,7 @@ pasos = [
   'log "hub: combate nativo: id 14 contra id 13" 15',
   'log "pasarela: paso 2 estado del combate 4" 60',
   'log "pasarela: paso 2 estado del combate 7" 200',
-  'esperar 1000', 'tecla S 1200', 'tecla S 1200', 'tecla Space 1200', 'tecla W 1200', 'tecla Space 2500',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
   'log "pasarela: fin del combate \(paso 2\): gana el lado 2" 20',
   'log "pasarela: paso 2/26 \(combate ronda 1\): perdido" 10',
   'esperar 1500', 'captura 01_perdido',

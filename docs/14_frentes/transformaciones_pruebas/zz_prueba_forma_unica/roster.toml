@@ -1,0 +1,9 @@
+# SOLO PRUEBAS (frente transformaciones, Tag Team): lista de capsulas por defecto = la capsula unica.
+# Copiar a <copia>\mods\ para el escenario "tag" de formas.py. Nunca en la partida real.
+[[parche]]   # Goku (ID 0): char96 +80 = n, capsulas
+dir = 0x8234AC08
+u16 = [1, 1984]
+
+[[parche]]   # Goku (SDBH) (ID 50)
+dir = 0x8234BEC8
+u16 = [1, 2034]

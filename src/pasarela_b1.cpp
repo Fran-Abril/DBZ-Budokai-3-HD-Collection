@@ -3,7 +3,10 @@
 //   - ISO 9660: SYSTEM.CNF (BOOT2) -> ELF de arranque; /USR/DATA_<idioma>.AFS.
 //   - ELF: 11 registros de 128 B del modo de Mr. Satan (firma: personaje 21 en +0x20, modo 3 en +0x70, float 1.0
 //     en +0x0C de los 11); nombres de escenario (registros de 0x98 B, "CELL RING").
-//   - AFS: banco de charlas = #AMT de 22 imagenes tras #AMA, #AMT(10), #AMA, #AMT(26) (europea: 665-669).
+//   - Historia: los registros de 128 B de antes de esa tabla (misma estructura, modo 0/6/7, +0x28 capitulo; europea:
+//     43 desde 0x35CA40), hacia atras mientras sean validos.
+//   - AFS: banco de charlas = #AMT de 22 imagenes tras #AMA, #AMT(10), #AMA, #AMT(26) (europea: 665-669); el #AMT(26)
+//     es el resultado (tablon, "Challenger Nth", puntos, cifras, caras) y el #AMT(10) el titulo (dificultades).
 //   - #AMT PS2: entradas de 0x30 (+0x08 PSM 0x14/0x13, +0x10 ancho/alto u16, +0x14 datos, +0x18 tamano, +0x24 CLUT,
 //     +0x28 tamano); cabecera GIF de 32 B delante de datos y CLUT; 4 bpp lineal (nibble bajo = pixel par); CLUT RGBA
 //     con alfa 0..0x80; la de 256 en orden CSM1.
@@ -119,6 +122,29 @@ std::string BootElf(Iso& iso) {
     return iso.Find(name);
   }
   return {};
+}
+
+CombateB1 Registro(const std::vector<uint8_t>& elf, size_t o, const std::vector<std::string>& esc) {
+  CombateB1 c;
+  c.jugador_b1 = elf[o + 0x20];
+  c.forma_jugador = elf[o + 0x22];
+  c.vida_jugador = U16(elf, o + 0x2A);
+  c.ki_jugador = U16(elf, o + 0x2C);
+  c.capitulo = int16_t(U16(elf, o + 0x28));
+  c.modo = elf[o + 0x70];
+  c.rival_b1 = elf[o + 0x50];
+  c.rival = B1aB3(c.rival_b1);
+  c.variante = elf[o + 0x51];
+  c.forma = elf[o + 0x52];
+  c.cantidad = std::max(1, int(U16(elf, o + 0x56)));
+  c.arrastra_vida = c.vida_jugador == 0xFFFF;
+  c.vida_rival = U16(elf, o + 0x5A);
+  c.ki_rival = U16(elf, o + 0x5C);
+  c.escenario_b1 = elf[o + 0x71];
+  if (c.escenario_b1 < int(esc.size())) c.escenario_nombre = esc[size_t(c.escenario_b1)];
+  c.musica = elf[o + 0x72];
+  c.tiempo = int32_t(U32(elf, o + 0x74));
+  return c;
 }
 
 int TablaSatan(const std::vector<uint8_t>& elf) {
@@ -237,6 +263,8 @@ const char* SufijoAfs(const std::string& lang) {
 
 }  // namespace
 
+int B1aB3(int id_b1) { return id_b1 >= 0 && id_b1 < int(std::size(kB1aB3)) ? kB1aB3[id_b1] : 0; }
+
 std::filesystem::path BuscarIsoB1() {
   std::vector<std::filesystem::path> dirs;   // DBZ3_PS2_GAMES (pruebas) sustituye a la carpeta junto al juego
   if (const char* e = std::getenv("DBZ3_PS2_GAMES")) dirs.emplace_back(e);
@@ -276,23 +304,15 @@ bool LeerLeyendaSatan(const std::filesystem::path& path, const std::string& lang
   }
   out.tabla = uint32_t(tabla);
   const std::vector<std::string> esc = Escenarios(elf);
-  for (int k = 0; k < kCombates; ++k) {
-    const size_t o = size_t(tabla) + size_t(kRec) * k;
-    CombateB1 c;
-    c.rival_b1 = elf[o + 0x50];
-    c.rival = c.rival_b1 < int(std::size(kB1aB3)) ? kB1aB3[c.rival_b1] : 0;
-    c.variante = elf[o + 0x51];
-    c.forma = elf[o + 0x52];
-    c.cantidad = std::max(1, int(U16(elf, o + 0x56)));
-    c.vida_jugador = U16(elf, o + 0x2A);
-    c.arrastra_vida = c.vida_jugador == 0xFFFF;
-    c.vida_rival = U16(elf, o + 0x5A);
-    c.ki_rival = U16(elf, o + 0x5C);
-    c.escenario_b1 = elf[o + 0x71];
-    if (c.escenario_b1 < int(esc.size())) c.escenario_nombre = esc[size_t(c.escenario_b1)];
-    c.musica = elf[o + 0x72];
-    c.tiempo = int32_t(U32(elf, o + 0x74));
-    out.combates.push_back(c);
+  for (int k = 0; k < kCombates; ++k) out.combates.push_back(Registro(elf, size_t(tabla) + size_t(kRec) * k, esc));
+  // historia: hacia atras desde la tabla del modo mientras el registro sea valido (1.0 en +0x0C, personajes de B1,
+  // modo de historia)
+  for (size_t o = size_t(tabla); o >= size_t(kRec);) {
+    o -= size_t(kRec);
+    const bool ok = elf[o + 0x0F] == 0x3F && elf[o + 0x20] < std::size(kB1aB3) && elf[o + 0x50] < std::size(kB1aB3) &&
+                    (elf[o + 0x70] == 0 || elf[o + 0x70] == 6 || elf[o + 0x70] == 7);
+    if (!ok) break;
+    out.historia.insert(out.historia.begin(), Registro(elf, o, esc));
   }
   // imagenes en el idioma del juego (o el ingles, o el primer DATA_*.AFS)
   std::string afs_path = iso.Find(SufijoAfs(lang));
@@ -309,6 +329,99 @@ bool LeerLeyendaSatan(const std::filesystem::path& path, const std::string& lang
   out.fondo = Textura(pantalla, 0);
   out.satan = Textura(pantalla, 1);
   out.logo = Textura(pantalla, 2);
+  out.res.letrero = Textura(pantalla, 6);
+  for (int k = 0; k < 3; ++k) out.res.dificultad[k] = Textura(pantalla, 7 + k);
+  const std::vector<uint8_t> res = afs.Entry(size_t(banco - 1));
+  out.res.tablon = Textura(res, 15);
+  out.res.retadores = Textura(res, 16);
+  out.res.cruz = Textura(res, 17);
+  out.res.total = Textura(res, 18);
+  out.res.ahora = Textura(res, 19);
+  out.res.tienes = Textura(res, 21);
+  out.res.cifras = Textura(res, 22);
+  out.res.chibis = Textura(res, 24);
+  return true;
+}
+
+// ---- Infinite World (ficha 02 C): textos de las misiones ----
+// DATA_USA.AFS de IW (USA): desde la entrada 132, un #AMB por mision [#AMT descripcion, #AMT titulo] en el orden del
+// juego (132 "Training No.1"... 142 "Defeat Raditz!"... 174 "Endure Gohan's attacks!"; medido 2026-10-15 con
+// E:/DBZ3HD_trabajo/campanas/iw_titulos.py). Vale una carpeta extraida (USR/DATA_USA.AFS) o la ISO.
+std::filesystem::path BuscarIW() {
+  std::vector<std::filesystem::path> dirs;
+  if (const char* e = std::getenv("DBZ3_PS2_GAMES")) dirs.emplace_back(e);
+  else dirs.push_back(dbz3::settings::UserSettingsPath().parent_path() / "ps2_games");
+  std::error_code ec;
+  for (const auto& d : dirs) {
+    std::vector<std::filesystem::path> hay;
+    for (const auto& e : std::filesystem::directory_iterator(d, ec)) {
+      const std::string n = Lower(e.path().filename().string());
+      if (n.find("infinite world") == std::string::npos) continue;
+      if (e.is_directory(ec) || (n.size() > 4 && n.compare(n.size() - 4, 4, ".iso") == 0)) hay.push_back(e.path());
+    }
+    std::sort(hay.begin(), hay.end());
+    if (!hay.empty()) return hay.front();
+  }
+  return {};
+}
+
+bool LeerMisionesIW(const std::filesystem::path& iw, const std::vector<int>& numeros, DatosIW& out, std::string& error) {
+  out = DatosIW{};
+  out.origen = iw.filename().string();
+  // lector de DATA_USA.AFS: fichero de la carpeta o de la ISO
+  Iso iso;
+  std::ifstream f;
+  std::string en_iso;
+  std::error_code ec;
+  if (std::filesystem::is_directory(iw, ec)) {
+    for (const auto& e : std::filesystem::recursive_directory_iterator(iw, ec)) {
+      if (Lower(e.path().filename().string()) == "data_usa.afs") {
+        f.open(e.path(), std::ios::binary);
+        break;
+      }
+    }
+  } else if (iso.Open(iw)) {
+    en_iso = iso.Find("data_usa.afs");
+  }
+  auto leer = [&](uint64_t off, uint32_t n) -> std::vector<uint8_t> {
+    if (!en_iso.empty()) return iso.ReadFile(en_iso, off, n);
+    std::vector<uint8_t> b(n);
+    f.clear();
+    f.seekg(std::streamoff(off));
+    f.read(reinterpret_cast<char*>(b.data()), std::streamsize(n));
+    b.resize(size_t(std::max<std::streamsize>(0, f.gcount())));
+    return b;
+  };
+  if (en_iso.empty() && !f) {
+    error = "sin DATA_USA.AFS en " + iw.string();
+    return false;
+  }
+  const std::vector<uint8_t> h = leer(0, 8);
+  if (h.size() < 8 || std::memcmp(h.data(), "AFS", 3) != 0) {
+    error = "DATA_USA.AFS no valido";
+    return false;
+  }
+  const uint32_t n = std::min<uint32_t>(U32(h, 4), 65536);
+  const std::vector<uint8_t> tab = leer(8, 8 * n);
+  for (const int m : numeros) {
+    MisionIW mi;
+    mi.numero = m;
+    const uint32_t k = 132u + uint32_t(m);
+    if (k < n && 8 * k + 8 <= tab.size()) {
+      const std::vector<uint8_t> amb = leer(U32(tab, 8 * k), U32(tab, 8 * k + 4));
+      if (amb.size() >= 0x20 && std::memcmp(amb.data(), "#AMB", 4) == 0 && U32(amb, 0x10) == 2) {
+        const uint32_t t = U32(amb, 0x14);
+        auto hijo = [&](uint32_t c) {
+          const uint32_t o = U32(amb, t + 16 * c), sz = U32(amb, t + 16 * c + 4);
+          return o + sz <= amb.size() ? std::vector<uint8_t>(amb.begin() + o, amb.begin() + o + sz) : std::vector<uint8_t>();
+        };
+        const std::vector<uint8_t> desc = hijo(0), tit = hijo(1);
+        if (AmtN(desc) >= 1) mi.texto = Textura(desc, 0);
+        if (AmtN(tit) >= 1) mi.titulo = Textura(tit, 0);
+      }
+    }
+    out.misiones.push_back(std::move(mi));
+  }
   return true;
 }
 

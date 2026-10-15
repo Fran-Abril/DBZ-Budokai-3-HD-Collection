@@ -6,7 +6,7 @@
 #   python construir_pack.py pack_hub.toml --mods <mods>
 [pack]
 nombre = "pack_hub"
-titulo = "Arte: fondo del HUB y personajes que vuelan al entrar"
+titulo = "Arte: fondo del HUB, personajes que vuelan al entrar e icono de guardado"
 descripcion = "Fondo, renders y vuelo a camara para las pantallas propias (arte de terceros, solo uso personal)."
 
 # Fondo de TAG TEAM y ONLINE (sustituye al cielo rosa del Duelo): el planeta de Kaio
@@ -48,3 +48,24 @@ fuente = "Dragon HUB (pack opcional)/Android 17 flying to camera.png"
 destino = "ui_ingame/hub/vuelo_2.png"
 modo = "recortar"
 tamano = [768, 1024]
+
+# Icono del aviso de guardado del HUB (hub_panel.cpp: hub/guardado, _128 y _64 segun el tamano en pantalla;
+# sin el pack, la esfera de 4 estrellas CC0 de assets_propios/generar.py). Arte del usuario: Goku SSJ4 en
+# marco rojo (512x512), solo en este pack opcional.
+[[asset]]
+fuente = "Dragon HUB (pack opcional)/Icono guardado SSJ4.png"
+destino = "ui_ingame/hub/guardado.png"
+modo = "llenar"
+tamano = [256, 256]
+
+[[asset]]
+fuente = "Dragon HUB (pack opcional)/Icono guardado SSJ4.png"
+destino = "ui_ingame/hub/guardado_128.png"
+modo = "llenar"
+tamano = [128, 128]
+
+[[asset]]
+fuente = "Dragon HUB (pack opcional)/Icono guardado SSJ4.png"
+destino = "ui_ingame/hub/guardado_64.png"
+modo = "llenar"
+tamano = [64, 64]

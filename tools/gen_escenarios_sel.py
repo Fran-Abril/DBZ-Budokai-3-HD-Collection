@@ -11,7 +11,11 @@ la bola y del circulo), 0x82020FB0 (sprites de la vista y del nombre), 0x8237338
 limite de casilla 0..11 pasa a 12 + altas. sub_8219F350 llama a dbz3_esc_instalar al tener los recursos y
 sub_8219E828 a dbz3_esc_banco alrededor de la vista grande y el rotulo (texturas de la casilla nueva).
 
-  python tools/gen_escenarios_sel.py      # regenera src/escenarios_sel_gen.inc
+  python tools/gen_escenarios_sel.py      # regenera src/escenarios_sel_gen.inc (y la gemela EU)
+
+EU (frente eu, 2026-10-15): src/escenarios_sel_gen_eu.inc, las mismas copias (SelEu_X) tomadas de generated_eu/ con
+las parejas verificadas de src/eu_map_gen.h (tools/eu_map.py): nombre EU de cada funcion, direcciones de las
+tablas (lo16) y etiquetas internas (misma distancia en la funcion pareja, que tiene el mismo cuerpo).
 """
 import os
 import re
@@ -20,6 +24,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN = os.path.join(ROOT, "generated")
 OUT = os.path.join(ROOT, "src", "escenarios_sel_gen.inc")
+GEN_EU = os.path.join(ROOT, "generated_eu")
+OUT_EU = os.path.join(ROOT, "src", "escenarios_sel_gen_eu.inc")
 
 SIZE, E, L, MAXN = 1024, 668, 956, 24
 assert (E + 4) % 12 == 0 and E + 12 * MAXN <= L and L + 2 * MAXN <= SIZE
@@ -64,32 +70,70 @@ SUBS = {
 }
 
 
-def body(name):
-    for f in sorted(os.listdir(GEN)):
-        if not re.match(r"dbz3_recomp\.\d+\.cpp$", f):
+def body(name, gen=GEN, sym="sub_"):
+    for f in sorted(os.listdir(gen)):
+        if not re.match(r"dbz3(_eu)?_recomp\.\d+\.cpp$", f):
             continue
-        txt = open(os.path.join(GEN, f), encoding="utf-8").read()
-        m = re.search(r"^DEFINE_REX_FUNC\(sub_%s\) \{\n(.*?)^\}\n" % name, txt, re.S | re.M)
+        txt = open(os.path.join(gen, f), encoding="utf-8").read()
+        m = re.search(r"^DEFINE_REX_FUNC\(%s%s\) \{\n(.*?)^\}\n" % (sym, name), txt, re.S | re.M)
         if m:
             return m.group(1)
-    raise SystemExit("no encuentro sub_%s en generated/" % name)
+    raise SystemExit("no encuentro %s%s en %s" % (sym, name, gen))
+
+
+def mapa_eu():
+    """US -> EU de src/eu_map_gen.h: {nombre US de funcion: hex EU} y {direccion: direccion}."""
+    s = open(os.path.join(ROOT, "src", "eu_map_gen.h"), encoding="utf-8").read()
+    funcs = dict(re.findall(r"#define DBZ3EU_sub_([0-9A-F]{8}) dbz3eu_sub_([0-9A-F]{8})", s))
+    pares = {int(a, 16): int(b, 16) for a, b in re.findall(r"\{0x([0-9A-F]{8})u, 0x([0-9A-F]{8})u\}", s)}
+    return funcs, pares
+
+
+def a_eu(name, subs, funcs, pares):
+    """Las sustituciones de una funcion con los numeros EU: lo16 de las tablas, lr y etiquetas loc_."""
+    us_f, eu_f = int(name, 16), int(funcs[name], 16)
+    lo = {}
+    for a in (0x82020F94, 0x82020FB0, 0x82373384):
+        assert pares[a] >> 16 == a >> 16, hex(a)   # misma parte alta: solo cambia el lo16
+        lo[str(a & 0xFFFF)] = str(pares[a] & 0xFFFF)
+
+    def tr(t):
+        t = re.sub(r"\b(3988|4016|13188)\b", lambda m: lo[m.group(1)], t)
+        t = re.sub(r"0x(8219[0-9A-F]{4})\b", lambda m: "0x%08X" % pares[int(m.group(1), 16)], t)
+        return re.sub(r"loc_(8219[0-9A-F]{4})", lambda m: "loc_%08X" % (eu_f + int(m.group(1), 16) - us_f), t)
+    return [(tr(rx), tr(rep), n) for rx, rep, n in subs]
+
+
+def generar(gen, out_path, sym, pref, cabecera, traducir=None):
+    out = list(cabecera)
+    llamadas = set()
+    for name, subs in SUBS.items():
+        ename = traducir[0][name] if traducir else name
+        b = body(ename, gen, sym).replace("\tREX_FUNC_PROLOGUE();\n", "")
+        b = "\n".join(l for l in b.splitlines() if not l.strip().startswith("//")) + "\n"
+        for rx, rep, n in (a_eu(name, subs, *traducir) if traducir else subs):
+            b, k = re.subn(rx, rep, b)
+            if k != n:
+                raise SystemExit("%s%s: %r aparece %d veces (esperado %d)" % (sym, ename, rx, k, n))
+        llamadas |= set(re.findall(r"\b((?:__imp__)?dbz3eu_\w+)\(ctx, base\)", b))
+        out.append("static void %s%s(PPCContext& ctx, uint8_t* base) {\n%s}\n" % (pref, name, b.rstrip("\n")))
+    if traducir:   # el EU no incluye su cabecera (choca con la US): declara lo que llama
+        out[len(cabecera):len(cabecera)] = ["REX_EXTERN(%s);" % c for c in sorted(llamadas)] + [""]
+    open(out_path, "w", encoding="utf-8", newline="\n").write("\n".join(out))
+    print("->", out_path)
 
 
 def main():
-    out = ["// GENERADO por tools/gen_escenarios_sel.py a partir de generated/ (US). NO EDITAR.",
-           "// Selector de escenarios con casillas nuevas: datos %d B, carrusel +%d (%d entradas), lista +%d."
-           % (SIZE, E, MAXN, L), "// Los ganchos estan en escenarios.cpp.", "",
-           "constexpr uint32_t kSelTam = %d, kSelCarrusel = %d, kSelLista = %d, kSelMax = %d;" % (SIZE, E, L, MAXN), ""]
-    for name, subs in SUBS.items():
-        b = body(name).replace("\tREX_FUNC_PROLOGUE();\n", "")
-        b = "\n".join(l for l in b.splitlines() if not l.strip().startswith("//")) + "\n"
-        for rx, rep, n in subs:
-            b, k = re.subn(rx, rep, b)
-            if k != n:
-                raise SystemExit("sub_%s: %r aparece %d veces (esperado %d)" % (name, rx, k, n))
-        out.append("static void Sel_%s(PPCContext& ctx, uint8_t* base) {\n%s}\n" % (name, b.rstrip("\n")))
-    open(OUT, "w", encoding="utf-8", newline="\n").write("\n".join(out))
-    print("->", OUT)
+    generar(GEN, OUT, "sub_", "Sel_", [
+        "// GENERADO por tools/gen_escenarios_sel.py a partir de generated/ (US). NO EDITAR.",
+        "// Selector de escenarios con casillas nuevas: datos %d B, carrusel +%d (%d entradas), lista +%d."
+        % (SIZE, E, MAXN, L), "// Los ganchos estan en escenarios.cpp.", "",
+        "constexpr uint32_t kSelTam = %d, kSelCarrusel = %d, kSelLista = %d, kSelMax = %d;" % (SIZE, E, L, MAXN), ""])
+    if os.path.isdir(GEN_EU):
+        generar(GEN_EU, OUT_EU, "dbz3eu_sub_", "SelEu_", [
+            "// GENERADO por tools/gen_escenarios_sel.py a partir de generated_eu/ (EU/PAL) y src/eu_map_gen.h. NO EDITAR.",
+            "// Gemela EU de escenarios_sel_gen.inc (mismos cambios; SelEu_<funcion US>). Solo en el nucleo dual.", ""],
+            mapa_eu())
 
 
 if __name__ == "__main__":

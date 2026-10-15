@@ -1,0 +1,34 @@
+# Ficha 17: tablero de 6 casillas (estilo Budokai 2) recorrido en automatico: Kame House -> Llanura (Saibaman) ->
+# Desfiladero (Nappa) -> Torre de Karin (semilla) -> Desfiladero -> Campo de batalla (Vegeta, el jefe) -> cierre.
+# Vida que se arrastra entre combates y semilla que la llena.
+# python tools/pruebas.py correr campanas_test docs/16_pasarela_modos/pruebas/tablero.toml
+descripcion = "Pasarela: tablero de la saga Saiyan (mover por las casillas y combatir)"
+env = ["DBZ3_TEST_MISIONES=1,auto,reset", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games", "DBZ3_TEST_RINGOUT=1"]
+pasos = [
+  'log "misiones: tablero: casilla 0, turno 0" 60',
+  'esperar 1500', 'captura 01_tablero',
+  'log "misiones: tablero: turno 1, casilla 1 \(Llanura\)" 20',
+  'esperar 1200', 'captura 02_charla_saibaman',
+  'log "misiones: tablero combate: id 0 .* contra id 42 .*escenario 5" 30',
+  'log "misiones: tablero turno 1 paso 2 estado del combate 4" 90',
+  'esperar 2000', 'captura 03_combate_saibaman',
+  'log "misiones: tablero turno 1 paso 2 estado del combate 7" 90',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: tablero: turno 2, casilla 3 \(Desfiladero\)" 40',
+  'log "misiones: tablero combate: id 0 .* contra id 19 .*vida -[0-9]+ / 0" 30',
+  'log "misiones: tablero turno 2 paso 2 estado del combate 4" 90',
+  'esperar 2000', 'captura 04_combate_nappa_vida_arrastrada',
+  'log "misiones: tablero turno 2 paso 2 estado del combate 7" 90',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: tablero: turno 3, casilla 2 \(Torre de Karin\)" 40',
+  'esperar 1000', 'captura 05_semilla',
+  'log "misiones: tablero: turno 5, casilla 5 \(Campo de batalla\)" 40',
+  'log "misiones: tablero combate: id 0 .* contra id 7 .*vida 0 / 0" 30',
+  'log "misiones: tablero turno 5 paso 2 estado del combate 4" 90',
+  'esperar 2000', 'captura 06_combate_vegeta',
+  'log "misiones: tablero turno 5 paso 2 estado del combate 7" 90',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: tablero paso 3/3 \(final\)" 30',
+  'esperar 1500', 'captura 07_final',
+  'log "misiones: tablero completado" 15',
+]

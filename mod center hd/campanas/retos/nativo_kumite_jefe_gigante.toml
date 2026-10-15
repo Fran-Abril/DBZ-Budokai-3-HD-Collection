@@ -1,0 +1,33 @@
+# Reto nativo (kumite) generado por modos_reto.py. Lo lee el juego en user_data/dbz3/modos/kumite.toml.
+# vida = maxima del jugador; vida_inicial = la del primer combate (0 = la maxima); arrastra_vida =
+# la vida que le queda pasa al siguiente (+ recupera); pausa = espera a la pantalla de resultados del HUB.
+# Por combate: rival (ID 0-63), traje, escenario (0-16) y vida del rival (0 = la normal, 3000).
+# Opcional (reto o combate): tiempo = limite en s; regen = vida/s del rival; objetivo_tiempo = aguantar.
+# premio = Zenie del monedero del HUB al completarlo.
+# clima = true (el cielo se oscurece), gigante = 1.8 (rival a esa escala, 0.5..3), intro = true (cine de 10 s).
+nombre = "Jefe gigante"
+name = "Giant boss"
+vida = 3000
+vida_inicial = 0
+arrastra_vida = true
+recupera = 1000
+pausa = false
+premio = 1500
+clima = true
+intro = true
+
+[[combate]]
+rival = 33
+escenario = 0
+vida = 5000
+
+[[combate]]
+rival = 40
+escenario = 1
+vida = 6000
+
+[[combate]]
+rival = 36
+escenario = 2
+vida = 7000
+gigante = 1.8

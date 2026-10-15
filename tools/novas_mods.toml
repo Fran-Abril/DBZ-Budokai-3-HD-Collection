@@ -115,7 +115,7 @@ descripcion_en = "Extra costume for Goku: Saiyan armor in every form (base, Kaio
 
 [[mod]]
 id = "vis_b2_fat_gotenks"
-version = "1.0"
+version = "1.1"
 exe_nuevo = true   # sombreado de B2, voces y trajes del importador nuevo
 tipo = "personaje"
 nombre_es = "Gotenks gordo"
@@ -131,7 +131,7 @@ descripcion_fr = "La fusion ratee grosse de Budokai 2 a sa propre place : modele
 
 [[mod]]
 id = "vis_b2_ghost_gotenks"
-version = "1.0"
+version = "1.1"
 exe_nuevo = true   # sombreado de B2, voces y trajes del importador nuevo
 tipo = "personaje"
 nombre_es = "Gotenks fantasma"
@@ -163,7 +163,7 @@ descripcion_fr = "Le Ten Shin Han de Budokai 2 en personnage a part, avec son mo
 
 [[mod]]
 id = "vis_iw_vegeta_saiyan"
-version = "1.0"
+version = "1.1"
 exe_nuevo = true   # sombreado de B2, voces y trajes del importador nuevo
 tipo = "personaje"
 nombre_es = "Vegeta (saga Saiyan)"
@@ -179,7 +179,7 @@ descripcion_fr = "Vegeta avec l'armure de la saga des Saiyens, d'Infinite World 
 
 [[mod]]
 id = "traje_vis_iw_vegeta_saiyan"
-version = "1.0"
+version = "1.1"
 exe_nuevo = true   # sombreado de B2, voces y trajes del importador nuevo
 tipo = "traje"
 nombre_es = "Traje: Vegeta saga Saiyan"
@@ -187,15 +187,15 @@ nombre_en = "Costume: Saiyan Saga Vegeta"
 nombre_it = "Costume: Vegeta saga dei Saiyan"
 nombre_de = "Kostum: Vegeta Saiyajin-Saga"
 nombre_fr = "Costume : Vegeta saga des Saiyens"
-descripcion_es = "La armadura de la saga Saiyan como 5.o traje del Vegeta del juego (necesita el mod Vegeta saga Saiyan)."
-descripcion_en = "The Saiyan Saga armor as the 5th costume of the game's Vegeta (needs the Saiyan Saga Vegeta mod)."
+descripcion_es = "La armadura de la saga Saiyan como 5.o traje del Vegeta del juego, con sus golpes, Galick Gun, capsulas y aura de esa epoca y el rotulo Traje de epoca (necesita el mod Vegeta saga Saiyan)."
+descripcion_en = "The Saiyan Saga armor as the 5th costume of the game's Vegeta, with that era's moves, Galick Gun, capsules and aura and a Period costume label (needs the Saiyan Saga Vegeta mod)."
 descripcion_it = "L'armatura della saga dei Saiyan come 5o costume del Vegeta del gioco (serve il mod Vegeta saga dei Saiyan)."
 descripcion_de = "Die Rustung der Saiyajin-Saga als 5. Kostum des Vegeta im Spiel (braucht den Mod Vegeta Saiyajin-Saga)."
 descripcion_fr = "L'armure de la saga des Saiyens comme 5e costume du Vegeta du jeu (necessite le mod Vegeta saga des Saiyens)."
 
 [[mod]]
 id = "vis_iw_yamcha_amarillo"
-version = "1.0"
+version = "1.1"
 exe_nuevo = true   # sombreado de B2, voces y trajes del importador nuevo
 tipo = "personaje"
 nombre_es = "Yamcha (traje amarillo)"
@@ -211,7 +211,7 @@ descripcion_fr = "Yamcha dans sa tenue jaune d'Infinite World : modele, Kamehame
 
 [[mod]]
 id = "vis_sdbh_goku"
-version = "1.0"
+version = "1.1"
 exe_nuevo = true   # sombreado de B2, voces y trajes del importador nuevo
 tipo = "personaje"
 nombre_es = "Goku (SDBH)"
@@ -240,3 +240,115 @@ descripcion_en = "Frieza's cut Dragon Universe story: travel the map in his pod,
 descripcion_it = "La storia tagliata di Freezer in Dragon Universe: viaggia sulla mappa con la sua navicella, da Namek alla Terra, con battaglie, dialoghi e Mecha Freezer."
 descripcion_de = "Freezers gestrichene Dragon-Universe-Geschichte: reise in seiner Kapsel von Namek zur Erde, mit eigenen Kampfen, Dialogen und Mecha-Freezer."
 descripcion_fr = "L'histoire coupee de Freezer dans Dragon Universe : parcours la carte dans sa capsule, de Namek a la Terre, avec ses combats, dialogues et Mecha Freezer."
+
+[[mod]]
+id = "vis_sdbh_goku_black"
+version = "1.0"
+exe_nuevo = true   # ronda 2 (2026-10-15)
+tipo = "personaje"
+nombre_es = "Goku Black"
+nombre_en = "Goku Black"
+nombre_it = "Goku Black"
+nombre_de = "Goku Black"
+nombre_fr = "Goku Black"
+descripcion_es = "Goku Black de Super Dragon Ball Heroes: modelo, golpes de Goku, forma Super Saiyan Rose con aura rosa y definitiva."
+descripcion_en = "Goku Black from Super Dragon Ball Heroes: model, Goku's moves, Super Saiyan Rose form with pink aura and ultimate."
+descripcion_it = "Goku Black di Super Dragon Ball Heroes: modello, mosse di Goku, forma Super Saiyan Rose con aura rosa e mossa finale."
+descripcion_de = "Goku Black aus Super Dragon Ball Heroes: Modell, Gokus Angriffe, Super-Saiyajin-Rose mit rosa Aura und Ultimate."
+descripcion_fr = "Goku Black de Super Dragon Ball Heroes : modele, coups de Goku, forme Super Saiyen Rose avec aura rose et ultime."
+
+[[mod]]
+id = "vis_sdbh_roshi"
+version = "1.0"
+exe_nuevo = true   # ronda 2 (2026-10-15)
+tipo = "personaje"
+nombre_es = "Maestro Roshi"
+nombre_en = "Master Roshi"
+nombre_it = "Maestro Muten"
+nombre_de = "Muten Roshi"
+nombre_fr = "Tortue Geniale"
+descripcion_es = "El Maestro Roshi de Super Dragon Ball Heroes con sus propias voces y los golpes de Krilin (Kienzan). Version voladora: la terrestre queda para mas adelante."
+descripcion_en = "Master Roshi from Super Dragon Ball Heroes with his own voice and Krillin's moves (Destructo Disc). Flying version: the grounded one comes later."
+descripcion_it = "Il Maestro Muten di Super Dragon Ball Heroes con la sua voce e le mosse di Crilin (Kienzan). Versione volante: quella a terra arrivera piu avanti."
+descripcion_de = "Muten Roshi aus Super Dragon Ball Heroes mit eigener Stimme und Krillins Angriffen (Kienzan). Fliegende Version: die am Boden folgt spater."
+descripcion_fr = "Tortue Geniale de Super Dragon Ball Heroes avec sa propre voix et les coups de Krilin (Kienzan). Version volante : celle au sol viendra plus tard."
+
+[[mod]]
+id = "vis_b2_yamhan"
+version = "1.0"
+exe_nuevo = true   # ronda 2 (2026-10-15)
+tipo = "personaje"
+nombre_es = "Yamhan (fusion de B2)"
+nombre_en = "Yamhan (B2 fusion)"
+nombre_it = "Yamhan (fusione di B2)"
+nombre_de = "Yamhan (B2-Fusion)"
+nombre_fr = "Yamhan (fusion de B2)"
+descripcion_es = "La fusion de Yamcha y Ten Shin Han de Budokai 2 como personaje: modelo de B2, golpes de Ten Shin Han y sus tecnicas."
+descripcion_en = "Yamcha and Tien's fusion from Budokai 2 as a fighter: B2 model, Tien's moves and techniques."
+descripcion_it = "La fusione di Yamcha e Tensing da Budokai 2 come personaggio: modello di B2, mosse e tecniche di Tensing."
+descripcion_de = "Die Fusion von Yamchu und Tenshinhan aus Budokai 2 als Kampfer: B2-Modell, Tenshinhans Angriffe und Techniken."
+descripcion_fr = "La fusion de Yamcha et Ten Shin Han de Budokai 2 comme personnage : modele de B2, coups et techniques de Ten Shin Han."
+
+[[mod]]
+id = "vis_b2_yamhan_fallida"
+version = "1.0"
+exe_nuevo = true   # ronda 2 (2026-10-15)
+tipo = "personaje"
+nombre_es = "Yamhan (fusion fallida)"
+nombre_en = "Yamhan (failed fusion)"
+nombre_it = "Yamhan (fusione fallita)"
+nombre_de = "Yamhan (missglueckte Fusion)"
+nombre_fr = "Yamhan (fusion ratee)"
+descripcion_es = "La fusion fallida de Yamhan de Budokai 2 como personaje: modelo de B2 y su Neo Ki Blast Cannon."
+descripcion_en = "Yamhan's failed fusion from Budokai 2 as a fighter: B2 model and his Neo Ki Blast Cannon."
+descripcion_it = "La fusione fallita di Yamhan da Budokai 2 come personaggio: modello di B2 e il suo Neo Ki Blast Cannon."
+descripcion_de = "Yamhans missglueckte Fusion aus Budokai 2 als Kampfer: B2-Modell und seine Neo Ki Blast Cannon."
+descripcion_fr = "La fusion ratee de Yamhan de Budokai 2 comme personnage : modele de B2 et son Neo Ki Blast Cannon."
+
+[[mod]]
+id = "bu_absorbido_piccolo"
+version = "1.0"
+exe_nuevo = true   # ronda 2 (2026-10-15)
+tipo = "traje"
+nombre_es = "Traje: Bu (Piccolo absorbido)"
+nombre_en = "Costume: Buu (Piccolo absorbed)"
+nombre_it = "Costume: Bu (Piccolo assorbito)"
+nombre_de = "Kostum: Boo (Piccolo absorbiert)"
+nombre_fr = "Costume : Boo (Piccolo absorbe)"
+descripcion_es = "Super Bu con Piccolo absorbido como traje extra, con los modelos de tu propio juego (no trae arte). Lo usa la mision de absorciones de la Pasarela del HUB."
+descripcion_en = "Super Buu with Piccolo absorbed as an extra costume, using your own game's models (no art included). Used by the absorption mission in the HUB Gateway."
+descripcion_it = "Super Bu con Piccolo assorbito come costume extra, con i modelli del tuo gioco (nessuna grafica inclusa). Lo usa la missione delle assimilazioni nel Gateway dell'HUB."
+descripcion_de = "Super Boo mit absorbiertem Piccolo als Zusatzkostum, mit den Modellen deines eigenen Spiels (ohne Grafik). Wird von der Absorptionsmission im HUB-Gateway genutzt."
+descripcion_fr = "Super Boo avec Piccolo absorbe comme costume en plus, avec les modeles de ton propre jeu (sans graphismes). Utilise par la mission d'absorptions de la Passerelle du HUB."
+
+[[mod]]
+id = "bu_absorbido_gotenks"
+version = "1.0"
+exe_nuevo = true   # ronda 2 (2026-10-15)
+tipo = "traje"
+nombre_es = "Traje: Bu (Gotenks absorbido)"
+nombre_en = "Costume: Buu (Gotenks absorbed)"
+nombre_it = "Costume: Bu (Gotenks assorbito)"
+nombre_de = "Kostum: Boo (Gotenks absorbiert)"
+nombre_fr = "Costume : Boo (Gotenks absorbe)"
+descripcion_es = "Super Bu con Gotenks absorbido como traje extra, con los modelos de tu propio juego (no trae arte). Lo usa la mision de absorciones de la Pasarela del HUB."
+descripcion_en = "Super Buu with Gotenks absorbed as an extra costume, using your own game's models (no art included). Used by the absorption mission in the HUB Gateway."
+descripcion_it = "Super Bu con Gotenks assorbito come costume extra, con i modelli del tuo gioco (nessuna grafica inclusa). Lo usa la missione delle assimilazioni nel Gateway dell'HUB."
+descripcion_de = "Super Boo mit absorbiertem Gotenks als Zusatzkostum, mit den Modellen deines eigenen Spiels (ohne Grafik). Wird von der Absorptionsmission im HUB-Gateway genutzt."
+descripcion_fr = "Super Boo avec Gotenks absorbe comme costume en plus, avec les modeles de ton propre jeu (sans graphismes). Utilise par la mission d'absorptions de la Passerelle du HUB."
+
+[[mod]]
+id = "bu_absorbido_gohan"
+version = "1.0"
+exe_nuevo = true   # ronda 2 (2026-10-15)
+tipo = "traje"
+nombre_es = "Traje: Bu (Gohan absorbido)"
+nombre_en = "Costume: Buu (Gohan absorbed)"
+nombre_it = "Costume: Bu (Gohan assorbito)"
+nombre_de = "Kostum: Boo (Gohan absorbiert)"
+nombre_fr = "Costume : Boo (Gohan absorbe)"
+descripcion_es = "Super Bu con Gohan absorbido como traje extra, con los modelos de tu propio juego (no trae arte). Lo usa la mision de absorciones de la Pasarela del HUB."
+descripcion_en = "Super Buu with Gohan absorbed as an extra costume, using your own game's models (no art included). Used by the absorption mission in the HUB Gateway."
+descripcion_it = "Super Bu con Gohan assorbito come costume extra, con i modelli del tuo gioco (nessuna grafica inclusa). Lo usa la missione delle assimilazioni nel Gateway dell'HUB."
+descripcion_de = "Super Boo mit absorbiertem Gohan als Zusatzkostum, mit den Modellen deines eigenen Spiels (ohne Grafik). Wird von der Absorptionsmission im HUB-Gateway genutzt."
+descripcion_fr = "Super Boo avec Gohan absorbe comme costume en plus, avec les modeles de ton propre jeu (sans graphismes). Utilise par la mission d'absorptions de la Passerelle du HUB."

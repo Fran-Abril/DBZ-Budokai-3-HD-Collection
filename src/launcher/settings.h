@@ -348,6 +348,10 @@ void SetFxaa(const std::string& mode);
 // Strength of the "HD shine" rim light on character models (0 = off, 1 = original).
 double HdRimLight();
 void SetHdRimLight(double strength);
+// Experimental relight (ambient occlusion on the 3D scene, SDK dbz3_relight_level):
+// 0 = off (default, nothing runs), 1 = low, 2 = high. Direct3D 12 only.
+int32_t Relight();
+void SetRelight(int32_t level);
 bool PresentDither();
 void SetPresentDither(bool enabled);
 

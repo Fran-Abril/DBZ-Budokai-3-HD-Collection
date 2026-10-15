@@ -1,0 +1,15 @@
+# WL-20 (paquete faltante): sin el mod de Gotenks gordo en la copia (movido a mods_respaldo y roster montado de nuevo),
+# la fila de la mision sale en gris con lo que falta, A no la empieza (nada cae) y B sale de la pasarela.
+# Antes: mover mods/vis_b2_fat_gotenks a mods_respaldo/ y `roster_build.py construir --mods ...`; despues, al reves.
+# python tools/pruebas.py correr campanas_test docs/16_pasarela_modos/pruebas/wl20_sin_mod.toml
+descripcion = "Pasarela WL-20: sin Gotenks gordo la mision sale en gris y no empieza"
+env = ["DBZ3_TEST_MISIONES=menu", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games"]
+pasos = [
+  'log "misiones: prueba: modo gotenks listo false \(Importa a Gotenks gordo" 90',
+  'log "misiones: prueba: abierta" 15',
+  'esperar 1500', 'tecla S 900', 'tecla S 900', 'esperar 800', 'captura 01_gotenks_en_gris',
+  'tecla Space 1500', 'esperar 1500', 'captura 02_tras_A_sigue_el_menu',
+  'tecla Backspace 1500',
+  'log "misiones: fuera de la pasarela" 10',
+  'esperar 2000', 'captura 03_vuelta',
+]

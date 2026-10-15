@@ -1,0 +1,45 @@
+# Las absorciones de Super Bu (ficha 21): Bu vence a Piccolo, Goten y Gohan; tras cada victoria lo absorbe y, antes del
+# combate siguiente, se elige con que absorcion lucha (trajes de mod center hd/campanas/trajes_bu instalados en la copia).
+# Capturas de cada Bu en combate. Necesita la copia campanas_test (mods/_roster con los tres trajes).
+# python tools\pruebas.py correr campanas_test docs\16_pasarela_modos\pruebas\mision_buu.toml
+descripcion = "Pasarela: absorciones de Super Bu (eleccion antes de cada combate)"
+env = ["DBZ3_TEST_MISIONES=3,auto,reset", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games", "DBZ3_TEST_RINGOUT=1"]
+pasos = [
+  'log "misiones: prueba: modo buu listo true" 60',
+  'log "misiones: buu paso 1/13 \(charla\)" 15',
+  'esperar 1200', 'captura 01_charla_bu',
+  'log "misiones: buu paso 3/13 \(combate\)" 20',
+  'esperar 1200', 'captura 02_tarjeta_piccolo',
+  'log "hub: combate nativo: id 35 contra id 11" 20',
+  'log "misiones: buu paso 3 estado del combate 4" 60',
+  'esperar 2000', 'captura 03_combate_bu_contra_piccolo',
+  'log "misiones: buu paso 3 estado del combate 7" 60',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: Bu absorbe: Bu \(Piccolo absorbido\)" 20',
+  'log "misiones: buu paso 4/13 \(eleccion\)" 20',
+  'esperar 1500', 'captura 04_eleccion',
+  'log "misiones: buu combate: id 35 \(forma 0, traje 4\) contra id 6 \(forma 1\)" 30',
+  'log "misiones: buu paso 6: traje del jugador 4" 10',
+  'log "misiones: buu paso 6 estado del combate 4" 60',
+  'esperar 2000', 'captura 05_combate_bu_piccolo_contra_goten',
+  'log "misiones: buu paso 6 estado del combate 7" 60',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: Bu absorbe: Bu \(Gotenks absorbido\)" 20',
+  'log "misiones: buu paso 7/13 \(eleccion\)" 20',
+  'esperar 1500', 'captura 06_eleccion_tres',
+  'log "misiones: buu paso 9: traje del jugador 3" 40',
+  'log "misiones: buu paso 9 estado del combate 4" 60',
+  'esperar 2000', 'captura 07_combate_bu_gotenks_contra_gohan',
+  'log "misiones: buu paso 9 estado del combate 7" 60',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: Bu absorbe: Bu \(Gohan absorbido\)" 20',
+  'log "misiones: buu paso 12: traje del jugador 2" 40',
+  'log "misiones: buu paso 12 estado del combate 4" 60',
+  'esperar 2000', 'captura 08_combate_bu_gohan_contra_goku',
+  'log "misiones: buu paso 12 estado del combate 7" 60',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "misiones: buu paso 13/13 \(final\)" 20',
+  'esperar 1500', 'captura 09_final',
+  'log "misiones: buu completado" 15',
+  'esperar 1500', 'captura 10_menu_pasarela',
+]

@@ -1,0 +1,13 @@
+descripcion = "Capsula unica (1984): Goku sube por todas sus formas con la decision nativa y baja sin ki"
+env = ["DBZ3_TEST_BATTLE=0,7,0,-1", "DBZ3_TEST_CAPS=1984", "DBZ3_TEST_FORMAS=1", "DBZ3_HUB_MODE=5", "DBZ3_TEST_INV=1,2,3,4,5"]
+pasos = [
+  'log "capsula unica 1984 -> formas" 90',
+  'esperar 3000', 'captura 00_base',
+  'log "prueba: sube a la forma 1 " 60', 'esperar 2500', 'captura 01_forma1',
+  'log "prueba: sube a la forma 2 " 60', 'esperar 2500', 'captura 02_forma2',
+  'log "prueba: sube a la forma 3 " 60', 'esperar 2500', 'captura 03_forma3',
+  'log "prueba: sube a la forma 4 " 60', 'esperar 2500', 'captura 04_forma4',
+  'log "prueba: sube a la forma 5 " 60', 'esperar 2500', 'captura 05_forma5',
+  'log "prueba: tope en la forma" 60',
+  'log "prueba: baja a la forma" 90', 'esperar 1500', 'captura 06_baja',
+]

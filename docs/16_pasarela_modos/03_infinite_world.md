@@ -44,6 +44,12 @@ del ELF de IW da R&R BASE 48, BUDO 50, BUU BODY 52, CELL 54, GOKU 56, KAIOU 58, 
 NAMEC 64, PLANE 66, ROCK 68, TOWN B 70, TOWN 72 (entradas de su DATA_CMN; los mapas de B3 tienen nombres parecidos).
 El rival puede ser un personaje de IW ya importado (`importar.py iw`).
 
+**Ronda 2 (2026-10-15):** los textos de cada misión están en `DATA_USA.AFS` desde la entrada **132** (un `#AMB` por
+misión: `[#AMT texto, #AMT título]`, en el orden del juego: 132-141 "Training No.1-10", 142 "Defeat Raditz!"...); el
+título y el texto dicen la condición ("Perform 30 Basic Attacks... 180 seconds", "Without performing any attacks keep your
+health above the specified level... 60 seconds", "Let Hercule win!"). En `#DMD`, +0x08/+0x0C son la posición del icono
+en el mapa de misiones. Dos retos jugables desde la entrada **Pasarela** del HUB: [04](04_misiones_y_tablero.md) §5.
+
 **Qué falta:** descifrar el tipo de condición, el personaje del jugador, el tiempo y la vida de cada fila (buscar
 el código MIPS que lee los registros de 0x50 B: con Capstone, como en 01 §2); las condiciones distintas de
 "ganar" necesitan leer el combate (tiempo, ring out: ya se leen estado y ganador) y algunas, ganchos nuevos (p. ej.

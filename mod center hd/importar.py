@@ -121,6 +121,38 @@ def sdbh_dir():
     return hits[0] if hits else None
 
 
+def sdbh_cpks():
+    """Los data_*_win.cpk de Heroes (voces en data_07): carpeta de recursos o instalacion de Steam."""
+    steam = "steamapps/common/SUPER DRAGON BALL HEROES WORLD MISSION"
+    dirs = [sdbh_dir()] + ["%s:/SteamLibrary/%s" % (c, steam) for c in "CDEFGHIJ"] + [
+        os.path.join(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"), "Steam", "steamapps", "common",
+                     "SUPER DRAGON BALL HEROES WORLD MISSION")]
+    for dd in dirs:
+        hits = sorted(glob.glob(os.path.join(dd, "data_*_win.cpk"))) if dd else []
+        if hits:
+            return sorted(hits, key=lambda h: not h.endswith("data_07_win.cpk"))
+    return []
+
+
+def sdbh_gritos(clave, d):
+    """Voces del personaje de Heroes (CueSheet_BC<clave>) -> <mod>/gritos/*.wav (16 kHz). Devuelve cuantas."""
+    import wave  # noqa: PLC0415
+    import cri  # noqa: PLC0415  (awo_tools/cri.py, ya en sys.path)
+    cpks = sdbh_cpks()
+    if not cpks:
+        return 0
+    voices = cri.voces_sdbh(cpks, clave)
+    if voices:
+        os.makedirs(os.path.join(d, "gritos"), exist_ok=True)
+    for name, x in voices:
+        with wave.open(os.path.join(d, "gritos", "%s.wav" % name), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(x.astype("<i2").tobytes())
+    return len(voices)
+
+
 def source_path(game):
     if game == "b1":
         import b1port  # noqa: PLC0415  (cualquier region: '... Budokai (Europe)...', '(USA)'...)
@@ -459,8 +491,47 @@ SB_CHARS = {
     "BRL": ("Broly", 40), "18G": ("Android 18", 30), "BUS": ("Kid Buu", 36), "BUL": ("Majin Buu", 34),
     "BUM": ("Super Buu", 35), "BDK": ("Bardock", 39), "DBR": ("Dabura", 37), "GGT": ("Gogeta", 7),
     "VTO": ("Vegito", 7), "GTX": ("Gotenks", 6), "JNB": ("Janemba", 10), "PKH": ("Pikkon", 11),
+    # solo en SDBH (identificados por render 2026-10-15; sin golpes de SB: los del donante)
+    "GKB": ("Goku Black", 0), "KMS": ("Master Roshi", 10), "BLS": ("Beerus", 16), "ZMS": ("Zamasu", 16),
+    "ZMU": ("Fused Zamasu", 16),
 }
-SB_NEW = {"GHF", "TRF", "GGT", "VTO", "GTX", "JNB", "PKH"}     # sin casilla propia en B3
+SB_NEW = {"GHF", "TRF", "GGT", "VTO", "GTX", "JNB", "PKH", "GKB", "KMS", "BLS", "ZMS", "ZMU"}  # sin casilla en B3
+# El resto de SDBH (solo modelo; golpes del donante). Nombres identificados mirando el render de cada codigo
+# (2026-10-15, hojas en E:\DBZ3HD_trabajo\modkit\sdbh\hoja_*.png); variantes dudosas = "Personaje (CODIGO)". Los que
+# no estan salen como "Heroes CODIGO" con Goku de donante. Donante: el de su familia (cuerpo y agarre parecidos).
+SDBH_CHARS = {
+    "16G": ("Android 16", 28), "17G": ("Android 17", 29), "20G": ("Dr. Gero", 32), "21G": ("Android 21", 30),
+    "1SD": ("Omega Shenron", 41), "G13": ("Android 13", 29), "G14": ("Android 14", 28), "G15": ("Android 15", 29),
+    "G19": ("Android 19", 32), "G2K": ("Dr. Gero (G2K)", 32), "G6K": ("Android 16 (G6K)", 28),
+    "G7K": ("Android 17 (G7K)", 29), "G8K": ("Android 18 (G8K)", 30), "HF7": ("Hell Fighter 17", 29),
+    "S13": ("Super Android 13", 28), "S17": ("Super 17", 29), "ARL": ("Arale", 1), "BAB": ("Babidi", 14),
+    "BIB": ("Bibidi", 14), "BLM": ("Bulma", 15), "BGN": ("Gine", 15), "BVK": ("King Vegeta", 7), "CAB": ("Cabba", 7),
+    "CHI": ("Chilled", 27), "CLD": ("King Cold", 27), "CLI": ("Cheelai", 15), "CLJ": ("Cell Jr.", 43),
+    "CLO": ("Cell (CLO)", 33), "CLX": ("Cell (CLX)", 33), "DBX": ("Dabura (Xeno)", 37), "DDR": ("Dodoria", 19),
+    "DMG": ("Demigra", 37), "DSP": ("Dyspo", 0), "FUU": ("Fu", 0), "GAS": ("Gas", 0), "GNY": ("Ginyu", 20),
+    "GRD": ("Guldo", 21), "JES": ("Jeice", 20), "ZBN": ("Zarbon", 38), "GS3": ("Great Saiyaman 3", 5),
+    "GS4": ("Great Saiyaman 4", 5), "GTN": ("Goten", 6), "GHS": ("Kid Gohan", 2), "GHG": ("Gohan (GHG)", 4),
+    "HDG": ("Hirudegarn", 40), "HIT": ("Hit", 0), "HOI": ("Hoi", 32), "JAK": ("Jaco", 10), "JKC": ("Jackie Chun", 10),
+    "JNO": ("Xeno Janemba", 10), "JNH": ("Janemba (JNH)", 10), "JBB": ("Janemba (JBB)", 10),
+    "JBH": ("Janemba (JBH)", 10), "JBY": ("Janemba (JBY)", 10), "KBT": ("Kibito", 16), "MAI": ("Mai", 15),
+    "MRK": ("Marcarita", 15), "NAP": ("Nappa", 19), "PAN": ("Pan", 15), "PCK": ("King Piccolo", 11),
+    "PC3": ("King Piccolo (PC3)", 11), "PKK": ("Pikkon (PKK)", 11), "PUI": ("Pui Pui", 10), "QUI": ("Cui", 7),
+    "RAD": ("Raditz", 18), "RCM": ("Recoome", 21), "RUM": ("Rumsshi", 16), "SBM": ("Saibaman", 42),
+    "STN": ("Hercule", 14), "TAP": ("Tapion", 8), "TLH": ("Turles", 0), "TLO": ("Turles (TLO)", 0),
+    "TLS": ("Turles (TLS)", 0), "TOP": ("Toppo", 21), "TPC": ("Cyborg Tao", 12), "TPI": ("Tao Pai Pai", 12),
+    "TRS": ("Kid Trunks", 9), "TRO": ("Trunks (TRO)", 8), "TSH": ("Tien", 12), "TUR": ("Master Shen", 12),
+    "TWA": ("Towa", 15), "UUB": ("Uub", 17), "UBL": ("Uub (UBL)", 17), "VBY": ("Baby Vegeta", 7), "VDL": ("Videl", 15),
+    "VGO": ("Vegeta (VGO)", 7), "VGS": ("Vegeta (VGS)", 7), "VGX": ("Vegeta (VGX)", 7), "VTX": ("Vegito (VTX)", 7),
+    "WIS": ("Whis", 16), "YMC": ("Yamcha", 13), "ZGY": ("Zangya", 15), "ZNO": ("Zeno", 2), "ZRN": ("Jiren", 21),
+    "BGK": ("Goku (BGK)", 0), "GKG": ("Goku (GKG)", 0), "GKM": ("Goku (GKM)", 0), "GKO": ("Goku (GKO)", 0),
+    "GKS": ("Goku (GKS)", 0), "KSA": ("Bardock (KSA)", 39), "KSB": ("Bardock (KSB)", 39), "BRH": ("Broly (BRH)", 40),
+    "BUO": ("Super Buu (BUO)", 35), "CBU": ("Kid Buu (CBU)", 36), "FRF": ("Frieza (FRF)", 27),
+    "FRO": ("Frieza (FRO)", 27), "FST": ("Frieza (FST)", 27), "GGO": ("Gogeta (GGO)", 7),
+    **{"SD%d" % n: ("Shadow Dragon %d-Star" % n, 41) for n in range(1, 8)},
+    **{"OS" + c: ("Great Ape (OS%s)" % c, 40) for c in "ABDGHKLMRSTX"},
+}
+SDBH_IN_B3 = {"16G", "17G", "20G", "1SD", "CLJ", "GNY", "GTN", "GHS", "NAP", "RAD", "RCM", "SBM", "STN", "TRS",
+              "TSH", "UUB", "VDL", "YMC", "GRD", "JES", "ZBN", "DDR", "G19"}     # ya en B3: nombre sugerido + " SDBH"
 MAX_FORMS = 6
 
 
@@ -531,14 +602,20 @@ def sb_list(game):
 
 
 def sdbh_list():
-    """Personajes de SDBH con equivalente en SB/B3: model/bc<xxx>/bc<xxx>bNN (una carpeta por forma)."""
+    """Todos los personajes de SDBH: model/bc<xxx>/bc<xxx>bNN (una carpeta por forma). Antes solo los de SB_CHARS
+    (24): Xeno Janemba y los demas solo entraban convirtiendo a mano."""
     root = os.path.join(source_path("sdbh") or "", "model")
     out = []
-    for code, (nm, donor) in SB_CHARS.items():
-        d = os.path.join(root, "bc" + code.lower())
+    for d in sorted(glob.glob(os.path.join(root, "bc*"))):
+        code = os.path.basename(d)[2:].upper()
         forms = sorted(glob.glob(os.path.join(d, "bc%sb[0-9][0-9]" % code.lower())))
-        if forms:
-            out.append({"clave": code, "nombre": nm, "carpetas": forms, "donante": donor, "nuevo": code in SB_NEW})
+        if not forms:
+            continue
+        if code in SB_CHARS:
+            (nm, donor), new = SB_CHARS[code], code in SB_NEW
+        else:
+            (nm, donor), new = SDBH_CHARS.get(code, ("Heroes %s" % code, 0)), code not in SDBH_IN_B3
+        out.append({"clave": code, "nombre": nm, "carpetas": forms, "donante": donor, "nuevo": new})
     out.sort(key=lambda e: e["nombre"].lower())
     return out
 
@@ -966,7 +1043,8 @@ def entry_kind(game, e):
         return "b1", len(e["modelos"])
     if game in ("sb1", "sb2", "sdbh"):
         n = min(len(e.get("carpetas") or e.get("modelos") or []), MAX_FORMS)
-        own = sb_moveset_ready() and (game != "sdbh" or sb_game_of(e["clave"]) is not None)
+        # (solo los de SB_CHARS pueden traer golpes de SB: los demas de Heroes no leen las ISO de PSP)
+        own = sb_moveset_ready() and (game != "sdbh" or (e["clave"] in SB_CHARS and sb_game_of(e["clave"]) is not None))
         return ("sb" if own else "formas"), n
     if e.get("ficheros"):
         return "formas", min(len(e["ficheros"]), 6)
@@ -1303,6 +1381,14 @@ def do_import(a):
         if vn:
             keys["voces"] = '"iw:%s"' % vn
             rb.log("voces y gritos de Infinite World: %s" % vn)
+    if game == "sdbh" and "gritos" not in keys:   # voces de Heroes (data_07_win.cpk) -> gritos de los golpes
+        try:
+            n = sdbh_gritos(e["clave"], d)
+            if n:
+                keys["gritos"] = '"wav:gritos"'
+                rb.log("gritos de Heroes: %d voces de %s" % (n, e["clave"]))
+        except Exception as ex:  # noqa: BLE001
+            rb.log("aviso: gritos del donante (voces de Heroes no leidas: %s)" % ex)
     keys = apply_preset(keys, opt)
     # de que preset sale el personaje (y lo que se cambio con --opcion): asi se puede rehacer igual
     keys["preset"] = json.dumps("%s.%s" % (game, pname))
@@ -1460,6 +1546,10 @@ def oficial(a):
             if r.get("extra"):
                 rb.set_toml_keys(os.path.join(mods, mod, "personaje.toml"),
                                  {k: toml_value(v) for k, v in r["extra"].items()})
+            if r.get("capsulas"):             # [[capsula]] de la receta (p. ej. el nombre de una transformacion)
+                with open(os.path.join(mods, mod, "personaje.toml"), "a", encoding="utf-8") as fh:
+                    for cap in r["capsulas"]:
+                        fh.write("\n[[capsula]]\n" + "".join("%s = %s\n" % (k, toml_value(v)) for k, v in cap.items()))
             hechos.append(mod)
         except (Exception, SystemExit) as ex:  # noqa: BLE001
             if not a.todos:
@@ -1542,6 +1632,9 @@ def traje_desde_port(a):
         fh.write("# Traje de epoca creado con importar.py traje desde el port %s (que sigue instalado)\n" % a.mod)
         fh.write("[traje]\npersonaje = %d\nnombre = %s\nmodelos = [%s]\n"
                  % (cid, json.dumps(nombre, ensure_ascii=False), ", ".join('"%s"' % r for r in rels)))
+        if not getattr(a, "sin_enlace", False):
+            # en combate este traje es el personaje del port: sus golpes, capsulas y color (ficha 07)
+            fh.write("enlazado = %s\n" % json.dumps(a.mod))
     shutil.rmtree(work, ignore_errors=True)
     emit("traje", out_mod, cid, nombre, len(rels))
     return 0
@@ -1588,6 +1681,8 @@ def main():
     t.add_argument("--personaje", type=int, help="ID del personaje del juego (por defecto, el donante)")
     t.add_argument("--nombre")
     t.add_argument("--salida", help="carpeta del mod nuevo (por defecto traje_<mod>)")
+    t.add_argument("--sin-enlace", action="store_true",
+                   help="solo el modelo (el traje usa los golpes y capsulas del personaje del juego)")
     t.add_argument("--mods")
     t.add_argument("--us")
     o = sub.add_parser("oficial", help="crea o rehace un port oficial desde tus discos")

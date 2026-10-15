@@ -29,8 +29,12 @@ void CargarDeMods(rex::memory::Memory* memory);
 // Registros disponibles: 17 de serie + altas de mods.
 int Total();
 // Nombre para pantallas propias (HUB, retos), en el idioma del juego (id de idioma de Xbox, como
-// dbz3_language: 1 ingles, 3 aleman, 4 frances, 5 espanol, 6 italiano; otro = ingles), en UTF-8: los de
-// serie son los oficiales del selector; las altas dan su `titulo` (o `nombre`). Fuera de rango: "".
+// dbz3_language: 1 ingles, 2 japones, 3 aleman, 4 frances, 5 espanol, 6 italiano; otro = ingles), en UTF-8:
+// los de serie son los oficiales del selector (rotulos de data_<idioma>.afs 2043); las altas dan su `titulo`
+// (o `nombre`). El juego no trae texto japones (con el idioma 2 sale en ingles, como data_usi = data_eng) y
+// la letra de las pantallas propias es latina: el 2 da el ingles. Fuera de rango: "".
 std::string Nombre(int registro, int idioma);
+// Lo mismo en el idioma elegido por el jugador (dbz3::settings::Language()).
+std::string Nombre(int registro);
 
 }  // namespace dbz3::escenarios

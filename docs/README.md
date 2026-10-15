@@ -63,11 +63,11 @@
 | [06_limpieza/INTEGRACION_MODDING_HD](06_limpieza/INTEGRACION_MODDING_HD.md) | Clasificación de herramientas y recursos para HD |
 | [07_ports/GOHAN_FUTURO_EXPLORACION_2026-10-06](07_ports/GOHAN_FUTURO_EXPLORACION_2026-10-06/README.md) | **Gohan del Futuro al 100 %**: exploración de moveset, técnicas, modelo, formas y Studio |
 | [07_ports](07_ports/ESTRUCTURA_DIBUJO_HD.md) | **Estructura de dibujo HD mapeada (descriptores A/B, mesh-ref, arms)** |
-| [12_conectores](12_conectores/) | **Conectores nativos**: menu principal, cola de pantallas, combate nativo desde el menu (`src/hub.cpp`) |
-| [14_frentes](14_frentes/REGLAS.md) | **Frentes de trabajo 2026-10-15**: reglas comunes e informe de cada frente (HUB, modos, Tag Team, ports, escenarios, pasarela, QoL, bugs, vision futura) |
+| [12_conectores](12_conectores/) | **Conectores nativos**: menu principal, cola de pantallas, combate nativo desde el menu y combates encadenados sin menu (`src/hub.cpp`, doc 10 s9.4) |
+| [14_frentes](14_frentes/REGLAS.md) | **Frentes de trabajo 2026-10-15**: reglas comunes e informe de cada frente (HUB, modos, Tag Team, ports, escenarios, pasarela, QoL, bugs, vision futura). Ronda 2 ([RONDA2.md](14_frentes/RONDA2.md)): combate, rpg, transformaciones, online, grafico, modkit, campanas, eu (+ `eu_mapa.txt`) |
 | [14_dragon_universe](14_dragon_universe/) | Dragon Universe por dentro: opcodes, casillas, guardado |
 | [15_tecnicas](15_tecnicas/) | Tecnicas por dentro: codigos de energia, coste de ki, #CST/#CSE |
-| [16_pasarela_modos](16_pasarela_modos/) | **Pasarela de modos B1/B2/IW**: viabilidad por modo y Leyenda de Mr. Satan (`src/pasarela*.cpp`, `mod center hd/pasarela/pasarela.py`) |
+| [16_pasarela_modos](16_pasarela_modos/) | **Pasarela de modos B1/B2/IW**: viabilidad por modo, Leyenda de Mr. Satan, saga B1, tablero B2, misiones y retos de IW ([04_misiones_y_tablero.md](16_pasarela_modos/04_misiones_y_tablero.md); `src/pasarela*.cpp`, `mod center hd/pasarela/pasarela.py`) |
 | [jugador/MODOS_Y_RETOS.md](jugador/MODOS_Y_RETOS.md) | Guia del jugador: HUB, retos y torre de la semana |
 
 ---

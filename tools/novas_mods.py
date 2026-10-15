@@ -78,8 +78,11 @@ def manifest_with_version(path, version, name, author=None):
 def pack(src, mod_id, version, name, out_zip, author=None):
     """Zip con la carpeta <id>/ (InstallModFromZip la desenvuelve); el manifest lleva la version."""
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as z:
-        for d, _, fs in os.walk(src):
+        for d, ds, fs in os.walk(src):
+            ds[:] = [x for x in ds if x not in ("respaldo", "_respaldo")]   # copias de trabajo del mod, no van
             for f in sorted(fs):
+                if f.startswith(".modelo_hd."):   # cache de la vista previa (ui/_vista): se rehace sola
+                    continue
                 p = os.path.join(d, f)
                 rel = os.path.relpath(p, src).replace("\\", "/")
                 if rel == "manifest.txt" or rel == ".disabled" or f.endswith((".bak", ".log")):

@@ -175,6 +175,13 @@ REXCVAR_DEFINE_DOUBLE(dbz3_hd_rim_light, 1.0, "DBZ3/Video",
                       "HD rim light on character models (0 = off, 1 = original)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+// Experimental relight (SDK dbz3_relight_level): subtle ambient occlusion on
+// the 3D scene, never on the HUD or the menus. Off by default (costs GPU time).
+REXCVAR_DEFINE_INT32(dbz3_relight, 0, "DBZ3/Video",
+                     "Experimental ambient occlusion on the 3D scene: 0 = off, 1 = low, 2 = high")
+    .range(0, 2)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 // Dithering of the final image (SDK present_dither).
 REXCVAR_DEFINE_BOOL(dbz3_present_dither, false, "DBZ3/Video",
                     "Dither the final image (smoother gradients)")
@@ -1857,6 +1864,8 @@ void SetFxaa(const std::string& mode) { REXCVAR_SET(dbz3_fxaa, mode); }
 
 double HdRimLight() { return REXCVAR_GET(dbz3_hd_rim_light); }
 void SetHdRimLight(double strength) { REXCVAR_SET(dbz3_hd_rim_light, std::clamp(strength, 0.0, 1.0)); }
+int32_t Relight() { return std::clamp(REXCVAR_GET(dbz3_relight), 0, 2); }
+void SetRelight(int32_t level) { REXCVAR_SET(dbz3_relight, std::clamp(level, 0, 2)); }
 bool PresentDither() { return REXCVAR_GET(dbz3_present_dither); }
 void SetPresentDither(bool enabled) { REXCVAR_SET(dbz3_present_dither, enabled); }
 
@@ -2555,6 +2564,7 @@ void ApplyRuntimeSettingsToSdk(bool for_game) {
   SetSdkString("swap_post_effect", REXCVAR_GET(dbz3_fxaa));
   SetSdkBool("present_dither", REXCVAR_GET(dbz3_present_dither));
   SetSdkDouble("dbz3_rim_light_scale", HdRimLight());
+  SetSdkInt("dbz3_relight_level", Relight());
   SetSdkBool("async_shader_compilation", REXCVAR_GET(dbz3_async_shaders));
   SetSdkBool("occlusion_query_enable", REXCVAR_GET(dbz3_occlusion_queries));
   // Real audio controls. `audio_gain` is the output gain the SDL callback

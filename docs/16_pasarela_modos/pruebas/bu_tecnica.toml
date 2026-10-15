@@ -1,0 +1,22 @@
+# Ficha 21: Bu (Piccolo absorbido), traje de Super Bu, del COM en Avanzado con las capsulas de Super Bu (Absorcion 123,
+# la definitiva; Ill Flash 124; Ill Ball Attack 125) contra Goku quieto (7000 de vida): el registro dice cuando gasta
+# ki de golpe (tecnica) o cambia de forma (absorcion). Despues el Bu de siempre (traje 1) sigue igual.
+# python tools\pruebas.py correr campanas_test docs\16_pasarela_modos\pruebas\bu_tecnica.toml
+descripcion = "Pasarela: tecnica de Bu absorbido (traje) y vuelta al Bu de siempre"
+env = ["DBZ3_TEST_MISIONES=tecnica,1,0", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games", "DBZ3_HUB_MODE=5"]
+pasos = [
+  'log "prueba: tecnica 1: Bu \(Piccolo absorbido\) \(traje 4\) pedido" 60',
+  'log "misiones: tecnica 1: .*capsulas de serie lado 1: [0-9] lado 2: [1-7]" 20',
+  'log "misiones: tecnica 1 estado del combate 4" 60',
+  'esperar 1500', 'captura 01_bu_piccolo',
+  'log "misiones: tecnica 1: el lado 2 (gasta [0-9]+ de ki de golpe|pasa a la forma [1-9])" 70',
+  'esperar 200', 'captura 02_tecnica', 'esperar 500', 'captura 03_tecnica', 'esperar 700', 'captura 04_tecnica',
+  'log "misiones: tecnica 1 estado del combate 7" 90',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "prueba: tecnica 2: .* \(traje 0\) pedido" 60',
+  'log "misiones: tecnica 2 estado del combate 4" 60',
+  'esperar 1500', 'captura 05_bu_de_siempre',
+  'log "misiones: tecnica 2 estado del combate 7" 90',
+  'esperar 1500', 'tecla S 1500', 'tecla S 1500', 'tecla Space 2000', 'tecla W 1500', 'tecla Space 3000',
+  'log "prueba: tecnicas acabadas" 60',
+]

@@ -35,7 +35,7 @@
 #include <vector>
 
 #include "generated/dbz3_init.h"
-#include "guest_region.h"
+#include "eu_map.h"
 #include "launcher/settings.h"
 #include "mods.h"
 
@@ -157,7 +157,7 @@ bool IsModBattle(uint8_t* base, uint32_t word) {
   const uint32_t code = word >> 16;
   if (word == 0xFFFFFFFF || code < 5400 || code >= 5800) return false;
   for (int id : g_wheel_ids) {
-    if (REX_LOAD_U16(0x82020668 + uint32_t(id) * 2) == (code - 5000) % 100) return true;
+    if (REX_LOAD_U16(dbz3::GA(0x82020668) + uint32_t(id) * 2) == (code - 5000) % 100) return true;
   }
   return false;
 }
@@ -171,13 +171,13 @@ DBZ3_HOOK(sub_82156F30, dbz3eu_sub_82156EF0) {
   uint32_t cont = it == dbz3::campaigns::g_codes.end() ? 0 : it->second;
   // escenas compartidas del juego (eventos del mapa) con la copia del mod solo mientras se juega
   // la historia de uno de sus personajes de [rueda] (la casilla de DU en 0x824A58A0)
-  if (!cont && !dbz3::g_guest_eu) {
-    const uint32_t slot = REX_LOAD_U8(0x824A58A0);
+  if (!cont) {
+    const uint32_t slot = REX_LOAD_U8(dbz3::GA(0x824A58A0));
     for (const auto& [ids, codes] : dbz3::campaigns::g_story_codes) {
       const auto st = codes.find(code);
       if (st == codes.end()) continue;
       for (int id : ids) {
-        if (REX_LOAD_U16(0x82020668 + uint32_t(id) * 2) == slot) cont = st->second;
+        if (REX_LOAD_U16(dbz3::GA(0x82020668) + uint32_t(id) * 2) == slot) cont = st->second;
       }
     }
   }
@@ -188,7 +188,7 @@ DBZ3_HOOK(sub_82156F30, dbz3eu_sub_82156EF0) {
   }
   // una linea por escena: quien hace campañas ve que codigo pide cada momento de la historia
   REXLOG_INFO("dbz3 campanas: codigo {} -> contenedor {}{} (desde {:08X}, casilla {})", code, ctx.r3.s32,
-              cont ? " (del mod)" : "", lr, dbz3::g_guest_eu ? 255u : uint32_t(REX_LOAD_U8(0x824A58A0)));
+              cont ? " (del mod)" : "", lr, uint32_t(REX_LOAD_U8(dbz3::GA(0x824A58A0))));
 }
 
 // Rueda de Dragon Universe: r3 = objeto de la rueda (+32 = casillas que permite el modo, r4 = las
@@ -243,15 +243,15 @@ namespace dbz3::campaigns {
 // escena guardada del personaje de DU, una vez por cuadro.
 void Trace(uint8_t* base) {
   static const bool on = std::getenv("DBZ3_DU_TRACE") != nullptr;
-  if (!on || dbz3::g_guest_eu) return;
+  if (!on) return;
   static uint32_t last[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
-  const uint32_t slot = REX_LOAD_U8(0x824A58A0);
-  const uint32_t blk = 0x8247A9B0 + 128 + 4624 * (slot < 38 ? slot : 0);
+  const uint32_t slot = REX_LOAD_U8(dbz3::GA(0x824A58A0));
+  const uint32_t blk = dbz3::GA(0x8247A9B0) + 128 + 4624 * (slot < 38 ? slot : 0);
   // mapa (0x82479A60): +484 objeto cercano, +3568 su marca (lo que X lanza)
-  const uint32_t now[9] = {REX_LOAD_U32(0x8234DD1C), REX_LOAD_U32(0x8234DD24), REX_LOAD_U32(0x8234DD28),
-                           REX_LOAD_U32(blk + 4564), REX_LOAD_U32(blk + 4568), REX_LOAD_U32(0x82479A60 + 484),
-                           REX_LOAD_U32(0x82479A60 + 3568), REX_LOAD_U32(0x82479A60 + 216),
-                           REX_LOAD_U32(0x82479CC8 + 1388)};
+  const uint32_t now[9] = {REX_LOAD_U32(dbz3::GA(0x8234DD1C)), REX_LOAD_U32(dbz3::GA(0x8234DD24)), REX_LOAD_U32(dbz3::GA(0x8234DD28)),
+                           REX_LOAD_U32(blk + 4564), REX_LOAD_U32(blk + 4568), REX_LOAD_U32(dbz3::GA(0x82479A60) + 484),
+                           REX_LOAD_U32(dbz3::GA(0x82479A60) + 3568), REX_LOAD_U32(dbz3::GA(0x82479A60) + 216),
+                           REX_LOAD_U32(dbz3::GA(0x82479CC8) + 1388)};
   if (std::equal(now, now + 9, last)) return;
   std::copy(now, now + 9, last);
   auto w = [](uint32_t v) { return v == 0xFFFFFFFF ? std::string("-") : std::to_string(v >> 16) + "." + std::to_string(v & 0xFFFF); };
@@ -281,7 +281,7 @@ DBZ3_EXTERN_EU(dbz3eu_sub_8215E988);
 // lee recurso+128 sin comprobarlo. Con las escenas de un mod llego a recibir 0x20 (un recurso ya
 // liberado) y el juego se cerraba al cargar el dialogo del combate siguiente: un puntero imposible
 // se ignora (devuelve 1, "no estaba cargando", como cuando el estado no es 1).
-REX_HOOK_RAW(sub_820AAD30) {
+DBZ3_HOOK_EU(sub_820AAD30) {
   if (ctx.r4.u32 < 0x10000) {
     static int warned = 0;
     if (warned++ < 5)
@@ -290,23 +290,23 @@ REX_HOOK_RAW(sub_820AAD30) {
     ctx.r3.u64 = 1;
     return;
   }
-  __imp__sub_820AAD30(ctx, base);
+  orig(ctx, base);
 }
 
 // Estado "volar por el mapa" (sub_821C4DA0, r3 = tarea del mapa; en +28 su siguiente estado). Las
 // historias de mod dejan su combate como marca del mapa (op 24); tras 5 s de mapa (lo que tarda el mapa en quedar libre tras un combate) se toca sola,
 // haciendo lo mismo que el juego al tocar una marca de combate (0x821C4B90 / 0x821C5040): marca
 // tocada en +232, escena lanzada, mapa al estado 7 (entrar en un evento) y la tarea a su manejador.
-// Solo US (las direcciones del mapa estan medidas en la US).
-REX_HOOK_RAW(sub_821C4DA0) {
+// US y EU (direcciones medidas en la US; la pareja EU, de src/eu_map_gen.h).
+DBZ3_HOOK_EU(sub_821C4DA0) {
   using namespace dbz3::campaigns;
   // Desde 2026-10-11 las marcas de las historias de mod son como las del juego (icono 1, letrero y
   // punto en el minimapa) y se tocan volando hasta ellas; el toque solo queda para pruebas.
   // DBZ3_AUTO_TOUCH=N: las N primeras marcas (sin numero, todas)
   static int auto_touch = std::getenv("DBZ3_AUTO_TOUCH") ? (std::atoi(std::getenv("DBZ3_AUTO_TOUCH")) > 0 ? std::atoi(std::getenv("DBZ3_AUTO_TOUCH")) : 1 << 30) : 0;
-  if (auto_touch > 0 && !dbz3::g_guest_eu && !g_wheel_ids.empty() && REX_LOAD_U32(0x8234DD1C) == 0xFFFFFFFF) {
-    const uint32_t slot = REX_LOAD_U8(0x824A58A0);
-    const uint32_t marks = 0x8247A9B0 + 128 + 4624 * (slot < 38 ? slot : 0) + 128;
+  if (auto_touch > 0 && !g_wheel_ids.empty() && REX_LOAD_U32(dbz3::GA(0x8234DD1C)) == 0xFFFFFFFF) {
+    const uint32_t slot = REX_LOAD_U8(dbz3::GA(0x824A58A0));
+    const uint32_t marks = dbz3::GA(0x8247A9B0) + 128 + 4624 * (slot < 38 ? slot : 0) + 128;
     uint32_t mark = 0;
     for (uint32_t i = 0; i < 64 && !mark; ++i) {
       if (IsModBattle(base, REX_LOAD_U32(marks + 64 * i))) mark = marks + 64 * i;
@@ -320,38 +320,38 @@ REX_HOOK_RAW(sub_821C4DA0) {
       --auto_touch;
       const uint32_t task = ctx.r3.u32, word = REX_LOAD_U32(mark);
       REXLOG_INFO("dbz3 campanas: se toca la marca de combate {} entrada {}", word >> 16, word & 0xFFFF);
-      constexpr uint32_t kMap = 0x82479A60, kScr = 0x824BA110;
+      constexpr dbz3::GA kMap = 0x82479A60, kScr = 0x824BA110;
       auto f32 = [&](uint32_t a) { const uint32_t v = REX_LOAD_U32(a); float f; std::memcpy(&f, &v, 4); return f; };
       auto put = [&](uint32_t a, float f) { uint32_t v; std::memcpy(&v, &f, 4); REX_STORE_U32(a, v); };
-      const float f31 = f32(0x8201F60C);
+      const float f31 = f32(dbz3::GA(0x8201F60C));
       const PPCContext saved = ctx;
       REX_STORE_U32(kMap + 232, mark);
       ctx.r3.u64 = mark + 16;                       // camara hacia la marca
-      sub_821C3218(ctx, base);
+      DBZ3_CALL_EU(sub_821C3218)(ctx, base);
       put(kMap + 200, f31);
       REX_STORE_U32(kMap + 192, 0x10007);
-      put(kMap + 204, f32(0x82000D74));
+      put(kMap + 204, f32(dbz3::GA(0x82000D74)));
       const uint32_t cam = REX_LOAD_U32(REX_LOAD_U32(REX_LOAD_U32(kMap + 188) + 1132) + 20);
       put(kMap + 196, float(int32_t(REX_LOAD_U32(cam + 120))));
       ctx.r3.u64 = 1;                               // fundido
       ctx.r4.u64 = 0;
       ctx.f1.f64 = f32(kScr + 0x2C0C0);
-      sub_82092570(ctx, base);
+      DBZ3_CALL_EU(sub_82092570)(ctx, base);
       if (f32(kScr + 0x2C0C0) > f31) {
         ctx.r3.u64 = 1; ctx.r4.u64 = 0; ctx.r5.u64 = 9; ctx.r6.u64 = 0;
-        sub_820922A0(ctx, base);
+        DBZ3_CALL_EU(sub_820922A0)(ctx, base);
       }
       ctx.r3.u64 = word;
-      sub_8215E9C8(ctx, base);
-      ctx.r3.u64 = 10; ctx.r4.u64 = 0x821C7058; ctx.r5.u64 = 0;   // sonido de entrar
-      sub_82165190(ctx, base);
+      DBZ3_CALL_EU(sub_8215E9C8)(ctx, base);
+      ctx.r3.u64 = 10; ctx.r4.u64 = dbz3::GA(0x821C7058); ctx.r5.u64 = 0;   // sonido de entrar
+      DBZ3_CALL_EU(sub_82165190)(ctx, base);
       ctx = saved;
       REX_STORE_U32(kMap + 216, 7);
-      REX_STORE_U32(task + 28, 0x821C3960);
+      REX_STORE_U32(task + 28, dbz3::GA(0x821C3960));
       return;
     }
   }
-  __imp__sub_821C4DA0(ctx, base);
+  orig(ctx, base);
 }
 
 
@@ -367,9 +367,9 @@ struct MapLook {
 MapLook PickLook(uint8_t* base, const char* how, bool quiet = false) {
   MapLook l;
   // EU: la casilla de DU (0x824A58A0) no esta localizada en la europea: sin cambio de aspecto
-  if (dbz3::g_guest_eu || (g_map_model.empty() && g_map_suit.empty() && g_map_anim.empty())) return l;
-  const uint32_t slot = REX_LOAD_U8(0x824A58A0);
-  const uint32_t blk = 0x8247A9B0 + 128 + 4624 * (slot < 38 ? slot : 0);
+  if ((g_map_model.empty() && g_map_suit.empty() && g_map_anim.empty())) return l;
+  const uint32_t slot = REX_LOAD_U8(dbz3::GA(0x824A58A0));
+  const uint32_t blk = dbz3::GA(0x8247A9B0) + 128 + 4624 * (slot < 38 ? slot : 0);
   std::vector<uint32_t> words = {REX_LOAD_U32(blk + 4564), REX_LOAD_U32(blk + 4568), g_last_battle.load()};
   for (uint32_t i = 0; i < 64; ++i) words.push_back(REX_LOAD_U32(blk + 128 + 64 * i));
   auto pick = [&](const std::unordered_map<uint32_t, int>& m) {
@@ -397,7 +397,7 @@ MapLook PickLook(uint8_t* base, const char* how, bool quiet = false) {
 // los datos por casilla y modelo (sub_821C0BE0) y R1 cerraba el juego (2026-10-12).
 template <class F>
 void WithLook(uint8_t* base, uint32_t rec, const MapLook& l, F&& create) {
-  constexpr uint32_t kFlight = 0x823742C8;
+  constexpr dbz3::GA kFlight = 0x823742C8;
   if (!rec) {
     create();
     return;
@@ -407,7 +407,7 @@ void WithLook(uint8_t* base, uint32_t rec, const MapLook& l, F&& create) {
   if (l.suit >= 0) REX_STORE_U8(rec + 4579, uint8_t(l.suit));
   // y el fichero de animaciones del mapa de la casilla (0x823745C0[casilla], map+24): con solo el vuelo
   // Mecha seguia sentado como en la nave (visto por el usuario 2026-10-12)
-  constexpr uint32_t kAnims = 0x823745C0;
+  constexpr dbz3::GA kAnims = 0x823745C0;
   uint32_t entry = 0, old_entry = 0, anims = 0, old_anims = 0;
   if (l.anim >= 0 && l.anim < 38) {
     const uint32_t slot = REX_LOAD_U8(rec + 4577);
@@ -433,19 +433,19 @@ void WithLook(uint8_t* base, uint32_t rec, const MapLook& l, F&& create) {
 // Partida guardada: el juego solo guarda las historias de sus 11 personajes de DU (copias fijas de
 // 4624 B en sub_821D2BD8 = guardar, sub_821D2F80 = cargar; casillas de 0x4_00023C9D). Las casillas de
 // [rueda] de los mods (Freezer = 22) volvian vacias al cargar y salia Goku. Se guardan aparte, en
-// historias_extra.bin junto a las preferencias, en el mismo momento que la partida del juego. Solo US.
+// historias_extra.bin junto a las preferencias, en el mismo momento que la partida del juego. US y EU.
 namespace dbz3::campaigns {
 namespace {
 // las dos copias de los datos de DU (bloque k: +336 + 4624k): la del juego en curso y la de la partida
 // (la que leen y escriben las conversiones; medido 2026-10-14: sub_821D2F80 carga en 0x824BA110)
-bool IsDuStruct(uint32_t a) { return a == 0x8247A8E0 || a == 0x824BA110; }
+bool IsDuStruct(uint32_t a) { return a == dbz3::GA(0x8247A8E0) || a == dbz3::GA(0x824BA110); }
 constexpr uint32_t kDuBlock = 4624;
 constexpr uint64_t kDuNative = 0x400023C9Dull;        // casillas que el juego si guarda
 std::vector<uint32_t> ExtraSlots(uint8_t* base) {
   std::call_once(g_once, Load);
   std::vector<uint32_t> out;
   for (int id : g_wheel_ids) {
-    const uint32_t slot = REX_LOAD_U16(0x82020668 + uint32_t(id) * 2);
+    const uint32_t slot = REX_LOAD_U16(dbz3::GA(0x82020668) + uint32_t(id) * 2);
     if (slot < 38 && !((kDuNative >> slot) & 1)) out.push_back(slot);
   }
   return out;
@@ -454,9 +454,9 @@ std::filesystem::path ExtraFile() { return dbz3::settings::UserDataRoot() / "his
 }  // namespace
 }  // namespace dbz3::campaigns
 
-REX_HOOK_RAW(sub_821D2BD8) {   // r3 = partida a guardar, r4 = datos de DU
+DBZ3_HOOK_EU(sub_821D2BD8) {   // r3 = partida a guardar, r4 = datos de DU
   using namespace dbz3::campaigns;
-  if (const uint32_t du = ctx.r4.u32; !dbz3::g_guest_eu && IsDuStruct(du)) {
+  if (const uint32_t du = ctx.r4.u32; IsDuStruct(du)) {
     const auto slots = ExtraSlots(base);
     if (!slots.empty()) {
       std::error_code ec;
@@ -474,14 +474,14 @@ REX_HOOK_RAW(sub_821D2BD8) {   // r3 = partida a guardar, r4 = datos de DU
       REXLOG_INFO("dbz3 campanas: partida: {} historias de mods guardadas aparte{}", slots.size(), ec ? " (ERROR)" : "");
     }
   }
-  __imp__sub_821D2BD8(ctx, base);
+  orig(ctx, base);
 }
 
-REX_HOOK_RAW(sub_821D2F80) {   // r3 = datos de DU, r4 = partida cargada
+DBZ3_HOOK_EU(sub_821D2F80) {   // r3 = datos de DU, r4 = partida cargada
   const uint32_t live = ctx.r3.u32;
-  __imp__sub_821D2F80(ctx, base);
+  orig(ctx, base);
   using namespace dbz3::campaigns;
-  if (dbz3::g_guest_eu || !IsDuStruct(live)) return;
+  if (!IsDuStruct(live)) return;
   const auto slots = ExtraSlots(base);
   std::ifstream in(ExtraFile(), std::ios::binary);
   char magic[8] = {};
@@ -503,12 +503,12 @@ REX_HOOK_RAW(sub_821D2F80) {   // r3 = datos de DU, r4 = partida cargada
 
 // Personaje del mapa al volver de un combate o al empezar la historia (sub_821C24B8): lo crea
 // sub_82133B88(ID, modelo +4578, traje +4579) con el registro del jugador de DU (0x82479A60 +180).
-// Freezer: modelo 5 = Mecha; traje 2 con modelo 0 = el modelo 193, Freezer en su nave. Solo US.
-REX_HOOK_RAW(sub_821C24B8) {
+// Freezer: modelo 5 = Mecha; traje 2 con modelo 0 = el modelo 193, Freezer en su nave. US y EU.
+DBZ3_HOOK_EU(sub_821C24B8) {
   using namespace dbz3::campaigns;
-  const uint32_t rec = dbz3::g_guest_eu ? 0 : REX_LOAD_U32(0x82479A60 + 180);
+  const uint32_t rec = REX_LOAD_U32(dbz3::GA(0x82479A60) + 180);
   const MapLook l = rec ? PickLook(base, "al crear") : MapLook{};
-  WithLook(base, rec, l, [&] { __imp__sub_821C24B8(ctx, base); });
+  WithLook(base, rec, l, [&] { orig(ctx, base); });
 }
 
 // Al llegar a otro planeta el juego no rehace al personaje del mapa: en la Tierra sigue la nave de
@@ -520,7 +520,7 @@ REX_HOOK_RAW(sub_821C24B8) {
 // Tras un relevo del Tag Team, un Kamehameha del que entra le paso 0x20 (2026-10-12: el seguro de
 // arriba lo ignoraba pero la lectura siguiente cerraba el juego). Un recurso imposible se trata como
 // "sin recurso" (r4 = 0), un caso que la funcion ya contempla.
-REX_HOOK_RAW(sub_820A5820) {
+DBZ3_HOOK_EU(sub_820A5820) {
   if (ctx.r4.u32 && ctx.r4.u32 < 0x10000) {
     static int warned = 0;
     if (warned++ < 5)
@@ -528,7 +528,7 @@ REX_HOOK_RAW(sub_820A5820) {
                   uint32_t(ctx.lr));
     ctx.r4.u64 = 0;
   }
-  __imp__sub_820A5820(ctx, base);
+  orig(ctx, base);
 }
 
 // sub_82096FF0(?, ?, id): efecto/sonido `id` del banco global ([0x8238CE10], tabla de desplazamientos
@@ -539,15 +539,15 @@ REX_HOOK_RAW(sub_820A5820) {
 // que no esta en el banco y el juego llamo a una funcion basura del recurso (vtable[1]): parada del
 // juego (0x80000003). Se comprueba lo mismo que el juego va a leer (entrada, recurso, su vtable[1]) y,
 // si no es posible, se hace lo que la funcion hace sin banco: 32 bytes a 0 en objeto+224.
-REX_HOOK_RAW(sub_82096FF0) {
-  const uint32_t bank = REX_LOAD_U32(0x8238CE10);
+DBZ3_HOOK_EU(sub_82096FF0) {
+  const uint32_t bank = REX_LOAD_U32(dbz3::GA(0x8238CE10));
   const int32_t id = ctx.r5.s32;
-  if (bank && id != -1 && !dbz3::g_guest_eu) {
+  if (bank && id != -1) {
     // id fuera de la tabla del banco: el juego lee una entrada basura. A veces le sale un recurso 0 y no
     // pasa nada, pero R1 en el mapa de la Tierra con Freezer pide uno que cae en memoria sin mapear y el
     // juego se cerraba (2026-10-12, lectura de 0x06A459B2): fuera de la tabla, sin efecto
     auto code = [](uint32_t a) { return a >= 0x82000000u && a < 0x83000000u && !(a & 3); };
-    const uint32_t offs = REX_LOAD_U32(0x8238CE14);
+    const uint32_t offs = REX_LOAD_U32(dbz3::GA(0x8238CE14));
     const int32_t idx = id - int32_t(REX_LOAD_U32(bank + 24));
     const uint32_t rel = offs >= 0x10000 && idx >= 0 && idx < 4096 ? REX_LOAD_U32(offs + 4 * uint32_t(idx)) : 0xFFFFFFFFu;
     const uint32_t entry = rel < 0x01000000u ? bank + rel : 0;
@@ -555,7 +555,7 @@ REX_HOOK_RAW(sub_82096FF0) {
     // el recurso tiene que ser de la clase de los efectos (vtable 8201CAA0, la unica vista en 14 relevos
     // con tecnicas, DBZ3_FX_VTDIAG 2026-10-12): uno liberado por un relevo y reutilizado por otra clase
     // pasaba el control anterior y el juego acababa en sub_822F5460 -> sub_822F8988 (cierre)
-    constexpr uint32_t kFxVtable = 0x8201CAA0;
+    constexpr dbz3::GA kFxVtable = 0x8201CAA0;
     // y en memoria que existe (montones del juego, imagen o fisica): una direccion basura (no mapeada) cerraba el
     // juego al leer su vtable (frente de escenarios, 2026-10-15)
     auto heap = [](uint32_t a) {
@@ -582,5 +582,5 @@ REX_HOOK_RAW(sub_82096FF0) {
       return;
     }
   }
-  __imp__sub_82096FF0(ctx, base);
+  orig(ctx, base);
 }

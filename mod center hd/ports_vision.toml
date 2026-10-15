@@ -17,6 +17,7 @@ fuente = "iw"
 clave = "c:vegeta (saiyan saga)"
 donante = 7
 preset = "original"
+extra = { aura_color = "morado" }   # ficha 07: color de epoca (el traje 5 de Vegeta se enlaza a este personaje)
 
 # Yamcha con traje amarillo (IW). Ficha 07 pide Yamcha del DB original: confirmar visualmente que es esa epoca.
 [vis_iw_yamcha_amarillo]
@@ -25,6 +26,9 @@ fuente = "iw"
 clave = "c:yamcha (yellow suit)"
 donante = 13
 preset = "original"
+# tecnicas del Yamcha del juego: con el fichero de tecnicas de IW la definitiva (Spirit Ball) pedia efectos que no
+# existen y el juego se cerraba (2026-10-15); son las mismas tres tecnicas
+extra = { tecnicas = "donante" }
 
 # Tenshinhan de Budokai 2 (1 traje). Ficha 07 pide Ten Shinhan del DB original: el aspecto DB no esta confirmado.
 # No es "Tiencha" (la fusion de la ficha 20): esa no existe en B2.
@@ -53,8 +57,9 @@ fuente = "b2"
 clave = "XGXL"
 donante = 8
 preset = "original"
-# B2 no tiene sus voces a mano: las de Gotenks de Infinite World (si esta el disco de IW), no las del donante
-extra = { voces = "iw:GOTENKS (GOTEN)" }
+# B2 no trae sus voces a mano: las de Gotenks de IW (si esta el disco de IW). formas = 1: sin modelo de Super Saiyan,
+# las transformaciones del donante (Trunks) no cambiaban nada (probado 2026-10-15)
+extra = { voces = "iw:GOTENKS (GOTEN)", formas = 1 }
 
 [vis_b2_ghost_gotenks]
 nombre = "Ghost Gotenks"
@@ -62,8 +67,9 @@ fuente = "b2"
 clave = "XGXG"
 donante = 8
 preset = "original"
-# B2 no tiene sus voces a mano: las de Gotenks de Infinite World (si esta el disco de IW), no las del donante
-extra = { voces = "iw:GOTENKS (GOTEN)" }
+# B2 no trae sus voces a mano: las de Gotenks de IW (si esta el disco de IW). formas = 1: sin modelo de Super Saiyan,
+# las transformaciones del donante (Trunks) no cambiaban nada (probado 2026-10-15)
+extra = { voces = "iw:GOTENKS (GOTEN)", formas = 1 }
 
 # Yamhan (Yamcha + Tenshinhan): en B2 estaba sin nombre (prefijo XYMH); identificado por render el 2026-10-15
 # (tercer ojo, mechon de Yamcha y chaleco de fusion). Tiene moveset propio en B2 (YMH, entrada 318).
@@ -87,3 +93,27 @@ preset = "original"
 # ---- Ficha 21 (absorciones de Super Buu) ---------------------------------------------------
 # Super Buu absorbidos (Gohan, Gotenks, Piccolo): ya son variantes de B3 segun la ficha; no se duplican aqui.
 # Freezer, Cell, Vegeta, Tenshinhan y Yamcha absorbidos: no aparecen en ninguna fuente (sin receta).
+
+# ---- Ficha 08 (Super): Goku Black de SDBH World Mission (model/bcgkb: b00 normal, b01 Super Saiyan Rose;
+# identificado por render el 2026-10-15). Golpes de Goku; la forma Rose usa los del Super Saiyan; aura rosa.
+[vis_sdbh_goku_black]
+nombre = "Goku Black"
+fuente = "sdbh"
+clave = "GKB"
+donante = 0
+preset = "original"
+extra = { formas = 2, modelo_forma = [0, 1], formas_donante = [0, 2], transformacion = "donante", aura_color = "rosa" }
+capsulas = [{ nombre = "Super Saiyan Rose", tipo = "transformacion", forma = 1 }]
+
+# ---- Ficha 13: Maestro Roshi de SDBH World Mission (model/bckms: b00 normal; barba = huesos xKMS_hige).
+# Golpes y tecnicas de Krilin (mismo tamano, Kamehameha); un traje.
+[vis_sdbh_roshi]
+nombre = "Maestro Roshi"
+fuente = "sdbh"
+clave = "KMS"
+donante = 10
+preset = "original"
+extra = { modelos = ["modelos/traje1.bin"], modelos_por_traje = 1, formas = 1 }
+
+# Otros de SDBH World Mission identificados por render (sin receta aun): Beerus = bcbls, Zamasu = bczms,
+# Zamasu fusionado = bczmu. Moro y Granolah: no estan entre los 392 modelos revisados.

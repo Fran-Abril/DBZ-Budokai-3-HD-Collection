@@ -9,7 +9,7 @@
 #include <rex/hook.h>
 
 #include "generated/dbz3_init.h"
-#include "../guest_region.h"
+#include "../eu_map.h"
 #include "netplay.h"
 #include "../tagteam.h"
 #include "../ingame/menu_pilot.h"
@@ -26,7 +26,7 @@ void Tick(PPCContext& ctx, uint8_t* base);
 
 namespace {
 
-constexpr uint32_t kRngUs = 0x82310670;   // estado del LFSR del juego (US; EU sin mapear)
+constexpr dbz3::GA kRng = 0x82310670;     // estado del LFSR del juego (misma direccion en US y EU: tools/eu_map.py)
 
 void WritePad(uint8_t* base, uint32_t out, const dbz3::net::Pad& p, uint32_t packet) {
   REX_STORE_U32(out + 0, packet);
@@ -51,7 +51,7 @@ dbz3::net::Pad ReadPad(uint8_t* base, uint32_t at) {
   return p;
 }
 
-uint32_t Rng(uint8_t* base) { return dbz3::g_guest_eu ? 0 : REX_LOAD_U32(kRngUs); }
+uint32_t Rng(uint8_t* base) { return REX_LOAD_U32(kRng); }
 
 // Al empezar el online el anfitrion va solo a 1P VS 2P: su mando lleva abajo, abajo y A (el
 // cursor del Duelo esta en COM VS COM, la fila de ONLINE; abajo da la vuelta a 1P VS COM). Va por

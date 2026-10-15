@@ -358,6 +358,10 @@ PAIRS = [
     ("el port de la comunidad esta incompleto (sin modo hiper): moveset original de IW",
      "the community port is incomplete (no hyper mode): original IW moveset"),
     ("port de la comunidad sin comprobar (%s)", "community port not checked (%s)"),
+    # data_cmn.afs validado (swap_b3.b3_afs) y vista previa sin traceback suelto
+    ("aviso: %s no sirve (%s); uso %s", "warning: %s is not usable (%s); using %s"),
+    ("ERROR: vista previa: %s", "ERROR: preview: %s"),
+    ("falta ui/cara.png para el icono", "ui/cara.png is missing for the icon"),
 ]
 
 # Restos frecuentes que aparecen sueltos (notas compuestas en varias partes).

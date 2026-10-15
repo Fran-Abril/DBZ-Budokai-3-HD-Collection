@@ -12,6 +12,18 @@ constexpr int kIds = 105, kForms = 8;
 inline bool GuestRange(uint32_t address, size_t size) {
   return address && size && uint64_t(size) <= 0x100000000ull - address;
 }
+// Capsula de transformacion unica (ficha 14): una por personaje (ID 0..63) con 2+ transformaciones
+// normales. ID fijo 1984 + personaje: cabe en el inventario de 2048 de la partida.
+constexpr uint32_t kUnifiedBase = 1984;
+inline uint16_t UnifiedId(int id) { return id >= 0 && id < 64 ? uint16_t(kUnifiedBase + uint32_t(id)) : 0; }
+inline int UnifiedOwner(uint32_t cap) { return cap >= kUnifiedBase && cap < kUnifiedBase + 64 ? int(cap - kUnifiedBase) : -1; }
+// Forma que agrupa: transformacion normal (1 reversible, 5 irreversible, 6 ultima) con capsula de
+// transformacion (#SKC +8 = 0x11). Fuera: especiales (7), formas de otro (8: fusiones, Gohan+Goku).
+inline bool Groupable(int type, int capsule, uint8_t record_class) {
+  return capsule > 0 && record_class == 0x11 && (type == 1 || type == 5 || type == 6);
+}
+// Coste en huecos: la mitad de lo que ocupan sus capsulas por separado (1 cada una), redondeando arriba.
+inline int UnifiedCost(int forms) { return std::clamp((forms + 1) / 2, 1, 7); }
 enum class Reason { kOk, kUnavailable, kCount, kRequested, kSuit, kModel,
                     kSpecial, kCapsule, kCapsuleData, kDisabled, kCampaign, kOnline };
 struct Form {
@@ -20,6 +32,7 @@ struct Form {
   std::array<int, 2> prerequisites{};
   bool capsule_record_valid = true;
   int required_ki_tenths = -1;
+  bool grouped = false;   // la da la capsula unica: agrupable, desbloqueada y las anteriores tambien
 };
 struct Snapshot {
   int id = -1, suit = 0, count = 0;
@@ -27,6 +40,7 @@ struct Snapshot {
   std::string identity;
   std::array<Form, kForms> forms{};
   std::vector<uint16_t> capsules;
+  uint16_t unified = 0;   // su capsula unica (0 = no tiene)
 };
 struct Result {
   int requested = 0, applied = 0, model_id = -1, model_index = -1, capsule = 0;
@@ -39,8 +53,10 @@ inline bool CountValid(const Snapshot& s) {
 inline int MissingCapsule(const Snapshot& s, int f) {
   if (f <= 0 || f >= s.count || f >= kForms) return 0;
   const auto& m = s.forms[size_t(f)];
+  const auto has = [&](int cap) { return std::find(s.capsules.begin(), s.capsules.end(), cap) != s.capsules.end(); };
+  if (m.grouped && s.unified && has(s.unified)) return 0;   // la capsula unica cubre la cadena
   for (int cap : {m.capsule, m.prerequisites[0], m.prerequisites[1]})
-    if (cap && std::find(s.capsules.begin(), s.capsules.end(), cap) == s.capsules.end()) return cap;
+    if (cap && !has(cap)) return cap;
   return 0;
 }
 inline Reason Availability(const Snapshot& s, int f, bool check_capsules = true) {

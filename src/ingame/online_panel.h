@@ -41,7 +41,7 @@ class OnlinePanel : public rex::ui::ImGuiDialog {
   std::string lan_;           // IP local del anfitrion (cacheada: LocalAddresses hace DNS)
   double lan_at_ = 0;
   int port_ = 7777;
-  int delay_ = 3;
+  int delay_ = 0;   // 0 = AUTO (se ajusta solo durante la partida), 1-8 = fijo
 };
 
 // Hilo del guest, una vez por iteracion (sondeo de mandos): pantalla del juego y SELECT en el menu

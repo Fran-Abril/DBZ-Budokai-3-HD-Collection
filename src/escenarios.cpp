@@ -1,4 +1,4 @@
-// dbz3 - ESCENARIOS NUEVOS (altas) y sonda de colision. Ver escenarios.h. Solo US.
+// dbz3 - ESCENARIOS NUEVOS (altas) y sonda de colision. Ver escenarios.h. US y EU (src/eu_map.h).
 //
 // Mapa del juego (US):
 //   0x82323760  17 registros x 92 B (+0x00 nombre, +0x10 id_mapa, +0x14 id_SE, +0x18 variante,
@@ -10,6 +10,8 @@
 
 #include "escenarios.h"
 
+#include "clima.h"
+#include "launcher/settings.h"
 #include "mods.h"
 
 #include <cstdint>
@@ -24,12 +26,13 @@
 #include <rex/system/xmemory.h>
 
 #include "generated/dbz3_init.h"
-#include "guest_region.h"
+#include "eu_map.h"
 
 namespace dbz3::escenarios {
 namespace {
 
-constexpr uint32_t kRecs = 0x82323760, kRec = 92, kTemas = 0x82323D80;
+constexpr dbz3::GA kRecs = 0x82323760, kTemas = 0x82323D80;
+constexpr uint32_t kRec = 92;
 constexpr int kAnfitrion = 16;   // R&R BASE: grupos de objetos vacios y tema generico
 
 struct Alta {
@@ -129,14 +132,16 @@ std::string Nombre(int registro, int idioma) {
     return a.titulo.empty() ? a.nombre : a.titulo;
   }
   if (registro < 0 || registro >= kSerie) return {};
-  const int col = idioma == 3 ? 1 : idioma == 4 ? 2 : idioma == 5 ? 3 : idioma == 6 ? 4 : 0;
+  const int col = idioma == 3 ? 1 : idioma == 4 ? 2 : idioma == 5 ? 3 : idioma == 6 ? 4 : 0;   // 1, 2: ingles
   return kFilas[kFila[registro]][col];
 }
+
+std::string Nombre(int registro) { return Nombre(registro, dbz3::settings::Language()); }
 
 void CargarDeMods(rex::memory::Memory* memory) {
   g_altas.clear();
   g_mem = memory;
-  if (!memory || dbz3::g_guest_eu) return;
+  if (!memory) return;
   std::error_code ec;
   for (const auto& info : ListMods(false)) {
     if (!info.enabled) continue;
@@ -179,24 +184,28 @@ void CargarDeMods(rex::memory::Memory* memory) {
   for (size_t k = 0; k < g_altas.size(); ++k)
     REXLOG_INFO("dbz3 escenarios: alta {} = '{}' / '{}' (mod {}, entrada {})", kSerie + int(k), g_altas[k].nombre,
                 Nombre(kSerie + int(k), 5), g_altas[k].mod, g_altas[k].entrada);
+  std::string lista;   // para pantallas propias y pruebas: los nombres en el idioma del jugador
+  for (int r = 0; r < Total(); ++r) lista += (r ? ", " : "") + std::to_string(r) + " " + Nombre(r);
+  REXLOG_INFO("dbz3 escenarios: nombres (idioma {}): {}", dbz3::settings::Language(), lista);
 }
 
 }  // namespace dbz3::escenarios
 
 // Carga del escenario del combate (obj+340 = indice de registro).
-REX_HOOK_RAW(sub_820C26E0) {
+DBZ3_HOOK_EU(sub_820C26E0) {
   const uint32_t obj = ctx.r3.u32;
   const int i = int16_t(REX_LOAD_U16(obj + 340));
   const int j = dbz3::escenarios::Traducir(base, i);
+  dbz3::clima::EscenarioPedido();
   if (j != i) REX_STORE_U16(obj + 340, uint16_t(j));
-  __imp__sub_820C26E0(ctx, base);
+  orig(ctx, base);
   if (j != i) REX_STORE_U16(obj + 340, uint16_t(i));   // "otra vez" vuelve a pedir el alta
 }
 
 // id_SE del registro r3 (sub_821221F8, con el mismo indice del combate).
-REX_HOOK_RAW(sub_820C19B0) {
+DBZ3_HOOK_EU(sub_820C19B0) {
   ctx.r3.u64 = uint32_t(dbz3::escenarios::Traducir(base, int(ctx.r3.s32)));
-  __imp__sub_820C19B0(ctx, base);
+  orig(ctx, base);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -205,9 +214,9 @@ REX_HOOK_RAW(sub_820C19B0) {
 // campo 7 = el modelo, 4 = cabecera del bloque de colision [FFFFFFFF ...], 3 = [4, nodos, ...].
 // Es la medida que separo el arreglo del cuelgue de B2 (punteros PS2 sin traducir, sub_820CB0A0).
 // ---------------------------------------------------------------------------------------------------
-REX_HOOK_RAW(sub_820CBC90) {
+DBZ3_HOOK_EU(sub_820CBC90) {
   const uint32_t zdd = ctx.r3.u32;
-  __imp__sub_820CBC90(ctx, base);
+  orig(ctx, base);
   static const bool sonda = std::getenv("DBZ3_SONDA_ESCENARIO") != nullptr;
   if (!sonda) return;
   auto guest = [](uint32_t p) { return p >= 0x40000000u && p < 0x50000000u; };
@@ -252,18 +261,25 @@ REX_HOOK_RAW(sub_820CBC90) {
 // sub_8219D6E8), y la vista y el rotulo (sprites copiados de los nativos, tabla #ACA ampliada en D+0 +28;
 // se crean en sub_8219CC48 y se dibujan en sub_8219E828). Sin altas todo es el codigo original.
 // ---------------------------------------------------------------------------------------------------
+// valores de partida (US); Tablas() los cambia por las tablas propias antes de que corra ninguna copia Sel_/SelEu_
 uint32_t dbz3_esc_f94 = 0x82020F94, dbz3_esc_fb0 = 0x82020FB0, dbz3_esc_trans = 0x82373384, dbz3_esc_limite = 11;
 void dbz3_esc_instalar(PPCContext& ctx, uint8_t* base, uint32_t d);
 void dbz3_esc_banco(PPCContext& ctx, uint8_t* base, uint32_t d, bool nuevo);
 
 namespace {
 #include "escenarios_sel_gen.inc"
+#if defined(DBZ3_DUAL_REGION)
+#include "escenarios_sel_gen_eu.inc"   // las mismas copias del codigo EU (tools/gen_escenarios_sel.py)
+#define SEL(fn) DBZ3_CALL2(Sel_##fn, SelEu_##fn)
+#else
+#define SEL(fn) Sel_##fn
+#endif
 
 using dbz3::escenarios::g_altas;
 constexpr uint32_t kCasillasSerie = 13;   // 0..11 escenarios, 12 = "?"
-constexpr uint32_t kGlobalSel = 0x8245F25C;   // estructura del selector: +20 tarea (+48 = datos)
+constexpr dbz3::GA kGlobalSel = 0x8245F25C;   // estructura del selector: +20 tarea (+48 = datos)
 
-bool Ext() { return !g_altas.empty() && !dbz3::g_guest_eu && dbz3::escenarios::g_mem; }
+bool Ext() { return !g_altas.empty() && dbz3::escenarios::g_mem; }
 
 uint32_t Alloc(uint32_t n) {
   const uint32_t a = dbz3::escenarios::g_mem->SystemHeapAlloc(n, 0x20);
@@ -297,12 +313,12 @@ void Tablas(uint8_t* base) {
   const uint32_t f94 = Alloc(2 * kSelMax), fb0 = Alloc(2 * kSelMax), tr = Alloc(4 * kSelMax);
   for (uint32_t c = 0; c < kSelMax; ++c) {
     const uint32_t src = c < kCasillasSerie ? c : 12;   // de relleno: las del "?"
-    REX_STORE_U8(f94 + 2 * c, REX_LOAD_U8(0x82020F94 + 2 * src));
-    REX_STORE_U8(f94 + 2 * c + 1, REX_LOAD_U8(0x82020F94 + 2 * src + 1));
-    REX_STORE_U8(fb0 + 2 * c, REX_LOAD_U8(0x82020FB0 + 2 * src));
-    REX_STORE_U8(fb0 + 2 * c + 1, REX_LOAD_U8(0x82020FB0 + 2 * src + 1));
+    REX_STORE_U8(f94 + 2 * c, REX_LOAD_U8(dbz3::GA(0x82020F94) + 2 * src));
+    REX_STORE_U8(f94 + 2 * c + 1, REX_LOAD_U8(dbz3::GA(0x82020F94) + 2 * src + 1));
+    REX_STORE_U8(fb0 + 2 * c, REX_LOAD_U8(dbz3::GA(0x82020FB0) + 2 * src));
+    REX_STORE_U8(fb0 + 2 * c + 1, REX_LOAD_U8(dbz3::GA(0x82020FB0) + 2 * src + 1));
   }
-  for (uint32_t c = 0; c < 12; ++c) REX_STORE_U32(tr + 4 * c, REX_LOAD_U32(0x82373384 + 4 * c));
+  for (uint32_t c = 0; c < 12; ++c) REX_STORE_U32(tr + 4 * c, REX_LOAD_U32(dbz3::GA(0x82373384) + 4 * c));
   for (uint32_t k = 0; k < g_altas.size(); ++k) {
     const uint16_t r = uint16_t(dbz3::escenarios::kSerie + k);
     REX_STORE_U16(tr + 4 * (kCasillasSerie + k), r);
@@ -352,11 +368,11 @@ uint32_t CopiaSprite(uint8_t* base, uint32_t tabla, uint32_t n, uint32_t i, uint
 
 // Pone el banco de texturas `banco` como lo hace el juego (sub_8219CBB8: globales del menu + sub_82092C58).
 void PonerBanco(PPCContext& ctx, uint8_t* base, uint32_t banco) {
-  REX_STORE_U32(0x8239592C, 0);
-  REX_STORE_U32(0x82395928, 28672);
-  REX_STORE_U32(0x82395930, banco);
-  Llamar(ctx, base, sub_82092C58, banco, 28672);
-  REX_STORE_U32(0x82389430, 0);
+  REX_STORE_U32(dbz3::GA(0x8239592C), 0);
+  REX_STORE_U32(dbz3::GA(0x82395928), 28672);
+  REX_STORE_U32(dbz3::GA(0x82395930), banco);
+  Llamar(ctx, base, DBZ3_CALL_EU(sub_82092C58), banco, 28672);
+  REX_STORE_U32(dbz3::GA(0x82389430), 0);
 }
 
 }  // namespace
@@ -372,14 +388,14 @@ void dbz3_esc_instalar(PPCContext& ctx, uint8_t* base, uint32_t d) {
     if (!h || REX_LOAD_U16(h + 4) != 3) continue;
     const uint32_t datos = REX_LOAD_U32(h + 212);
     REX_STORE_U32(h + 212, 0);
-    Llamar(ctx, base, sub_82083D08, h, 0);
+    Llamar(ctx, base, DBZ3_CALL_EU(sub_82083D08), h, 0);
     g_cargas[k] = 0;
     if (!datos || REX_LOAD_U8(datos + 1) != 'A' || REX_LOAD_U8(datos + 2) != 'Z' || REX_LOAD_U32(datos + 16) < 4) {
       REXLOG_WARN("dbz3 escenarios: el #AZT del selector de '{}' (entrada {}) no vale", g_altas[k].nombre,
                   g_altas[k].menu);
       continue;
     }
-    Llamar(ctx, base, sub_820800A8, datos);   // crea y registra las texturas
+    Llamar(ctx, base, DBZ3_CALL_EU(sub_820800A8), datos);   // crea y registra las texturas
     g_azt[k] = datos;
   }
   const uint32_t aca = REX_LOAD_U32(d + 0);
@@ -389,7 +405,7 @@ void dbz3_esc_instalar(PPCContext& ctx, uint8_t* base, uint32_t d) {
   const uint32_t t = Alloc(4 * (ns + 2 * uint32_t(na)));
   if (!t || ns + 2 * na > 255) return;
   for (uint32_t i = 0; i < ns; ++i) REX_STORE_U32(t + 4 * i, REX_LOAD_U32(tn + 4 * i));
-  const uint32_t vista0 = REX_LOAD_U8(0x82020FB0), rotulo0 = REX_LOAD_U8(0x82020FB1);
+  const uint32_t vista0 = REX_LOAD_U8(dbz3::GA(0x82020FB0)), rotulo0 = REX_LOAD_U8(dbz3::GA(0x82020FB1));
   for (size_t k = 0; k < na; ++k) {
     const uint32_t c = kCasillasSerie + uint32_t(k), sv_i = ns + 2 * uint32_t(k);
     const uint32_t sv = g_azt[k] ? CopiaSprite(base, tn, ns, vista0, 1, 440.0f, 320.0f, sv_i) : 0;
@@ -418,16 +434,16 @@ void dbz3_esc_banco(PPCContext& ctx, uint8_t* base, uint32_t d, bool nuevo) {
 
 // Cargador del selector: los #AZT de las altas se piden ANTES que los del juego (la cola de lectura va en
 // orden, asi estan cuando sub_8219F350 ve el ultimo del juego).
-REX_HOOK_RAW(sub_8219C7B0) {
+DBZ3_HOOK_EU(sub_8219C7B0) {
   if (Ext()) {
     g_cargas.clear();
-    for (const auto& a : g_altas) g_cargas.push_back(Llamar(ctx, base, sub_82083968, a.menu, 0, 0));
+    for (const auto& a : g_altas) g_cargas.push_back(Llamar(ctx, base, DBZ3_CALL_EU(sub_82083968), a.menu, 0, 0));
   }
-  __imp__sub_8219C7B0(ctx, base);
+  orig(ctx, base);
 }
 
 // Fin del selector: el juego libera lo suyo (con su tabla de sprites); luego los #AZT de las altas.
-REX_HOOK_RAW(sub_8219E108) {
+DBZ3_HOOK_EU(sub_8219E108) {
   if (Ext() && g_datos) {
     const uint32_t g = REX_LOAD_U32(kGlobalSel), tarea = g ? REX_LOAD_U32(g + 20) : 0;
     const uint32_t d = tarea ? REX_LOAD_U32(tarea + 48) : 0;
@@ -435,22 +451,22 @@ REX_HOOK_RAW(sub_8219E108) {
       if (const uint32_t aca = REX_LOAD_U32(d + 0)) REX_STORE_U32(aca + 28, g_tabla_nat);
     g_datos = 0;
   }
-  __imp__sub_8219E108(ctx, base);
+  orig(ctx, base);
   if (Ext()) {
     for (uint32_t z : g_azt)
-      if (z) Llamar(ctx, base, sub_82089C10, z);
+      if (z) Llamar(ctx, base, DBZ3_CALL_EU(sub_82089C10), z);
     g_azt.clear();
     for (uint32_t h : g_cargas)   // pedidos que no llegaron a usarse
-      if (h) Llamar(ctx, base, sub_82083D08, h, 0);
+      if (h) Llamar(ctx, base, DBZ3_CALL_EU(sub_82083D08), h, 0);
     g_cargas.clear();
   }
 }
 
 // Lista de casillas: las del juego (bits 0..11 de la mascara), las altas y el "?" (bit 12) al final, que
 // es lo que espera la eleccion al azar (toma una de las n-1 primeras).
-REX_HOOK_RAW(sub_8219E268) {
+DBZ3_HOOK_EU(sub_8219E268) {
   if (!Ext()) {
-    __imp__sub_8219E268(ctx, base);
+    orig(ctx, base);
     return;
   }
   Tablas(base);
@@ -470,13 +486,12 @@ REX_HOOK_RAW(sub_8219E268) {
   if (mascara >> 12 & 1) poner(12);
   REX_STORE_U8(d + 609, uint8_t(n));
   REX_STORE_U32(d + 632, n ? 65536u / (n * 12) : 0);
-  if (REX_LOAD_U8(d + 610) == 2) Llamar(ctx, base, sub_8219CAE8, d);
+  if (REX_LOAD_U8(d + 610) == 2) Llamar(ctx, base, DBZ3_CALL_EU(sub_8219CAE8), d);
 }
 
 // Circulo (sub_8219D6E8) y bola (sub_8219D520) de la casilla r4 y sprites de la casilla actual
 // (sub_8219CC48): con el #AZT de la casilla nueva en D+4 durante la llamada.
-template <void (*F)(PPCContext&, uint8_t*)>
-void ConBanco(PPCContext& ctx, uint8_t* base, uint32_t c) {
+void ConBanco(Dbz3GuestFn F, PPCContext& ctx, uint8_t* base, uint32_t c) {
   const uint32_t d = ctx.r3.u32, z = AztDe(c), nat = REX_LOAD_U32(d + 4);
   if (z) REX_STORE_U32(d + 4, z);
   F(ctx, base);
@@ -486,41 +501,41 @@ void ConBanco(PPCContext& ctx, uint8_t* base, uint32_t c) {
     // el juego. Los sprites de otras tareas piden sus texturas al banco global (sub_82092C80 -> sub_82096FF0:
     // la 37 al pasar a la casilla, medido 2026-10-15); en el #AZT del alta solo hay 4 (y su indice va relleno
     // hasta 64 por si acaso: tools/escenarios_convertir.py azt_menu)
-    if (REX_LOAD_U32(0x8238CE10) == z) PonerBanco(ctx, base, nat);
+    if (REX_LOAD_U32(dbz3::GA(0x8238CE10)) == z) PonerBanco(ctx, base, nat);
   }
 }
 
-REX_HOOK_RAW(sub_8219D520) {
+DBZ3_HOOK_EU(sub_8219D520) {
   if (Ext())
-    ConBanco<Sel_8219D520>(ctx, base, ctx.r4.u32 & 0xFFFF);
+    ConBanco(SEL(8219D520), ctx, base, ctx.r4.u32 & 0xFFFF);
   else
-    __imp__sub_8219D520(ctx, base);
+    orig(ctx, base);
 }
-REX_HOOK_RAW(sub_8219D6E8) {
+DBZ3_HOOK_EU(sub_8219D6E8) {
   if (Ext())
-    ConBanco<Sel_8219D6E8>(ctx, base, ctx.r4.u32 & 0xFFFF);
+    ConBanco(SEL(8219D6E8), ctx, base, ctx.r4.u32 & 0xFFFF);
   else
-    __imp__sub_8219D6E8(ctx, base);
+    orig(ctx, base);
 }
-REX_HOOK_RAW(sub_8219E540) {   // entrada r4 del carrusel
+DBZ3_HOOK_EU(sub_8219E540) {   // entrada r4 del carrusel
   if (Ext())
-    ConBanco<Sel_8219E540>(ctx, base, REX_LOAD_U16(ctx.r3.u32 + kSelCarrusel + 8 + 12 * (ctx.r4.u32 & 0xFFFF)));
+    ConBanco(SEL(8219E540), ctx, base, REX_LOAD_U16(ctx.r3.u32 + kSelCarrusel + 8 + 12 * (ctx.r4.u32 & 0xFFFF)));
   else
-    __imp__sub_8219E540(ctx, base);
+    orig(ctx, base);
 }
-REX_HOOK_RAW(sub_8219CC48) {
+DBZ3_HOOK_EU(sub_8219CC48) {
   if (Ext())
-    ConBanco<Sel_8219CC48>(ctx, base, REX_LOAD_U16(ctx.r3.u32 + 604));
+    ConBanco(SEL(8219CC48), ctx, base, REX_LOAD_U16(ctx.r3.u32 + 604));
   else
-    __imp__sub_8219CC48(ctx, base);
+    orig(ctx, base);
 }
 
 #define DBZ3_SEL(fn)              \
-  REX_HOOK_RAW(sub_##fn) {        \
+  DBZ3_HOOK_EU(sub_##fn) {        \
     if (Ext())                    \
-      Sel_##fn(ctx, base);        \
+      SEL(fn)(ctx, base);         \
     else                          \
-      __imp__sub_##fn(ctx, base); \
+      orig(ctx, base);            \
   }
 DBZ3_SEL(8219F4F8)
 DBZ3_SEL(8219C870)

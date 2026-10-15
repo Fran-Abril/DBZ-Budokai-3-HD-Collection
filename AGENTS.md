@@ -577,8 +577,9 @@ AFS MOD READ: bin 327 mod_off=0x0 to_read=106496 got=106496 mod_size=...
 
 - **DLLs canónicas del SDK 0.10** (NO reemplazar por las regeneradas del build):
   - **Baseline (único en uso)**: `rexglue-sdk-0.10/out/win-amd64-baseline/` →
-    `rexruntime.dll` **10920448 B** y `rexgpu-xenos.dll` **6360064 B**
-    (2026-09-29); `amd_fidelityfx_dx12.dll` 5413888.
+    `rexruntime.dll` **11145216 B** y `rexgpu-xenos.dll` **6589440 B**
+    (2026-10-15, con el SSAO opcional `dbz3_relight` del frente grafico; las anteriores en
+    `out/_respaldo_canonicas/20261015_antes_grafico/`); `amd_fidelityfx_dx12.dll` 5413888.
     - rexruntime lleva: `audio_gain`, `dbz3_perf_logging`, `dbz3_io_logging`/
       `dbz3_io_readahead`, poda de logs, `dbz3_mute_unfocused`, `frame_cap`
       (definido en `src/ui/presenter.cpp`), `d3d12_dred` (DRED ON por defecto,

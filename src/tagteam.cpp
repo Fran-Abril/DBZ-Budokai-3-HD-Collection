@@ -31,7 +31,7 @@
 #include <vector>
 
 #include "generated/dbz3_init.h"
-#include "guest_region.h"
+#include "eu_map.h"
 #include "roster_ext.h"
 #include "tagteam.h"
 #include "tagteam_round.h"
@@ -68,20 +68,21 @@ constexpr uint32_t kCamRoot = 7896, kCam = 7916, kLangFlag = 7920, kLang = 7924;
 constexpr uint32_t kLoad = 7;            // hueco de forma donde se carga el que entra
 // hueco donde se carga la forma con la que salio el que entra (vuelve transformado, como en Tenkaichi 3)
 constexpr uint32_t kSpare = 6;
-constexpr uint32_t kChar96 = 0x8234ABB8, kChar372 = 0x82329CF0;
-// Efectos de las tecnicas por jugador (estudio 18, solo US): fichero por ID en kTechFid; bloque
+constexpr dbz3::GA kChar96 = 0x8234ABB8, kChar372 = 0x82329CF0;
+// Efectos de las tecnicas por jugador (estudio 18; US y EU): fichero por ID en kTechFid; bloque
 // del jugador k en *kTechBlock + 1152k, ranura A en +80 (+100 = procesada).
-constexpr uint32_t kTechFid = 0x82333208, kTechBlock = 0x82333994;
-// Cara del marcador (estudios 17 y 19, solo US): tabla kFaceTable (filas de 16 B: ID, mascara de
+constexpr dbz3::GA kTechFid = 0x82333208, kTechBlock = 0x82333994;
+// Cara del marcador (estudios 17 y 19; US y EU): tabla kFaceTable (filas de 16 B: ID, mascara de
 // trajes, fichero de caras, retrato animado; fin = ID -1). Al empezar el combate el juego carga la
 // hoja de caras de cada jugador (las 6 formas), la apunta en B+4376 (B = *kHudBase) y crea su
 // retrato animado en B+4428 (sub_821B62D0 + sub_821B6368); al terminar (sub_820E7058) suelta sus
 // hojas (0x823CE010) y los retratos.
-constexpr uint32_t kFaceTable = 0x82324468, kHudBase = 0x82324064, kHudFaces = 4376, kHudPortrait = 4428;
-// Aura (solo US): fichero por ID en kAuraFid (-1 = se queda la que habia, como al empezar); el
+constexpr dbz3::GA kFaceTable = 0x82324468, kHudBase = 0x82324064;
+constexpr uint32_t kHudFaces = 4376, kHudPortrait = 4428;
+// Aura (US y EU): fichero por ID en kAuraFid (-1 = se queda la que habia, como al empezar); el
 // juego la carga al empezar en el bloque de 420 B del jugador (G = *kAuraBase + 420k) y la suelta
 // al final para los dos (sub_820B8E40).
-constexpr uint32_t kAuraFid = 0x82322950, kAuraBase = 0x82322AEC;
+constexpr dbz3::GA kAuraFid = 0x82322950, kAuraBase = 0x82322AEC;
 constexpr uint32_t kLoadTimeout = 600;
 constexpr uint32_t kSwapMin = 24;       // ticks del destello antes de cambiar   // ticks (~10 s) esperando las cargas
 
@@ -166,7 +167,8 @@ std::array<std::atomic<bool>, 2> g_com{};     // lado del ordenador
 // X+5028 = -1 lo lleva a sub_820F8470, la IA), asi que desde que baja hasta acabar la pose su hueco apunta
 // al mando 4 y el juego lee un mando 4 virtual (conectado solo entonces) con Y+B; despues vuelve a -1.
 // Con el mando 4 desconectado de verdad el juego pausaba ("Player 2's controller has been disconnected").
-constexpr uint32_t kPoseTicks = 30, kPoseWindow = 120, kPoseSlotOff = 5028, kPoseRec = 0x8238B780 + 184 * 3;
+constexpr uint32_t kPoseTicks = 30, kPoseWindow = 120, kPoseSlotOff = 5028;
+constexpr dbz3::GA kPoseRec = dbz3::GA(0x8238B780) + 184 * 3;
 constexpr int16_t kPoseSlot = 3;
 std::array<uint32_t, 2> g_pose_com{};           // luchador del COM con el hueco cambiado (con g_mu)
 std::array<std::atomic<bool>, 4> g_pose_pad{};  // mando (hueco) que pulsa la pose este tick
@@ -262,17 +264,17 @@ Team* TeamOf(uint8_t* base, uint32_t x) {
 bool Free(uint8_t* base, uint32_t x) { return x && REX_LOAD_U16(x + 3244) <= 2; }
 // Pelea en marcha: 0x823F39A0 vale 1 solo entre el FIGHT! y el final del asalto (0 en la
 // presentacion, el READY?, el KO/ganador y el menu final; medido 2026-10-11 con volcados de un
-// Duelo, US). En la EU no esta medido: se deja pasar.
+// Duelo, US; en la EU, misma direccion: tools/eu_map.py).
 // Estado del combate del juego (US): mgr = *0x823D6CF4, mgr+35128 = 1-3 presentacion/READY, 4 pelea,
 // 5 combate acabado (KO o tiempo; mgr+35188 = perdedor). Medido 2026-10-12: es fiable donde
 // 0x823F39A0 no (en un COM vs COM se quedo a 0 todo el combate; en otro, a 1 sobre el menu final).
 uint32_t BattleState(uint8_t* base) {
-  const uint32_t mgr = dbz3::g_guest_eu ? 0 : REX_LOAD_U32(0x823D6CF4);
+  const uint32_t mgr = REX_LOAD_U32(dbz3::GA(0x823D6CF4));
   return mgr ? REX_LOAD_U32(mgr + 35128) : 0;
 }
 bool Fighting(uint8_t* base) {
   if (const uint32_t st = BattleState(base)) return st == 4;
-  return dbz3::g_guest_eu || REX_LOAD_U32(0x823F39A0) != 0;
+  return REX_LOAD_U32(dbz3::GA(0x823F39A0)) != 0;
 }
 // Presentacion / READY? (antes del FIGHT!): sin relevos ni SELECT
 bool PreFight(uint8_t* base) {
@@ -284,9 +286,8 @@ bool PreFight(uint8_t* base) {
 // 2026-10-12). Si un escenario no la pone nunca a 1, no se bloquea nada.
 std::atomic<bool> g_fight_seen{false};
 bool Over(uint8_t* base) {
-  if (dbz3::g_guest_eu) return false;
   if (const uint32_t st = BattleState(base)) return st >= 5;
-  return g_fight_seen.load() && REX_LOAD_U32(0x823F39A0) == 0;
+  return g_fight_seen.load() && REX_LOAD_U32(dbz3::GA(0x823F39A0)) == 0;
 }
 
 // Solo para el ordenador (COM): los dos luchadores libres.
@@ -359,23 +360,23 @@ void SwapFace(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, uint32_t id) 
       REX_STORE_U32(t.new_face + 192, 0);   // la hoja se queda; el nodo se suelta (igual que el juego)
       faces[int(id)] = REX_LOAD_U32(res + 208);
       g_face_res.push_back(res);
-      Call(ctx, base, sub_820800A8, faces[int(id)], 0);
+      Call(ctx, base, DBZ3_CALL_EU(sub_820800A8), faces[int(id)], 0);
     }
-    Call(ctx, base, sub_82083D08, t.new_face, 0);
+    Call(ctx, base, DBZ3_CALL_EU(sub_82083D08), t.new_face, 0);
     t.new_face = 0;
   }
   const uint32_t obj = t.new_portrait;
   t.new_portrait = 0;
   const auto it = faces.find(int(id));
   if (it == faces.end() || !it->second || !obj) {
-    if (obj) Call(ctx, base, sub_821B63F8, obj, 0);
+    if (obj) Call(ctx, base, DBZ3_CALL_EU(sub_821B63F8), obj, 0);
     return;
   }
   REX_STORE_U32(hud + kHudFaces + 4 * uint32_t(side), it->second);
   const uint32_t old = REX_LOAD_U32(hud + kHudPortrait + 4 * uint32_t(side));
-  if (old) Call(ctx, base, sub_821B63F8, old, 0);
+  if (old) Call(ctx, base, DBZ3_CALL_EU(sub_821B63F8), old, 0);
   REX_STORE_U32(hud + kHudPortrait + 4 * uint32_t(side), obj);
-  Call(ctx, base, sub_821B6368, obj, 0);   // lee los ficheros de su retrato: ya cargados
+  Call(ctx, base, DBZ3_CALL_EU(sub_821B6368), obj, 0);   // lee los ficheros de su retrato: ya cargados
 }
 
 // Aura del que entra en el bloque del jugador `side`: fuera la vieja (lo de sub_820B8E40 para un
@@ -384,27 +385,27 @@ void SwapFace(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, uint32_t id) 
 void SwapAura(PPCContext& ctx, uint8_t* base, int side, uint32_t node) {
   const uint32_t g = REX_LOAD_U32(kAuraBase);
   if (!g || side < 0) {
-    Call(ctx, base, sub_82083D08, node, 0);
+    Call(ctx, base, DBZ3_CALL_EU(sub_82083D08), node, 0);
     return;
   }
   const uint32_t a = g + 420 * uint32_t(side);
   if (REX_LOAD_U32(a + 4)) {
-    Call(ctx, base, sub_82083A68, REX_LOAD_U32(a), 0);
+    Call(ctx, base, DBZ3_CALL_EU(sub_82083A68), REX_LOAD_U32(a), 0);
     REX_STORE_U32(a + 4, 0);
   } else if (REX_LOAD_U32(a)) {
-    Call(ctx, base, sub_82083D08, REX_LOAD_U32(a), 0);
+    Call(ctx, base, DBZ3_CALL_EU(sub_82083D08), REX_LOAD_U32(a), 0);
   }
   for (uint32_t i = 0; i < 48; ++i) {
     const uint32_t p = REX_LOAD_U32(a + 212 + 4 * i);
-    if (p) Call(ctx, base, sub_82089C10, p, 0);
+    if (p) Call(ctx, base, DBZ3_CALL_EU(sub_82089C10), p, 0);
     REX_STORE_U32(a + 212 + 4 * i, 0);
   }
   REX_STORE_U32(a, node);
-  Call(ctx, base, sub_820B8820, uint32_t(side), 0);
+  Call(ctx, base, DBZ3_CALL_EU(sub_820B8820), uint32_t(side), 0);
   const uint32_t n1 = REX_LOAD_U32(a + 12);
   REX_STORE_U32(a + 404, REX_LOAD_U32(a + 4 * (n1 + 5)));
   REX_STORE_U32(a + 408, REX_LOAD_U32(a + 4 * (n1 + 63)));
-  Call(ctx, base, sub_820B9E70, uint32_t(side), 0);
+  Call(ctx, base, DBZ3_CALL_EU(sub_820B9E70), uint32_t(side), 0);
 }
 
 // Empieza el relevo al miembro k. El que esta en pantalla no se toca (el juego lee su modelo y
@@ -461,7 +462,7 @@ void StepSlide(uint8_t* base, uint32_t x, Team& t, uint32_t now) {
   if (f >= 1.0f && t.slide == 2) t.slide = 0;   // la salida se queda arriba hasta el cambio
 }
 
-// Relevo con el teletransporte del propio juego (2026-10-15, solo US). Es el del contraataque de B3: sus
+// Relevo con el teletransporte del propio juego (2026-10-15; US y EU). Es el del contraataque de B3: sus
 // acciones 39/40 (ticks sub_8210D9E8 / sub_82108208 en la tabla 0x8201EFC0) hacen exactamente esto:
 //   - X+3261 = 1: el dibujo del luchador (sub_82109D90) se salta el cuerpo A (X+1616); el B (X+3280) solo
 //     esta encendido a mitad de una transformacion (X+4924 = 0). Es lo mismo que hace el fin del asalto con
@@ -476,14 +477,14 @@ bool TeleportOn() {
     const char* v = std::getenv("DBZ3_TAG_SALIDA");
     return v && std::strcmp(v, "salto") == 0;
   }();
-  return !jump && !dbz3::g_guest_eu;
+  return !jump;
 }
 constexpr uint32_t kHidden = 3261;                 // X+3261: 1 = cuerpo A sin dibujar
 constexpr uint32_t kTeleIn = 13;                   // ticks del parpadeo al aparecer (el de Cell/Cooler)
 bool TeleHidden(uint32_t f) { return f < 5 || (f >= 7 && f < 9) || (f >= 11 && f < kTeleIn); }
 void Afterimage(PPCContext& ctx, uint8_t* base, uint32_t x, uint32_t type, bool sound = true) {
   const int side = SideOf(base, x);
-  if (side < 0 || dbz3::g_guest_eu) return;
+  if (side < 0) return;
   PPCContext c = ctx;
   c.r3.u64 = type;
   c.r4.u64 = 0;
@@ -492,7 +493,7 @@ void Afterimage(PPCContext& ctx, uint8_t* base, uint32_t x, uint32_t type, bool 
   c.r7.u64 = 0;
   c.r8.u64 = 0;
   c.r9.u64 = 0;
-  sub_820D85A8(c, base);
+  DBZ3_CALL_EU(sub_820D85A8)(c, base);
   if (!sound) return;
   c = ctx;
   c.r3.u64 = 1;
@@ -500,9 +501,9 @@ void Afterimage(PPCContext& ctx, uint8_t* base, uint32_t x, uint32_t type, bool 
   c.r6.u64 = 0;
   c.r7.u64 = 0;
   c.r8.u64 = 0;
-  c.f1.f64 = LoadF(base, 0x8201F60C);              // 0.0: sin retardo
-  c.f2.f64 = LoadF(base, 0x820007A4);              // 1.0: volumen
-  sub_82122488(c, base);
+  c.f1.f64 = LoadF(base, dbz3::GA(0x8201F60C));              // 0.0: sin retardo
+  c.f2.f64 = LoadF(base, dbz3::GA(0x820007A4));              // 1.0: volumen
+  DBZ3_CALL_EU(sub_82122488)(c, base);
 }
 void Veil(uint8_t* base, uint32_t x, Team& t, bool hidden) {
   REX_STORE_U8(x + kHidden, hidden ? 1 : 0);
@@ -527,7 +528,7 @@ void TeleportIn(uint8_t* base, uint32_t x, Team& t, const float* p, uint32_t now
 // US/offline opt-in. EU/online conservan la ruta anterior, sin preferencias F2.
 bool RoundEnabled() {
   const char* flag = std::getenv("DBZ3_TAG_F3");
-  return flag && std::strcmp(flag, "1") == 0 && !dbz3::g_guest_eu &&
+  return flag && std::strcmp(flag, "1") == 0 &&
       dbz3::net::Session::Get().link() == dbz3::net::Link::kIdle &&
       dbz3::campaigns::PlayerStartForm() < 0 && dbz3::campaigns::RivalSuit() < 0 &&
       dbz3::ingame::TagTeamMode() && dbz3::ingame::FormSelectorEnabled();
@@ -536,10 +537,10 @@ bool PlanMember(uint8_t* base, uint32_t x, Team& t, int k) {
   const int side = SideOf(base, x), id = t.ids[size_t(k)];
   // El relevo solo sustituye la tecnica A: rechazar una variacion B no resuelta.
   const int old_id = t.ids[size_t(t.active)];
-  if (!dbz3::roster::FormSelectionRange(0x82333404u + 4u * uint32_t(id), 4, false) ||
-      !dbz3::roster::FormSelectionRange(0x82333404u + 4u * uint32_t(old_id), 4, false)) return false;
-  if (REX_LOAD_U32(0x82333404u + 4u * uint32_t(id)) !=
-      REX_LOAD_U32(0x82333404u + 4u * uint32_t(old_id))) {
+  if (!dbz3::roster::FormSelectionRange(dbz3::GA(0x82333404u) + 4u * uint32_t(id), 4, false) ||
+      !dbz3::roster::FormSelectionRange(dbz3::GA(0x82333404u) + 4u * uint32_t(old_id), 4, false)) return false;
+  if (REX_LOAD_U32(dbz3::GA(0x82333404u) + 4u * uint32_t(id)) !=
+      REX_LOAD_U32(dbz3::GA(0x82333404u) + 4u * uint32_t(old_id))) {
     REXLOG_WARN("dbz3 tag F3: tecnica B distinta, relevo bloqueado id {}", id);
     return false;
   }
@@ -674,10 +675,10 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   // cuerpo o tras un ring out): vaciaba el modelo del que entra y el relevo tardaba 10 s (2026-10-15)
   if (const int side = SideOf(base, x); side >= 0) g_keep[size_t(side)] = (1u << kLoad) | (t.spare ? 1u << kSpare : 0u);
   t.new_tech = 0;
-  if (!dbz3::g_guest_eu) {
+  {
     const uint32_t fid = REX_LOAD_U32(kTechFid + 4 * id);
     if (fid != 0xFFFFFFFFu && !t.tech_ok[size_t(k)] && t.tech_owner != k) {   // si ya los tiene guardados, no se cargan
-      const uint32_t h = Call(ctx, base, sub_82083968, fid, 0, 1);
+      const uint32_t h = Call(ctx, base, DBZ3_CALL_EU(sub_82083968), fid, 0, 1);
       t.new_tech = h != 0xFFFFFFFFu ? h : 0;
     }
     // su hoja de caras del marcador (la del que sale se apunta la primera vez: es la del juego)
@@ -693,17 +694,17 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
     const uint32_t face_fid = row ? REX_LOAD_U32(row + 8) : 0xFFFFFFFFu;
     t.new_face = 0;
     if (row && face_fid != 0xFFFFFFFFu && !faces.count(int(id))) {
-      const uint32_t h = Call(ctx, base, sub_82083968, face_fid, 0, 1);
+      const uint32_t h = Call(ctx, base, DBZ3_CALL_EU(sub_82083968), face_fid, 0, 1);
       t.new_face = h != 0xFFFFFFFFu ? h : 0;
     }
-    if (t.new_portrait) Call(ctx, base, sub_821B63F8, t.new_portrait, 0);
-    t.new_portrait = row ? Call(ctx, base, sub_821B62D0, REX_LOAD_U32(row + 12), 0) : 0;
+    if (t.new_portrait) Call(ctx, base, DBZ3_CALL_EU(sub_821B63F8), t.new_portrait, 0);
+    t.new_portrait = row ? Call(ctx, base, DBZ3_CALL_EU(sub_821B62D0), REX_LOAD_U32(row + 12), 0) : 0;
     dbz3::roster::SkillTable(false);
     // su aura, si es otra (sin aura propia, -1, se queda la que habia)
     const uint32_t afid = REX_LOAD_U32(kAuraFid + 4 * id);
     t.new_aura = 0;
     if (afid != 0xFFFFFFFFu && afid != REX_LOAD_U32(kAuraFid + 4 * keep[1])) {
-      const uint32_t h = Call(ctx, base, sub_82083968, afid, 0, 1);
+      const uint32_t h = Call(ctx, base, DBZ3_CALL_EU(sub_82083968), afid, 0, 1);
       t.new_aura = h != 0xFFFFFFFFu ? h : 0;
     }
   }
@@ -734,7 +735,7 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
     const float out[3] = {t.home[0] + dx * kExitBack, t.home[1] + kExitRise, t.home[2] + dz * kExitBack};
     StartSlide(t, 1, t.home, out);
     // movimiento de salida con el mando (en reposo X+6048 es nulo y sub_82103908 no vale: solo la entrada)
-    if (const int side = SideOf(base, x); side >= 0 && (ExitLy() || ExitBtn()) && !dbz3::g_guest_eu && !dbz3::net::Session::Get().active()) {
+    if (const int side = SideOf(base, x); side >= 0 && (ExitLy() || ExitBtn()) && !dbz3::net::Session::Get().active()) {
       const int16_t slot = int16_t(REX_LOAD_U16(x + kPoseSlotOff));
       if (slot == -1) {
         for (const uint32_t o : {12u, 14u, 16u, 88u, 92u}) REX_STORE_U32(kPoseRec + o, 0);
@@ -835,7 +836,7 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   // efectos de sus tecnicas, solo en la ranura A del jugador (estudio 18): los del que sale se guardan
   // (no se sueltan hasta el final del combate, ver Team::tech) y entran los del nuevo: los guardados de
   // un relevo anterior o los recien cargados, procesados con sub_82126490
-  if (!dbz3::g_guest_eu && (t.new_tech || t.tech_ok[size_t(k)]) && REX_LOAD_U32(kTechBlock) && SideOf(base, x) >= 0) {
+  if ((t.new_tech || t.tech_ok[size_t(k)]) && REX_LOAD_U32(kTechBlock) && SideOf(base, x) >= 0) {
     const int side = SideOf(base, x);
     const uint32_t slot = REX_LOAD_U32(kTechBlock) + 1152 * uint32_t(side) + 80;
     if (t.tech_owner >= 0) {
@@ -845,24 +846,24 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
     if (t.tech_ok[size_t(k)]) {
       std::memcpy(base + slot, t.tech[size_t(k)].data(), 544);
       t.tech_ok[size_t(k)] = false;
-      if (t.new_tech) Call(ctx, base, sub_82083D08, t.new_tech, 0);
+      if (t.new_tech) Call(ctx, base, DBZ3_CALL_EU(sub_82083D08), t.new_tech, 0);
     } else {
       std::memset(base + slot, 0, 544);
       REX_STORE_U32(slot, t.new_tech);
-      Call(ctx, base, sub_82126490, uint32_t(side), 0);
+      Call(ctx, base, DBZ3_CALL_EU(sub_82126490), uint32_t(side), 0);
     }
     t.tech_owner = k;
     t.new_tech = 0;
     // reenlace de los punteros de tecnica en uso (S1 0x82333990, S2 0x82333998) con la ranura nueva,
     // como al empezar el combate (sub_82125888 / sub_8212AF48: r4 = -1, la ranura que toca); si no,
     // seguian en la del que salio (Kamehameha feo, efecto 34 buscado en el banco viejo)
-    Call(ctx, base, sub_82125808, uint32_t(side), 0xFFFFFFFFu);
-    Call(ctx, base, sub_8212AEC0, uint32_t(side), 0xFFFFFFFFu);
+    Call(ctx, base, DBZ3_CALL_EU(sub_82125808), uint32_t(side), 0xFFFFFFFFu);
+    Call(ctx, base, DBZ3_CALL_EU(sub_8212AEC0), uint32_t(side), 0xFFFFFFFFu);
     // la ranura B (segunda tabla 0x82333404, solo algunos personajes) se queda como estaba: se anota
     REXLOG_INFO("dbz3 tag: tecnicas del lado {}: ranura A del miembro {}; ranura B {:08X} (estado {}, tabla B {:08X})", side + 1, k,
-                REX_LOAD_U32(slot + 544), REX_LOAD_U16(0x823D76EE + 1152 * uint32_t(side)), REX_LOAD_U32(0x82333404 + 4 * id));
+                REX_LOAD_U32(slot + 544), REX_LOAD_U16(dbz3::GA(0x823D76EE) + 1152 * uint32_t(side)), REX_LOAD_U32(dbz3::GA(0x82333404) + 4 * id));
   }
-  if (!dbz3::g_guest_eu) SwapFace(ctx, base, x, t, id);   // cara y formas del marcador
+  SwapFace(ctx, base, x, t, id);   // cara y formas del marcador
   if (t.new_aura) {
     SwapAura(ctx, base, SideOf(base, x), t.new_aura);
     t.new_aura = 0;
@@ -900,7 +901,7 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   t.restore = spare;                    // se transforma al aterrizar (Tick)
   t.restore_at = g_frame.load() + (t.tele_at ? (kTeleIn + 2) * std::max(1u, SlideTicks(1) / 12) : SlideTicks(2) + 6);
   static const bool no_pose = std::getenv("DBZ3_TAG_NO_POSE") != nullptr;
-  t.pose_at = (spare || no_pose || dbz3::g_guest_eu) ? 0 : t.restore_at;
+  t.pose_at = (spare || no_pose) ? 0 : t.restore_at;
   t.pose_until = t.pose_at + kPoseWindow;   // tope para empezar; la pose dura kPoseTicks
   if (const int side = SideOf(base, x); !t.pose_at && side >= 0) PoseEnd(base, side);   // sin pose: el COM vuelve a su IA
   // el COM pasa ya al mando 4 (sin nada pulsado): baja y aterriza quieto (su IA empezaba a moverse al
@@ -960,18 +961,17 @@ static bool ActionCtxOk(uint8_t* base, uint32_t x) {
   return action_ctx != 0 && dbz3::roster::FormSelectionRange(action_ctx, 4, false);
 }
 
-// Registro de combates (fichas 01 y 12 de vision, y pruebas automaticas). Solo US (mgr medido alli).
+// Registro de combates (fichas 01 y 12 de vision, y pruebas automaticas). US y EU (mgr igual en las dos).
 // - Siempre: cada combate acabado (estado 4 -> 5) es una linea de user_data/combates.csv: fecha, id de
 //   cada lado, lado ganador (mgr+35136) y motivo (mgr+35132: 0/2 caido, 4 ring out, 3 tiempo, 1 los dos).
 //   Base del ranking local y de las comprobaciones de los tests.
 // - DBZ3_LAB=1: ademas, por tick de pelea, accion (X+3244), vida y posicion de los dos en logs/lab.csv
 //   (laboratorio de solo lectura: datos por cuadro para medir golpes, cancelaciones y esquivas).
 void LabTick(uint8_t* base) {
-  if (dbz3::g_guest_eu) return;
   static uint32_t last = 0, ticks = 0;
   static std::FILE* lab = nullptr;
   static const bool lab_on = std::getenv("DBZ3_LAB") != nullptr;
-  const uint32_t mgr = REX_LOAD_U32(0x823D6CF4);
+  const uint32_t mgr = REX_LOAD_U32(dbz3::GA(0x823D6CF4));
   const uint32_t st = mgr ? REX_LOAD_U32(mgr + 35128) : 0;
   const uint32_t x0 = Fighter(base, 0), x1 = Fighter(base, 1);
   if (st == 4 && lab_on && x0 && x1) {
@@ -1001,8 +1001,12 @@ void LabTick(uint8_t* base) {
       const std::time_t now = std::time(nullptr);
       char when[32] = {};
       std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
-      std::fprintf(f, "%s,%u,%u,%d,%u\n", when, REX_LOAD_U32(x0 + kId), REX_LOAD_U32(x1 + kId),
-                   winner == 0 || winner == 1 ? winner + 1 : 0, reason);
+      // id1 = el de este jugador (ranking y PerfilJugador lo leen asi): el invitado online juega en el lado 2
+      const auto& net = dbz3::net::Session::Get();
+      const bool guest = net.active() && net.role() == dbz3::net::Role::kGuest;
+      const int side = winner == 0 || winner == 1 ? winner + 1 : 0;
+      std::fprintf(f, "%s,%u,%u,%d,%u\n", when, REX_LOAD_U32((guest ? x1 : x0) + kId),
+                   REX_LOAD_U32((guest ? x0 : x1) + kId), guest && side ? 3 - side : side, reason);
       std::fclose(f);
     }
     REXLOG_INFO("dbz3 tag: combate acabado: id {} contra id {}, gana el lado {}, motivo {}", REX_LOAD_U32(x0 + kId),
@@ -1018,9 +1022,9 @@ void Tick(PPCContext& ctx, uint8_t* base) {
   LabTick(base);
   if (const uint32_t fx = g_fall_x.exchange(0)) {
     static const int act = std::getenv("DBZ3_KO_ACTION") ? std::atoi(std::getenv("DBZ3_KO_ACTION")) : 25;
-    if (act >= 0 && !dbz3::g_guest_eu && REX_LOAD_U16(fx + 3244) != uint16_t(act) && ActionCtxOk(base, fx)) {   // accion medida en la US
+    if (act >= 0 && REX_LOAD_U16(fx + 3244) != uint16_t(act) && ActionCtxOk(base, fx)) {   // accion medida en la US
       REXLOG_INFO("dbz3 tag: KO de {:08X}: sale despedido (accion {})", fx, act);
-      Call(ctx, base, sub_82103908, fx, uint32_t(act));
+      Call(ctx, base, DBZ3_CALL_EU(sub_82103908), fx, uint32_t(act));
     }
   }
   // Prueba de campanas (DBZ3_TEST_KO=1): el rival (jugador 2) se queda sin vida a los ~2 s de combate, para
@@ -1042,12 +1046,12 @@ void Tick(PPCContext& ctx, uint8_t* base) {
   {  // sonda (DBZ3_ACT_PROBE, US): estado del combate (mgr+35128) y modo (mgr+2018), mgr = *0x823D6CF4
     static const bool probe = std::getenv("DBZ3_ACT_PROBE") != nullptr;
     static uint32_t last_state = 0xFFFFFFFF, last_mode = 0xFFFFFFFF;
-    const uint32_t mgr = (probe && !dbz3::g_guest_eu) ? REX_LOAD_U32(0x823D6CF4) : 0;
+    const uint32_t mgr = (probe) ? REX_LOAD_U32(dbz3::GA(0x823D6CF4)) : 0;
     if (mgr) {
       const uint32_t st = REX_LOAD_U32(mgr + 35128), mode = REX_LOAD_U16(mgr + 2018);
       if (st != last_state || mode != last_mode)
         REXLOG_INFO("dbz3 stateprobe: estado {} modo {} perdedor {:08X} pelea {}", st, mode, REX_LOAD_U32(mgr + 35188),
-                    REX_LOAD_U32(0x823F39A0));
+                    REX_LOAD_U32(dbz3::GA(0x823F39A0)));
       last_state = st;
       last_mode = mode;
     }
@@ -1055,11 +1059,11 @@ void Tick(PPCContext& ctx, uint8_t* base) {
   // PRUEBA (DBZ3_TEST_RINGOUT=1): a los 5 s de pelea (no de presentacion: antes saltaba en la intro)
   // el rival aparece fuera del ring (para medir el ring out)
   static const bool test_ro = std::getenv("DBZ3_TEST_RINGOUT") != nullptr;
-  if (test_ro && battle_frames == 300 && !dbz3::g_guest_eu) {
+  if (test_ro && battle_frames == 300) {
     // como el juego al caer fuera del ring (medido 2026-10-14): aviso pendiente mgr+35569 = hueco del
     // GANADOR + 1 (el manejador del modo, sub_820FD678, lo da como "motivo 4"). 1 = gana el jugador 1, cae
     // el rival. Mover al rival no siempre lo provocaba: no todos los escenarios tienen ring.
-    if (const uint32_t mgr = REX_LOAD_U32(0x823D6CF4)) {
+    if (const uint32_t mgr = REX_LOAD_U32(dbz3::GA(0x823D6CF4))) {
       REX_STORE_U8(mgr + 35569, 1);
       REXLOG_INFO("dbz3 tag: prueba: rival fuera del ring");
     }
@@ -1079,15 +1083,15 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       }
     }
   }
-  if (!dbz3::g_guest_eu && REX_LOAD_U32(0x823F39A0) != 0) g_fight_seen = true;  // DIAGNOSTICO (fin por tiempo): cambios de la bandera de pelea y de la accion de cada luchador
-  if (static const bool fdiag = std::getenv("DBZ3_TAG_FLAGDIAG") != nullptr; fdiag && !dbz3::g_guest_eu) {
+  if (REX_LOAD_U32(dbz3::GA(0x823F39A0)) != 0) g_fight_seen = true;  // DIAGNOSTICO (fin por tiempo): cambios de la bandera de pelea y de la accion de cada luchador
+  if (static const bool fdiag = std::getenv("DBZ3_TAG_FLAGDIAG") != nullptr; fdiag) {
     static uint32_t last_flag = 0xFFFFFFFFu;
-    const uint32_t fl = REX_LOAD_U32(0x823F39A0);
+    const uint32_t fl = REX_LOAD_U32(dbz3::GA(0x823F39A0));
     if (fl != last_flag) {
       const uint32_t a = Fighter(base, 0), b = Fighter(base, 1);
       REXLOG_INFO("dbz3 tag: bandera de pelea {:08X} -> {:08X} (acciones {} {}, 39A4 {:08X} 39A8 {:08X})", last_flag, fl,
-                  a ? REX_LOAD_U16(a + 3244) : 0, b ? REX_LOAD_U16(b + 3244) : 0, REX_LOAD_U32(0x823F39A4),
-                  REX_LOAD_U32(0x823F39A8));
+                  a ? REX_LOAD_U16(a + 3244) : 0, b ? REX_LOAD_U16(b + 3244) : 0, REX_LOAD_U32(dbz3::GA(0x823F39A4)),
+                  REX_LOAD_U32(dbz3::GA(0x823F39A8)));
       last_flag = fl;
     }
     static uint32_t tick = 0;
@@ -1095,7 +1099,7 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       const uint32_t a = Fighter(base, 0), b = Fighter(base, 1);
       char zone[160] = {};
       for (uint32_t i = 0; i < 16; ++i)
-        std::snprintf(zone + 9 * i, sizeof(zone) - 9 * i, "%08X ", REX_LOAD_U32(0x823F3980 + 4 * i));
+        std::snprintf(zone + 9 * i, sizeof(zone) - 9 * i, "%08X ", REX_LOAD_U32(dbz3::GA(0x823F3980) + 4 * i));
       REXLOG_INFO("dbz3 tag: estado acciones {} {} pantalla {} zona {}", a ? REX_LOAD_U16(a + 3244) : 0,
                   b ? REX_LOAD_U16(b + 3244) : 0, base[dbz3::GuestAddr(0x824BA110, 0x824BA100)], zone);
     }
@@ -1306,14 +1310,14 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       if (t.down[size_t(t.active)]) {
         if (!KoLanded(base, x, t, now)) {
           loaded = false;
-        } else if (loaded && ActionCtxOk(base, x) && (act == 18 || act == 19 || act == 35 || act == 36) && !dbz3::g_guest_eu) {
-          Call(ctx, base, sub_82103908, x, 0);
+        } else if (loaded && ActionCtxOk(base, x) && (act == 18 || act == 19 || act == 35 || act == 36)) {
+          Call(ctx, base, DBZ3_CALL_EU(sub_82103908), x, 0);
         }
       }
       if (!t.down[size_t(t.active)] && !form_quiet) loaded = false;   // transformandose: se espera
       if (loaded && !t.round_owned && !Free(base, x) && t.slide == 1 && now - t.slide_at >= SlideTicks(1) && act != 15 && act != 43 &&
-          act != 44 && act < 46 && !dbz3::g_guest_eu && ActionCtxOk(base, x)) {
-        Call(ctx, base, sub_82103908, x, 0);
+          act != 44 && act < 46 && ActionCtxOk(base, x)) {
+        Call(ctx, base, DBZ3_CALL_EU(sub_82103908), x, 0);
       }
       // efectos del que sale aun vivos: se espera (como mucho kFxWaitMax desde que empezo la carga)
       // (tambien los del rival: una tecnica suya pegada al que sale hizo caer el cambio de cuerpo,
@@ -1348,7 +1352,7 @@ void Tick(PPCContext& ctx, uint8_t* base) {
           t.ring_giveup = true;
           t.ring_at = 0;
           t.ring = false;
-          if (const uint32_t mgr = dbz3::g_guest_eu ? 0 : REX_LOAD_U32(0x823D6CF4)) {
+          if (const uint32_t mgr = REX_LOAD_U32(dbz3::GA(0x823D6CF4))) {
             REX_STORE_U8(mgr + 35569, uint8_t((p ^ 1) + 1));
             // sin relevo pendiente ni carga en curso: si no, el tick siguiente lo volvia a pedir
             t.phase = Phase::kIdle;
@@ -1623,18 +1627,18 @@ DBZ3_HOOK(sub_8211A5A8, dbz3eu_sub_8211A6A8) {
 
 // Fin del combate (US): el juego suelta sus hojas de caras y los retratos del marcador (el retrato
 // que pusimos en el relevo incluido); despues soltamos las hojas que cargamos nosotros.
-// Sonda (DBZ3_ACT_PROBE=1, solo US): cada accion que el combate pone a un luchador (r3 = X, r4 =
+// Sonda (DBZ3_ACT_PROBE=1): cada accion que el combate pone a un luchador (r3 = X, r4 =
 // accion), para encontrar la de la caida del KO y usarla en el relevo.
-// Sonda (DBZ3_ACT_PROBE=1, solo US): avisos de fin de combate (sub_82100FA8, r3 = op; el KO por
+// Sonda (DBZ3_ACT_PROBE=1): avisos de fin de combate (sub_82100FA8, r3 = op; el KO por
 // golpe llama con op 0 desde sub_8211A5A8): para encontrar el del ring out y el de tiempo agotado.
-REX_HOOK_RAW(sub_82100FA8) {
+DBZ3_HOOK_EU(sub_82100FA8) {
   static const bool probe = std::getenv("DBZ3_ACT_PROBE") != nullptr;
   if (probe) {
     const uint32_t r4 = ctx.r4.u32;
     REXLOG_INFO("dbz3 endprobe: op={} lr={:08X} r4={:08X} [{:08X} {:08X}] pelea={}", ctx.r3.u32, uint32_t(ctx.lr), r4,
-                r4 ? REX_LOAD_U32(r4) : 0, r4 ? REX_LOAD_U32(r4 + 8) : 0, REX_LOAD_U32(0x823F39A0));
+                r4 ? REX_LOAD_U32(r4) : 0, r4 ? REX_LOAD_U32(r4 + 8) : 0, REX_LOAD_U32(dbz3::GA(0x823F39A0)));
   }
-  __imp__sub_82100FA8(ctx, base);
+  orig(ctx, base);
 }
 
 // Ring out del activo con compañero vivo: cuenta como un KO. sub_820FD408 es la entrada del estado 5
@@ -1691,7 +1695,7 @@ static bool RingOutToSwap(uint8_t* base, uint32_t x) {
 static void RingOutReset(PPCContext& ctx, uint8_t* base, uint32_t mgr, uint32_t x) {
   if (REX_LOAD_U8(x + 8184) == 0xFF) {
     REX_STORE_U8(x + 8184, 2);
-    dbz3::tag::Call(ctx, base, sub_82116808, x, 0);
+    dbz3::tag::Call(ctx, base, DBZ3_CALL_EU(sub_82116808), x, 0);
   }
   REX_STORE_U32(x + 6300, 0xFFFFFFFFu);
   REX_STORE_U8(x + 8164, 0);
@@ -1700,8 +1704,8 @@ static void RingOutReset(PPCContext& ctx, uint8_t* base, uint32_t mgr, uint32_t 
 }
 
 // + sonda (DBZ3_ACT_PROBE=1, US): quien la llama y que hay ya puesto (perdedor, pelea).
-REX_HOOK_RAW(sub_820FD408) {
-  const uint32_t mgr = dbz3::g_guest_eu ? 0 : REX_LOAD_U32(0x823D6CF4);
+DBZ3_HOOK_EU(sub_820FD408) {
+  const uint32_t mgr = REX_LOAD_U32(dbz3::GA(0x823D6CF4));
   // mgr+35136 = hueco (0/1; -1 = ninguno) del GANADOR; el perdedor es el otro, mgr+2096+8240*(1-hueco)
   // (medido 2026-10-14 con capturas: cayo fuera el jugador 1 y salio 1 = el rival como WINNER; mgr+35188
   // es el de un asalto anterior). Motivo mgr+35132: 0/2 caido, 4 aviso de ring out, 1 los dos, 3 tiempo.
@@ -1726,24 +1730,23 @@ REX_HOOK_RAW(sub_820FD408) {
     RingOutReset(ctx, base, mgr, loser);
     return;
   }
-  __imp__sub_820FD408(ctx, base);
+  orig(ctx, base);
 }
 
-REX_HOOK_RAW(sub_82103908) {
+DBZ3_HOOK_EU(sub_82103908) {
   static const bool probe = std::getenv("DBZ3_ACT_PROBE") != nullptr;
   if (probe) {
     const uint32_t x = ctx.r3.u32;
     REXLOG_INFO("dbz3 actprobe: X={:08X} accion={} antes={} vida={:.0f}", x, ctx.r4.u32,
                 REX_LOAD_U16(x + 3244), dbz3::tag::LoadF(base, x + dbz3::tag::kHp));
   }
-  __imp__sub_82103908(ctx, base);
+  orig(ctx, base);
 }
 
 // Fin del combate (sub_82126A10 suelta las ranuras de tecnica de los dos jugadores): despues se
 // sueltan igual los efectos guardados de los miembros que no estaban en combate (Team::tech).
-REX_HOOK_RAW(sub_82126A10) {
-  __imp__sub_82126A10(ctx, base);
-  if (dbz3::g_guest_eu) return;
+DBZ3_HOOK_EU(sub_82126A10) {
+  orig(ctx, base);
   std::lock_guard<std::mutex> lock(dbz3::tag::g_mu);
   int freed = 0;
   for (int p = 0; p < 2; ++p) {
@@ -1754,7 +1757,7 @@ REX_HOOK_RAW(sub_82126A10) {
     for (size_t k = 0; k < t.tech_ok.size(); ++k) {
       if (!t.tech_ok[k]) continue;
       std::memcpy(base + slot, t.tech[k].data(), 544);
-      dbz3::tag::Call(ctx, base, sub_821266A8, uint32_t(p), 0);
+      dbz3::tag::Call(ctx, base, DBZ3_CALL_EU(sub_821266A8), uint32_t(p), 0);
       std::memset(base + slot, 0, 544);
       t.tech_ok[k] = false;
       ++freed;
@@ -1764,10 +1767,10 @@ REX_HOOK_RAW(sub_82126A10) {
   if (freed) REXLOG_INFO("dbz3 tag: {} efectos de tecnica guardados sueltos al acabar el combate", freed);
 }
 
-REX_HOOK_RAW(sub_820E7058) {
-  __imp__sub_820E7058(ctx, base);
+DBZ3_HOOK_EU(sub_820E7058) {
+  orig(ctx, base);
   std::lock_guard<std::mutex> lock(dbz3::tag::g_mu);
-  for (const uint32_t res : dbz3::tag::g_face_res) dbz3::tag::Call(ctx, base, sub_82083A68, res, 0);
+  for (const uint32_t res : dbz3::tag::g_face_res) dbz3::tag::Call(ctx, base, DBZ3_CALL_EU(sub_82083A68), res, 0);
   if (!dbz3::tag::g_face_res.empty()) REXLOG_INFO("dbz3 tag: {} hojas de caras del relevo sueltas", dbz3::tag::g_face_res.size());
   dbz3::tag::g_face_res.clear();
   for (auto& f : dbz3::tag::g_face) f.clear();
@@ -1776,9 +1779,9 @@ REX_HOOK_RAW(sub_820E7058) {
 // Banco de efectos (sub_82092C58(objeto, tipo) pone el banco global 0x8238CE10, y su tabla en +20,
 // justo antes de usar sus efectos): si es de la ranura de tecnica de un lado con equipo, un efecto
 // suyo sigue vivo y su relevo espera (g_tech_seen).
-REX_HOOK_RAW(sub_82092C58) {
+DBZ3_HOOK_EU(sub_82092C58) {
   // banco de la ranura de tecnica de un lado con equipo (su arbol, su objeto o un hijo): efecto vivo
-  if (!dbz3::g_guest_eu && dbz3::tag::g_in_battle.load()) {
+  if (dbz3::tag::g_in_battle.load()) {
     const uint32_t g2 = REX_LOAD_U32(dbz3::tag::kTechBlock), bank = ctx.r3.u32;
     for (int p = 0; g2 && p < 2; ++p) {
       if (dbz3::tag::g_team[size_t(p)].ids.size() < 2) continue;
@@ -1796,7 +1799,7 @@ REX_HOOK_RAW(sub_82092C58) {
       }
     }
   }
-  __imp__sub_82092C58(ctx, base);
+  orig(ctx, base);
 }
 
 // SONDA (2026-10-15): huecos de forma que el juego suelta "por no usarse" (sub_82100EB8 / sub_82100F30, desde
@@ -1811,21 +1814,21 @@ static bool KeepSlot(uint8_t* base, uint32_t x, uint32_t slot, uint32_t lr, cons
               REX_LOAD_U32(x + 4604), REX_LOAD_U32(x + 7608), REX_LOAD_U32(x + 7636), REX_LOAD_U16(x + 3244));
   return true;
 }
-REX_HOOK_RAW(sub_82100D60) {
-  if (!dbz3::g_guest_eu) KeepSlot(base, ctx.r3.u32, ctx.r4.u32, uint32_t(ctx.lr), "modelo");
-  __imp__sub_82100D60(ctx, base);
+DBZ3_HOOK_EU(sub_82100D60) {
+  KeepSlot(base, ctx.r3.u32, ctx.r4.u32, uint32_t(ctx.lr), "modelo");
+  orig(ctx, base);
 }
-REX_HOOK_RAW(sub_82109380) {
-  if (!dbz3::g_guest_eu && dbz3::tag::SideOf(base, ctx.r3.u32) >= 0 &&
+DBZ3_HOOK_EU(sub_82109380) {
+  if (dbz3::tag::SideOf(base, ctx.r3.u32) >= 0 &&
       dbz3::tag::g_keep[size_t(dbz3::tag::SideOf(base, ctx.r3.u32))].load()) {
     // quien llama: lr; y el de su llamador (marco de sub_82111458: 96 B, lr guardado en -8)
     REXLOG_INFO("dbz3 tag sonda: sub_82109380(X {:08X}, guarda {}) desde {:08X} (antes {:08X})", ctx.r3.u32, ctx.r4.s32,
                 uint32_t(ctx.lr), REX_LOAD_U32(ctx.r1.u32 + 96 - 8));
   }
-  __imp__sub_82109380(ctx, base);
+  orig(ctx, base);
 }
 
-// --- TAG TEAM por la via nativa (solo US; docs/12_conectores/13_tagteam_nativo.md) ---
+// --- TAG TEAM por la via nativa (US y EU; docs/12_conectores/13_tagteam_nativo.md) ---
 // Sin piloto de menus ni negro propio: el menu principal sale con su sonido y su fundido y abre la
 // rueda directamente; "atras" en la rueda vuelve a la pantalla TAG TEAM por el atras del Duelo.
 namespace dbz3::tag {
@@ -1836,10 +1839,10 @@ std::array<std::atomic<int>, 2> g_wheel_menu{};          // WheelMenu
 std::array<std::atomic<uint32_t>, 2> g_wheel_at{};
 std::array<std::atomic<bool>, 2> g_wheel_tray{};          // WheelTray
 std::atomic<bool> g_duel_back{false};   // el menu de Duelo que crea el atras sale en su primer fotograma
-constexpr uint32_t kUi = 0x824BA110, kPadSlot = 0x8238B670, kPads = 0x8238B780;
+constexpr dbz3::GA kUi = 0x824BA110, kPadSlot = 0x8238B670, kPads = 0x8238B780;
 }  // namespace
 bool NativeEnter(int duel_row) {
-  if (dbz3::g_guest_eu || std::getenv("DBZ3_TAG_PILOT")) return false;
+  if (std::getenv("DBZ3_TAG_PILOT")) return false;
   g_native = true;
   g_enter_row = duel_row;
   return true;
@@ -1864,36 +1867,36 @@ void NativeEnd() {
 // 0x8218C5F4; sus otros dos llamadores son otros estados). Con una entrada pedida se repite su rama de A
 // (10:14940-15003) con la pantalla 14 y argumento 1: sub_821AEBA8(1) abre la rueda sin el menu de Duelo
 // con el tipo y la fila guardados (0x823734E8/EC, 11:16934, 36:16714).
-REX_HOOK_RAW(sub_8218BBC0) {
+DBZ3_HOOK_EU(sub_8218BBC0) {
   using namespace dbz3::tag;
-  const bool idle = ctx.lr == 0x8218C5F4;
+  const bool idle = ctx.lr == dbz3::GA(0x8218C5F4);
   const uint32_t task = ctx.r27.u32, menu = ctx.r3.u32;
-  __imp__sub_8218BBC0(ctx, base);
-  if (!idle || dbz3::g_guest_eu || g_enter_row.load() < 0 || REX_LOAD_U32(task + 48) != menu) return;
+  orig(ctx, base);
+  if (!idle || g_enter_row.load() < 0 || REX_LOAD_U32(task + 48) != menu) return;
   const int row = g_enter_row.exchange(-1);
-  REX_STORE_U32(0x823734E8, 0);              // tipo: Duelo (1 seria Practica)
-  REX_STORE_U32(0x823734EC, uint32_t(row));  // fila del Duelo
+  REX_STORE_U32(dbz3::GA(0x823734E8), 0);              // tipo: Duelo (1 seria Practica)
+  REX_STORE_U32(dbz3::GA(0x823734EC), uint32_t(row));  // fila del Duelo
   REX_STORE_U8(menu + 150, 1);               // el menu recuerda Duelo
   const float vol = LoadF(base, kUi + 0x2C0C0);   // sonido de aceptar del menu (0x8218C640-0x8218C690)
   PPCContext c = ctx;
   c.r3.u64 = 0;
   c.r4.u64 = 0;
   c.f1.f64 = vol;
-  sub_82092570(c, base);
-  if (vol > LoadF(base, 0x8201F60C)) {
+  DBZ3_CALL_EU(sub_82092570)(c, base);
+  if (vol > LoadF(base, dbz3::GA(0x8201F60C))) {
     c = ctx;
     c.r3.u64 = 0; c.r4.u64 = 0; c.r5.u64 = 3; c.r6.u64 = 0;
-    sub_820922A0(c, base);
+    DBZ3_CALL_EU(sub_820922A0)(c, base);
   }
   const uint32_t slot = REX_LOAD_U32(kPadSlot);
-  Call(ctx, base, sub_821D98B8, row < 2 ? slot : 0xFFFFFFFFu, 0xFFFFFFFFu);   // mandos, como el Duelo (41:16839)
-  Call(ctx, base, sub_821D2778, 14, 1);
-  Call(ctx, base, sub_8218C588, menu, 0);
-  Call(ctx, base, sub_82081A48, REX_LOAD_U32(menu + 164), 0);
+  Call(ctx, base, DBZ3_CALL_EU(sub_821D98B8), row < 2 ? slot : 0xFFFFFFFFu, 0xFFFFFFFFu);   // mandos, como el Duelo (41:16839)
+  Call(ctx, base, DBZ3_CALL_EU(sub_821D2778), 14, 1);
+  Call(ctx, base, DBZ3_CALL_EU(sub_8218C588), menu, 0);
+  Call(ctx, base, DBZ3_CALL_EU(sub_82081A48), REX_LOAD_U32(menu + 164), 0);
   REX_STORE_U8(kUi + 37, 1);
   REX_STORE_U8(kUi + 38, 0);
-  Call(ctx, base, sub_821D27B8, 10, 0);       // fundido del juego
-  REX_STORE_U32(task + 28, 0x8218C4C8);       // menu "saliendo", como tras su A
+  Call(ctx, base, DBZ3_CALL_EU(sub_821D27B8), 10, 0);       // fundido del juego
+  REX_STORE_U32(task + 28, dbz3::GA(0x8218C4C8));       // menu "saliendo", como tras su A
   if (slot < 4) REX_STORE_U16(kPads + 184 * slot + 14, 0);   // lo que queda de este fotograma no ve la A del panel
   REXLOG_INFO("dbz3 tag nativo: menu principal -> rueda directa (fila del Duelo {}, mando {})", row, slot);
 }
@@ -1903,10 +1906,10 @@ REX_HOOK_RAW(sub_8218BBC0) {
 // limpieza de la rueda suelta despues: sin ella se liberaba dos veces, 2026-10-15) y en su primer fotograma
 // de espera sale por su propio atras (sub_821AE520 -> sub_821AE440: pantalla 5 y fundido). La pantalla
 // TAG TEAM se abre encima desde ya: el menu de Duelo no se llega a ver.
-REX_HOOK_RAW(sub_821AEBA8) {
+DBZ3_HOOK_EU(sub_821AEBA8) {
   using namespace dbz3::tag;
-  const bool back = !dbz3::g_guest_eu && g_native.load() && ctx.r3.s16 == 0;
-  __imp__sub_821AEBA8(ctx, base);
+  const bool back = g_native.load() && ctx.r3.s16 == 0;
+  orig(ctx, base);
   if (!back) return;
   g_native = false;
   g_duel_back = true;
@@ -1914,17 +1917,17 @@ REX_HOOK_RAW(sub_821AEBA8) {
   REXLOG_INFO("dbz3 tag nativo: atras en la rueda -> TAG TEAM");
 }
 // Menu de Duelo esperando (r3 = tarea, +48 = objeto): la rama de su atras (41:16905-16960) sin el sonido.
-REX_HOOK_RAW(sub_821AE520) {
+DBZ3_HOOK_EU(sub_821AE520) {
   if (!dbz3::tag::g_duel_back.exchange(false)) {
-    __imp__sub_821AE520(ctx, base);
+    orig(ctx, base);
     return;
   }
   using namespace dbz3::tag;
   const uint32_t task = ctx.r3.u32, obj = REX_LOAD_U32(task + 48);
-  Call(ctx, base, sub_821AE440, obj, 0);
-  Call(ctx, base, sub_82081A48, REX_LOAD_U32(obj + 76), 0);
-  Call(ctx, base, sub_8217E800, REX_LOAD_U32(obj + 68), 0xFFFFFFFFu);
-  REX_STORE_U32(task + 28, 0x821AE518);
+  Call(ctx, base, DBZ3_CALL_EU(sub_821AE440), obj, 0);
+  Call(ctx, base, DBZ3_CALL_EU(sub_82081A48), REX_LOAD_U32(obj + 76), 0);
+  Call(ctx, base, DBZ3_CALL_EU(sub_8217E800), REX_LOAD_U32(obj + 68), 0xFFFFFFFFu);
+  REX_STORE_U32(task + 28, dbz3::GA(0x821AE518));
 }
 
 // Orquestador de las dos ruedas (sub_821ACCA0, cada fotograma; r3 = tarea, +56 = objeto con las ruedas del
@@ -1932,9 +1935,9 @@ REX_HOOK_RAW(sub_821AE520) {
 // capsulas elegidos de verdad) vuelve a "eligiendo" con sub_8217CF60 (fase 4, resultado -1, su animacion y
 // estado 0x8217CC68), asi el juego no da el lado por terminado ni pasa al rival. El ultimo sigue el flujo del
 // juego. Ademas apunta que pantalla tiene abierta cada lado (WheelMenu) y, al cambiar, fase/resultado/estado.
-REX_HOOK_RAW(sub_821ACCA0) {
+DBZ3_HOOK_EU(sub_821ACCA0) {
   using namespace dbz3::tag;
-  if (!dbz3::g_guest_eu) {
+  {
     static uint32_t last[2] = {};
     const uint32_t obj = REX_LOAD_U32(ctx.r3.u32 + 56);
     for (uint32_t k = 0; obj && k < 2; ++k) {
@@ -1943,7 +1946,7 @@ REX_HOOK_RAW(sub_821ACCA0) {
       g_wheel_menu[k] = REX_LOAD_U8(wst) == 5 ? REX_LOAD_U8(wst + 10) : 0;
       g_wheel_at[k] = g_frame.load();
       if (g_native.load() && int8_t(REX_LOAD_U8(wst + 2)) == 1 && dbz3::ingame::TeamWantsMore(int(k))) {
-        Call(ctx, base, sub_8217CF60, wheel, 0);
+        Call(ctx, base, DBZ3_CALL_EU(sub_8217CF60), wheel, 0);
         REXLOG_INFO("dbz3 tag nativo: lado {}: miembro elegido, la rueda vuelve a eligiendo", k + 1);
       }
       // bandeja "Custom Tray" de Edit Skills abierta (medido 2026-10-15 con una sonda y capturas: el menu de opciones
@@ -1970,5 +1973,5 @@ REX_HOOK_RAW(sub_821ACCA0) {
                   int8_t(REX_LOAD_U8(wst + 2)), REX_LOAD_U8(wst + 10), REX_LOAD_U8(wst + 6), state);
     }
   }
-  __imp__sub_821ACCA0(ctx, base);
+  orig(ctx, base);
 }

@@ -21,7 +21,7 @@
 #include <rex/logging.h>
 
 #include "generated/dbz3_init.h"
-#include "guest_region.h"
+#include "eu_map.h"
 
 #include <algorithm>
 #include <array>
@@ -59,7 +59,7 @@ constexpr uint32_t kRandomSlot = 38;
 constexpr uint32_t kSlotToIdUs[3] = {0x82020618, 0x82021470, 0x82024760};
 constexpr uint32_t kSlotToIdEu[3] = {0x82020620, 0x82021460, 0x82024778};
 uint32_t SlotToId(int k) { return dbz3::GuestAddr(kSlotToIdUs[k], kSlotToIdEu[k]); }
-constexpr uint32_t kPortraits = 0x82372818;
+constexpr dbz3::GA kPortraits = 0x82372818;
 
 std::mutex g_mu;
 // datos de rueda -> casilla nueva de cada celda (-1 = casilla original)
@@ -125,8 +125,8 @@ constexpr ImageTemplate kNameTpl{105, 0x60};
 constexpr uint32_t kIconImageBase = 61;
 constexpr uint32_t kNameImageBase = 105;
 constexpr uint32_t kImages = 145;
-constexpr uint32_t kSelectGlobal = 0x8245F190;  // +16 = recurso de sprites del select
-constexpr uint32_t kSpriteScale = 0x8201F60C;   // float que pasa sub_8217E090 (EU: 0x8201F604)
+constexpr dbz3::GA kSelectGlobal = 0x8245F190;  // +16 = recurso de sprites del select
+constexpr dbz3::GA kSpriteScale = 0x8201F60C;   // float que pasa sub_8217E090 (EU: 0x8201F604)
 
 struct BuiltImage {
   uint32_t buf = 0;
@@ -484,7 +484,7 @@ DBZ3_HOOK(sub_8217CB10, dbz3eu_sub_8217CAC8) {
   const uint32_t tst = GuestPtr(tobj) ? REX_LOAD_U32(tobj + 48) : 0;
   const int8_t before = tst && GuestPtr(tst) ? int8_t(REX_LOAD_U8(tst + 2)) : 0;
   orig(ctx, base);
-  if (!dbz3::g_guest_eu && tst && GuestPtr(tst) && dbz3::ingame::TagTeamMode()) {
+  if (tst && GuestPtr(tst) && dbz3::ingame::TagTeamMode()) {
     // opcion resaltada del menu de opciones (tipo 2-4: objeto en +52, su interior en +48, opcion en +0)
     const uint8_t pk = REX_LOAD_U8(tst + 7), pkind = REX_LOAD_U8(tst + 10);
     const uint32_t w = REX_LOAD_U32(tst + 52);
@@ -501,7 +501,7 @@ DBZ3_HOOK(sub_8217CB10, dbz3eu_sub_8217CAC8) {
     const int8_t after = int8_t(REX_LOAD_U8(tst + 2));
     // elegido: +2 pasa a 1; atras: la tarea vuelve a la rueda (sub_8217CC68). +2 = -1 no basta: puede
     // valer ya -1 de un atras anterior (2026-10-12, el atras no llegaba)
-    const bool back = REX_LOAD_U32(tobj + 28) == 0x8217CC68u && after != 1;
+    const bool back = REX_LOAD_U32(tobj + 28) == dbz3::GA(0x8217CC68u) && after != 1;
     if ((after != before && after == 1) || back) {
       const uint8_t kind = REX_LOAD_U8(tst + 10), option = REX_LOAD_U8(tst + 12);
       const int8_t cell = int8_t(REX_LOAD_U8(tst + 4));
@@ -526,9 +526,8 @@ void dbz3_select_refresh_preview(PPCContext& ctx, uint8_t* base);   // roster_ex
 // recuerda la eleccion para el inicio del combate (dbz3::roster::PickedCellFor).
 DBZ3_HOOK(sub_8217CC68, dbz3eu_sub_8217CC20) {
   dbz3_select_refresh_preview(ctx, base);   // LT/RT: la vista previa en la forma elegida
-  constexpr uint32_t kPicked = 0x824BA12F;   // US (la EU no esta localizada: sin recuerdo)
-  const bool us = !dbz3::g_guest_eu;
-  uint8_t before[2] = {us ? REX_LOAD_U8(kPicked) : uint8_t(0), us ? REX_LOAD_U8(kPicked + 1) : uint8_t(0)};
+  constexpr dbz3::GA kPicked = 0x824BA12F;   // EU 0x824BA11F (tools/eu_map.py)
+  uint8_t before[2] = {REX_LOAD_U8(kPicked), REX_LOAD_U8(kPicked + 1)};
   Enter(base, ctx.r3.u32, false);
   const int vc = t_active;
   // confirmar = la tarea pasa de este estado (la rueda) al siguiente; jugador en st+7
@@ -544,7 +543,7 @@ DBZ3_HOOK(sub_8217CC68, dbz3eu_sub_8217CC20) {
       g_confirmed |= uint8_t(1u << k);
     }
   }
-  if (us && tst && GuestPtr(tst) && REX_LOAD_U32(tobj + 28) != handler && dbz3::ingame::TagTeamMode()) {
+  if (tst && GuestPtr(tst) && REX_LOAD_U32(tobj + 28) != handler && dbz3::ingame::TagTeamMode()) {
     const uint8_t k = REX_LOAD_U8(tst + 7);
     if (k < 2) {
       const uint8_t id = REX_LOAD_U8(kPicked + k);
@@ -554,7 +553,7 @@ DBZ3_HOOK(sub_8217CC68, dbz3eu_sub_8217CC20) {
       }
     }
   }
-  for (int k = 0; us && k < 2; ++k) {
+  for (int k = 0; k < 2; ++k) {
     const uint8_t now = REX_LOAD_U8(kPicked + k);
     if (now == before[k]) continue;
     if (vc >= 0 && now == GetVirtualCell(vc).id) {

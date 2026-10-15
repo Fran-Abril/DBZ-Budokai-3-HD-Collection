@@ -8,12 +8,15 @@
 // hub/logo (logo "Dragon HUB" del autor del proyecto), titulo_hub y num_* (cifras de la pagina). Del juego
 // (native_ui.cpp, sacadas del AFS del jugador): agua, marco, panel, flechas, botones, bocadillo, borde.
 // De un pack opcional del jugador (mod center hd/packs_visuales/pack_hub.toml): hub/fondo y hub/vuelo_<n>
-// (personaje que vuela hacia la camara al entrar; sin el, solo el fundido).
+// (personaje que vuela hacia la camara al entrar; sin el, solo el fundido) y hub/guardado (icono del aviso de
+// guardado; sin el pack, el nuestro CC0 de generar.py).
 #include "hub_panel.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -24,22 +27,26 @@
 #include <imgui.h>
 #include <toml++/toml.hpp>
 
+#include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/ui/imgui_dialog.h>
 
 #include "../launcher/i18n.h"
 #include "../launcher/settings.h"
 #include "../launcher/ui_kit.h"
+#include "../escenarios.h"
+#include "../modos.h"
 #include "game_style.h"
 
 namespace dbz3 {
 bool GameDimmed();
 bool OverlayOpen();
+namespace tag {
+bool InBattle();   // tagteam.cpp: hay un combate en marcha
 }
-namespace dbz3::modos {   // modos.cpp (docs/14_frentes/modos.md, API)
-bool Record(int tipo, int* id, int* mejor, int* total, int* completados);
-bool Guardado(int tipo, int* id, int* ganados);
-std::string Nombre(int id);
+namespace hub {
+bool OwnBattle();  // hub.cpp: combate del conector en marcha (retos, combate rapido)
+}
 }
 
 namespace dbz3::hub {
@@ -48,40 +55,54 @@ namespace {
 namespace T = dbz3::i18n;
 namespace S = dbz3::ingame::style;
 
-struct Text {
-  const char *es, *en;
-};
-// nombre (sin su pieza etq_*) y lo que dice el bocadillo, por entrada
-constexpr Text kNames[kEntries] = {{"Tag Team", "Tag Team"},        {"Online", "Online"},
-                                   {"Combate rápido", "Quick Battle"}, {"Torre", "Tower"},
-                                   {"Supervivencia", "Survival"},     {"Kumite", "Kumite"},
-                                   {"Ranking", "Ranking"},            {"Laboratorio", "Laboratory"},
-                                   {"Escenarios", "Stages"},          {"Pasarela", "Gateway"},
-                                   {"Minijuegos", "Minigames"},       {"Leyenda de Mr. Satán", "Legend of Hercule"}};
-// con la entrada lista (registrada)
-constexpr Text kHelp[kEntries] = {
-    {"Equipos de 2 o 3 luchadores. Pulsa SELECT en el combate para relevar al compañero.",
-     "Teams of 2 or 3 fighters. Press SELECT in battle to switch partners."},
-    {"Juega contra otra persona por internet desde el menú de Duelo.",
-     "Play against another person over the internet from the Duel menu."},
-    {"Un combate al momento contra el ordenador, con luchadores y escenario al azar.",
-     "A fight right away against the computer, with random fighters and stage."},
-    {"Sube piso a piso contra rivales cada vez más fuertes con tu último luchador del Duelo.",
-     "Climb floor by floor against ever stronger rivals with your last Duel fighter."},
-    {"Oleadas seguidas: la vida que te queda pasa a la siguiente y recuperas un poco entre medias.",
-     "Back-to-back waves: your remaining health carries over and you recover a little in between."},
-    {"Jefes con mucha vida, uno tras otro. Tu vida también se arrastra.",
-     "Bosses with lots of health, one after another. Your health carries over too."},
-    {"Tus mejores marcas en los modos del HUB.", "Your best records in the HUB modes."},
-    {"Pruebas y experimentos con los combates.", "Battle tests and experiments."},
-    {"Explora los escenarios y elige dónde luchar.", "Browse the stages and pick where to fight."},
-    {"Trae luchadores de Budokai 1, Budokai 2 e Infinite World.",
-     "Bring fighters over from Budokai 1, Budokai 2 and Infinite World."},
-    {"Pruebas cortas para jugar entre combate y combate.", "Short challenges to play between fights."},
-    {"La historia del campeón del mundo, a su manera.", "The world champion's story, his way."}};
-constexpr Text kSoon = {"Muy pronto.", "Coming soon."};
-constexpr Text kRowHelp = {"Tag Team, Online, combate rápido, retos y los modos nuevos de esta versión.",
-                           "Tag Team, Online, quick battle, challenges and this version's new modes."};
+// textos propios del panel, en los idiomas del juego (Tr)
+constexpr Texts kSoon = {"Muy pronto.", "Coming soon.", "Bientôt disponible.", "Bald verfügbar.", "Prossimamente."};
+constexpr Texts kRowHelp = {"Tag Team, Online, combate rápido, retos y los modos nuevos de esta versión.",
+                            "Tag Team, Online, quick battle, challenges and this version's new modes.",
+                            "Tag Team, en ligne, combat rapide, défis et les nouveaux modes de cette version.",
+                            "Tag Team, Online, Schnellkampf, Herausforderungen und die neuen Modi dieser Version.",
+                            "Tag Team, online, scontro rapido, sfide e le nuove modalità di questa versione."};
+constexpr Texts kRecord = {"Récord: ", "Record: ", "Record : ", "Rekord: ", "Record: "};
+constexpr Texts kWith = {" con ", " with ", " avec ", " mit ", " con "};
+constexpr Texts kNoRecord = {"Sin récord", "No record", "Pas de record", "Kein Rekord", "Nessun record"};
+constexpr Texts kSavedAt = {" - Guardado: ", " - Saved: ", " - Sauvegardé : ", " - Gespeichert: ", " - Salvato: "};
+constexpr Texts kClassic = {"Clásica: ", "Classic: ", "Classique : ", "Klassisch: ", "Classica: "};
+constexpr Texts kLastQuick = {"Último: ", "Last: ", "Dernier : ", "Zuletzt: ", "Ultimo: "};
+constexpr Texts kVs = {" contra ", " vs ", " contre ", " gegen ", " contro "};
+constexpr Texts kAnd = {" y ", " and ", " et ", " und ", " e "};
+constexpr Texts kWallet = {"Monedero: ", "Wallet: ", "Porte-monnaie : ", "Geldbörse: ", "Portafoglio: "};
+// Torre/Supervivencia/Kumite abren el selector de retos de rpg.cpp (docs/14_frentes/rpg.md): su lista y su ayuda
+// ponytail: listas copiadas de rpg.md; si rpg.cpp cambia sus listas, cambiarlas aqui (o que exponga una API)
+constexpr int kLists[3][4] = {{dbz3::modos::kTorre, dbz3::modos::kTorres, dbz3::modos::kAbyss, -1},
+                              {dbz3::modos::kSupervivencia, dbz3::modos::kTienda, dbz3::modos::kSimulacion, -1},
+                              {dbz3::modos::kKumite, dbz3::modos::kJefes, dbz3::modos::kTorneo4, dbz3::modos::kHeroe}};
+constexpr Texts kListHelp[3] = {
+    {"Sube piso a piso contra rivales cada vez más fuertes. Elige el reto en la lista.",
+     "Climb floor by floor against ever stronger rivals. Pick the challenge from the list.",
+     "Monte étage par étage face à des rivaux toujours plus forts. Choisis le défi dans la liste.",
+     "Steige Etage für Etage gegen immer stärkere Gegner auf. Wähle die Herausforderung aus der Liste.",
+     "Sali piano dopo piano contro rivali sempre più forti. Scegli la sfida dalla lista."},
+    {"Combates seguidos con la vida que te queda. Elige el reto en la lista.",
+     "Back-to-back fights with the health you have left. Pick the challenge from the list.",
+     "Des combats à la suite avec la vie qui te reste. Choisis le défi dans la liste.",
+     "Kämpfe am Stück mit deiner restlichen Energie. Wähle die Herausforderung aus der Liste.",
+     "Scontri di fila con la vita che ti resta. Scegli la sfida dalla lista."},
+    {"Jefes uno tras otro, un torneo de 4 y misiones de héroe. Elige el reto en la lista.",
+     "Bosses one after another, a 4-fighter tournament and hero missions. Pick the challenge from the list.",
+     "Des boss l'un après l'autre, un tournoi à 4 et des missions de héros. Choisis le défi dans la liste.",
+     "Bosse nacheinander, ein Turnier zu viert und Heldenmissionen. Wähle die Herausforderung aus der Liste.",
+     "Boss uno dopo l'altro, un torneo a 4 e missioni da eroe. Scegli la sfida dalla lista."}};
+constexpr Texts kWord[3] = {{"piso", "floor", "étage", "Etage", "piano"},
+                            {"oleada", "wave", "vague", "Welle", "ondata"},
+                            {"jefe", "boss", "boss", "Boss", "boss"}};
+// aviso de guardado (el juego: "Guardando contenido. No apagues tu consola." y "Guardado con exito.")
+constexpr Texts kSaving = {"Guardando datos del HUB.\nNo cierres el juego.", "Saving HUB data.\nDo not close the game.",
+                           "Sauvegarde des données du HUB.\nNe ferme pas le jeu.",
+                           "HUB-Daten werden gespeichert.\nSchließe das Spiel nicht.",
+                           "Salvataggio dei dati dell'HUB.\nNon chiudere il gioco."};
+constexpr Texts kSaved = {"Guardado con éxito.", "Saved successfully.", "Sauvegarde réussie.", "Erfolgreich gespeichert.",
+                          "Salvataggio riuscito."};
+constexpr int kSayRow = kMaxEntries;   // el bocadillo dice lo de la fila HUB (no una entrada)
 
 // geometria (px del area 4:3 a 900 de alto)
 constexpr float kInX0 = 110, kInX1 = 568;                  // interior del marco del menu
@@ -91,6 +112,24 @@ constexpr float kBoxX0 = 160, kBoxY0 = 606, kBoxX1 = 520, kBoxY1 = 650;   // la 
 constexpr float kLogoX = 962, kLogoY = 94, kLogoW = 400;   // logo sobre el papel de la cinta
 constexpr ImU32 kDim = IM_COL32(148, 148, 148, 255), kOff = IM_COL32(90, 90, 110, 200);
 constexpr int kMaxFlyers = 8;                              // hub/vuelo_1..8 del pack
+// Aviso de guardado, medido en el del juego (Opciones > Guardar partida, 2026-10-15, capturas
+// D:/DBZ3HD/_pruebas/20261015-085521_hub_test_guardar_si): el area 4:3 se oscurece al 22 % (las tiras de los
+// lados no), caja verde translucida centrada (x 60..1140, y 231..548 del area 1200x900), filo verde claro de 1 px,
+// letra blanca perfilada centrada (renglones cada 40 px). "Guardando contenido" ~3 s (aunque escriba en 50 ms),
+// "Guardado con exito" ~2 s; entra y sale escalando 0,85 -> 1 con fundido (~0,3 s).
+// La letra del juego mide ~35 px de em a 900p; ImGui da el tamano por alto de renglon (em x 1,33): 46.
+constexpr float kSaveX0 = 60, kSaveY0 = 231, kSaveX1 = 1140, kSaveY1 = 548, kSaveText = 46, kSaveStep = 40;
+constexpr float kSaveDim = 0.78f, kSaveFill = 0.55f, kSaveIconH = 150;
+constexpr int64_t kSavingMs = 3000, kSavedMs = 2000, kSaveAnimMs = 300;
+std::atomic<int64_t> g_saving_at{-100000};
+
+// Icono del guardado al tamano mas cercano por arriba (sin mipmaps: reducir mas de 2x se ve con dientes).
+S::Pic SaveIcon(float h) {
+  S::Pic p;
+  if (h <= 64) p = S::Img("hub/guardado_64");
+  if (!p && h <= 128) p = S::Img("hub/guardado_128");
+  return p ? p : S::Img("hub/guardado");
+}
 
 float Ease(float t) {
   t = std::clamp(t, 0.0f, 1.0f);
@@ -105,7 +144,7 @@ void FadeVerts(ImDrawList* dl, int from, float a) {
 // Etiqueta de una entrada: la pieza con la letra del menu (etq_<idioma>_<clave>, 2x del atlas del juego)
 // con el borde izquierdo en x y centrada en y; sin ella, la fuente. Si pasa de max_w (px del area), se
 // encoge. Devuelve el borde derecho.
-float Label(ImDrawList* dl, const S::Area& a, const char* key, const Text& name, float x, float y, float k,
+float Label(ImDrawList* dl, const S::Area& a, const char* key, const char* name, float x, float y, float k,
             ImU32 tint, bool selected, float max_w = 1e9f) {
   std::string pic = std::string("etq_") + T::LangCode() + "_" + key;
   S::Pic p = S::Img(pic.c_str());
@@ -119,7 +158,7 @@ float Label(ImDrawList* dl, const S::Area& a, const char* key, const Text& name,
     S::DrawPic(dl, p, p0, ImVec2(p0.x + w, p0.y + h), ImVec4(0, 0, 0, 0), tint);
     return x + p.w * kk;
   }
-  const char* text = T::T(name.es, name.en);
+  const char* text = name;
   ImFont* font = dbz3::launcher::ui::GetFonts().menu ? dbz3::launcher::ui::GetFonts().menu : ImGui::GetFont();
   float size = 52 * k / 0.66f * a.s;
   float w = font->CalcTextSizeA(size, FLT_MAX, 0, text).x;
@@ -138,8 +177,10 @@ float Label(ImDrawList* dl, const S::Area& a, const char* key, const Text& name,
 }
 
 // Texto en el bocadillo del menu principal (el del juego queda vacio): letra redonda gris oscuro; `title`
-// (opcional) en un renglon propio en naranja oscuro, como los nombres del juego.
-void BubbleText(ImDrawList* dl, const S::Area& a, const std::string& title, const char* text, float alpha) {
+// (opcional) en un renglon propio en naranja oscuro, como los nombres del juego; `marks` (opcional) en el
+// ultimo renglon con el icono del guardado delante (hub/guardado).
+void BubbleText(ImDrawList* dl, const S::Area& a, const std::string& title, const char* text, float alpha,
+                const std::string& marks = {}) {
   if (alpha <= 0.01f) return;
   ImFont* font = dbz3::launcher::ui::GetFonts().menu;
   if (!font) font = ImGui::GetFont();
@@ -147,31 +188,43 @@ void BubbleText(ImDrawList* dl, const S::Area& a, const std::string& title, cons
   const float wrap = 600 * a.s;
   struct Line {
     const char *s, *e;
-    bool title;
+    int kind;   // 0 texto, 1 titulo, 2 marcas (el primero lleva el icono)
   };
   std::vector<Line> lines;
-  auto split = [&](const char* s, bool is_title) {
+  const S::Pic icon = marks.empty() ? S::Pic{} : SaveIcon(size * 1.15f);
+  auto split = [&](const char* s, int kind) {
     while (*s) {
-      const char* e = font->CalcWordWrapPosition(size, s, s + std::strlen(s), wrap);
+      const float w = kind == 2 && icon && (lines.empty() || lines.back().kind != 2) ? wrap - size * 1.3f : wrap;
+      const char* e = font->CalcWordWrapPosition(size, s, s + std::strlen(s), w);
       if (e == s) e = s + 1;
-      lines.push_back({s, e, is_title});
+      lines.push_back({s, e, kind});
       s = e;
       while (*s == ' ' || *s == '\n') ++s;
     }
   };
   for (int k = 0; k < 4; ++k) {   // caben 4 renglones; con mas, letra y renglon mas pequenos
     lines.clear();
-    if (!title.empty()) split(title.c_str(), true);
-    split(text, false);
+    if (!title.empty()) split(title.c_str(), 1);
+    split(text, 0);
+    if (!marks.empty()) split(marks.c_str(), 2);
     if (lines.size() <= 4) break;
     size *= 0.88f;
     step *= 0.84f;
   }
   float y = a.At(0, 754).y - step * float(lines.size()) * 0.5f;
+  bool first_mark = true;
   for (const Line& l : lines) {
     const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0, l.s, l.e);
-    const ImU32 col = l.title ? IM_COL32(176, 70, 14, int(255 * alpha)) : IM_COL32(52, 52, 52, int(255 * alpha));
-    dl->AddText(font, size, ImVec2(a.At(409, 0).x - ts.x * 0.5f, y + (step - ts.y) * 0.5f), col, l.s, l.e);
+    const ImU32 col = l.kind == 1 ? IM_COL32(176, 70, 14, int(255 * alpha)) : IM_COL32(52, 52, 52, int(255 * alpha));
+    float x = a.At(409, 0).x - ts.x * 0.5f;
+    if (l.kind == 2 && first_mark && icon) {   // icono del guardado, un poco mas alto que la letra
+      first_mark = false;
+      const float h = size * 1.15f, w = icon.w * h / icon.h, gap = size * 0.25f;
+      x += (w + gap) * 0.5f;
+      const ImVec2 p0(x - gap - w, y + (step - h) * 0.5f);
+      S::DrawPic(dl, icon, p0, ImVec2(p0.x + w, p0.y + h), ImVec4(0, 0, 0, 0), IM_COL32(255, 255, 255, int(255 * alpha)));
+    }
+    dl->AddText(font, size, ImVec2(x, y + (step - ts.y) * 0.5f), col, l.s, l.e);
     y += step;
   }
 }
@@ -224,18 +277,43 @@ const Reto& RetoOf(int e, double t) {
   return r;
 }
 
-// "Récord: piso 5/8 con Goku - Guardado: piso 3" (modos.cpp; tipo 0 torre, 1 supervivencia, 2 kumite).
-std::string Marks(int tipo) {
-  static const Text kWord[3] = {{"piso", "floor"}, {"oleada", "wave"}, {"jefe", "boss"}};
-  const char* w = T::T(kWord[tipo].es, kWord[tipo].en);
-  int id = 0, best = 0, total = 0, done = 0, won = 0;
-  std::string s = dbz3::modos::Record(tipo, &id, &best, &total, &done)
-                      ? std::string(T::T("Récord: ", "Record: ")) + w + " " + std::to_string(best) + "/" +
-                            std::to_string(total) + T::T(" con ", " with ") + dbz3::modos::Nombre(id)
-                      : std::string(T::T("Sin récord", "No record"));
-  if (dbz3::modos::Guardado(tipo, &id, &won)) {
-    s += std::string(T::T(" - Guardado: ", " - Saved: ")) + w + " " + std::to_string(won + 1);
+// Monedero de Zenie del HUB (user_data/dbz3/rpg.toml, clave zeni, de rpg.cpp; -1 sin el fichero). Se relee como
+// mucho cada 2 s.
+int Wallet(double t) {
+  static int zeni = 0;
+  static double checked = -10;
+  static std::filesystem::file_time_type seen{};
+  if (t - checked < 2.0) return zeni;
+  checked = t;
+  const auto path = dbz3::settings::UserDataRoot() / "rpg.toml";
+  std::error_code ec;
+  const auto mt = std::filesystem::last_write_time(path, ec);
+  if (ec) return zeni = -1;   // sin rpg.toml: sin monedero
+  if (mt == seen) return zeni;
+  seen = mt;
+  try {
+    std::ifstream in(path, std::ios::binary);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    zeni = int(toml::parse(ss.str())["zeni"].value_or(int64_t(0)));
+  } catch (const std::exception&) {
+    zeni = 0;
   }
+  return zeni;
+}
+
+// "Récord: piso 5/8 con Goku - Guardado: piso 3" (modos.cpp; tipo 0 torre, 1 supervivencia, 2 kumite).
+// *any = hay record o reto guardado (el bocadillo pone entonces el icono del guardado delante).
+std::string Marks(int tipo, bool* any) {
+  const char* w = Tr(kWord[tipo]);
+  int id = 0, best = 0, total = 0, done = 0, won = 0;
+  const bool rec = dbz3::modos::Record(tipo, &id, &best, &total, &done);
+  std::string s = rec ? std::string(Tr(kRecord)) + w + " " + std::to_string(best) + "/" + std::to_string(total) +
+                            Tr(kWith) + dbz3::modos::Nombre(id)
+                      : std::string(Tr(kNoRecord));
+  const bool saved = dbz3::modos::Guardado(tipo, &id, &won);
+  if (saved) s += std::string(Tr(kSavedAt)) + w + " " + std::to_string(won + 1);
+  *any = rec || saved;
   return s;
 }
 
@@ -245,6 +323,15 @@ class HubPanel : public rex::ui::ImGuiDialog {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+    // El aviso de guardado va encima de las pantallas de los modos (dialogos creados despues, p. ej. la del
+    // Laboratorio): al empezar uno, este dialogo pasa al final de la lista y el dibujante lo vuelve a llamar en
+    // este mismo fotograma, el ultimo.
+    if (const int64_t at = g_saving_at.load(); at != front_at_) {
+      front_at_ = at;
+      imgui_drawer()->RemoveDialog(this);
+      imgui_drawer()->AddDialog(this);
+      return;
+    }
     if (dbz3::GameDimmed() || dbz3::OverlayOpen()) return;
     const View v = Snapshot();
     const float t = float(ImGui::GetTime()), dt = std::min(io.DeltaTime, 0.1f);
@@ -273,7 +360,7 @@ class HubPanel : public rex::ui::ImGuiDialog {
     if (shown) {
       const S::Area a = S::GameArea(io);
       // el bocadillo: su texto entra al cambiar (el del juego se funde a la vez)
-      const int say = v.open && !closing ? v.cursor : (v.row_focus && v.fade == Fade::kNone ? kEntries : -1);
+      const int say = v.open && !closing ? v.cursor : (v.row_focus && v.fade == Fade::kNone ? kSayRow : -1);
       if (say != said_) {
         said_ = say;
         said_at_ = t;
@@ -284,6 +371,21 @@ class HubPanel : public rex::ui::ImGuiDialog {
     }
     if (black > 0.0f) dl->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, int(255 * black)));
     if (v.menu && v.fade != Fade::kNone && v.fade_to_hub) DrawFlyer(dl, io, v);
+    WatchSaves(t);
+    // el aviso, solo con el HUB o el menu principal a la vista y quietos: nunca en combate (ni en la espera en negro de
+    // los encadenados), ni encima de las pantallas propias de los modos (selector, Laboratorio, entre combates,
+    // pantalla final), ni en un fundido. Un guardado entonces espera y sale entero al volver (rpg.md, propuesta 2).
+    const int64_t since = ClockMs() - g_saving_at.load();
+    const bool calm = shown && v.fade == Fade::kNone && !OwnBattle() && !dbz3::tag::InBattle();
+    TestSe(v, t);
+    if (!calm) {
+      if (since >= 0 && since <= kSavingMs + kSavedMs + kSaveAnimMs) save_wait_ = true;
+    } else if (save_wait_) {
+      save_wait_ = false;
+      g_saving_at = ClockMs();
+    } else {
+      DrawSaving(dl, io);
+    }
   }
 
  private:
@@ -297,7 +399,7 @@ class HubPanel : public rex::ui::ImGuiDialog {
     dl->AddRectFilled(r0, r1, IM_COL32(8, 40, 56, 235));
     S::Frame(dl, r0, r1, a.s);
     if (lit) S::Highlight(dl, r0, r1, t);
-    int vis[kEntries];
+    int vis[kMaxEntries];
     const int n = VisibleEntries(vis);
     const int pages = (n + kPerPage - 1) / kPerPage;
     if (v.open && pages > 1) {
@@ -307,7 +409,7 @@ class HubPanel : public rex::ui::ImGuiDialog {
     } else {
       const S::Pic p = S::Img((std::string("etq_") + T::LangCode() + "_hub").c_str());
       const float k = 0.66f, w = p ? p.w * k : 120;
-      Label(dl, a, "hub", {"HUB", "HUB"}, (kBoxX0 + kBoxX1 - w) * 0.5f, (kBoxY0 + kBoxY1) * 0.5f, k,
+      Label(dl, a, "hub", "HUB", (kBoxX0 + kBoxX1 - w) * 0.5f, (kBoxY0 + kBoxY1) * 0.5f, k,
             lit ? IM_COL32_WHITE : kDim, lit);
     }
     FadeVerts(dl, v0, row_a_);
@@ -351,37 +453,56 @@ class HubPanel : public rex::ui::ImGuiDialog {
     alpha *= Ease((t - said_at_ - 0.12f) / 0.25f);
     std::string title;
     std::string body;
-    if (say >= kEntries) {
-      body = T::T(kRowHelp.es, kRowHelp.en);
+    std::string marks;   // record y reto guardado, con el icono del guardado delante
+    if (say >= kSayRow) {
+      body = Tr(kRowHelp);
     } else {
-      body = T::T(kHelp[say].es, kHelp[say].en);
+      body = EntryHelp(say);
       if (!EntryReady(say)) {
         if (const char* why = EntryWhy(say)) {   // gris por algo del jugador (RegisterGate): su explicacion
           body = why;
         } else {
           body += " ";
-          body += T::T(kSoon.es, kSoon.en);
+          body += Tr(kSoon);
         }
-      } else if (say == kTower || say == kSurvival || say == kKumite) {   // el reto puesto
+      } else if (say == kQuick) {   // el ultimo combate rapido, con el nombre del escenario
+        if (int p1, p2, st; LastQuick(&p1, &p2, &st)) {
+          body += std::string("\n") + Tr(kLastQuick) + dbz3::modos::Nombre(p1) + Tr(kVs) + dbz3::modos::Nombre(p2) +
+                  " (" + dbz3::escenarios::Nombre(st) + ")";
+        }
+      } else if (say == kTower || say == kSurvival || say == kKumite) {
+        // abren el selector de rpg.cpp: su lista arriba, la ayuda, el reto clasico puesto (si no es el de serie),
+        // y abajo el record/reto guardado del clasico y el monedero con el icono del guardado
+        const int k = say - kTower;
+        int n = 0;
+        while (n < 4 && kLists[k][n] >= 0) ++n;
+        for (int i = 0; i < n; ++i) {   // "Torre, Torres del Tiempo y Abyss"
+          if (i > 0) title += i == n - 1 ? Tr(kAnd) : ", ";
+          title += dbz3::modos::NombreModo(kLists[k][i]);
+        }
+        body = Tr(kListHelp[k]);
         const Reto& r = RetoOf(say, t);
         if (!r.name.empty()) {
-          title = std::string(T::T("Reto: ", "Challenge: ")) + r.name;
-          if (r.fights > 0) title += " (" + std::to_string(r.fights) + ")";
-          if (!r.desc.empty()) body = r.desc;
-        } else {
-          title = T::T("Reto: el de serie", "Challenge: built-in");
+          body += std::string(" ") + Tr(kClassic) + r.name;
+          if (r.fights > 0) body += " (" + std::to_string(r.fights) + ")";
+          body += ".";
         }
-        body += "\n" + Marks(say - kTower);
+        bool any = false;
+        std::string m = Marks(k, &any);
+        if (const int zeni = Wallet(t); zeni >= 0) {
+          m += std::string(" - ") + Tr(kWallet) + std::to_string(zeni) + " Zenie";
+          any = true;
+        }
+        if (any) marks = std::move(m);
+        else body += "\n" + m;
       }
     }
-    if (has_bg_) {   // con el fondo del pack, el bocadillo del juego queda debajo: el nuestro
-      const std::string all = title.empty() ? body : title + "\n" + body;
+    if (has_bg_) {   // con el fondo del pack, el bocadillo del juego queda debajo: el nuestro (vacio) y el texto encima
       const int v0 = dl->VtxBuffer.Size;
-      S::Speech(dl, a.At(30, 650), a.At(790, 858), a.s, all.c_str(), 0.88f);
+      S::Speech(dl, a.At(30, 650), a.At(790, 858), a.s, "", 0.88f);
       FadeVerts(dl, v0, alpha);
-      return;
     }
-    BubbleText(dl, a, title, body.c_str(), alpha);
+    BubbleText(dl, a, title, body.c_str(), alpha, marks);
   }
 
   void DrawScreen(ImDrawList* dl, const S::Area& a, const View& v, float t, float dt) {
@@ -398,7 +519,7 @@ class HubPanel : public rex::ui::ImGuiDialog {
     }
     DrawTitle(dl, a, t);
     // pagina del cursor y sus filas
-    int vis[kEntries];
+    int vis[kMaxEntries];
     const int n = VisibleEntries(vis);
     int pos = 0;
     while (pos < n && vis[pos] != v.cursor) ++pos;
@@ -427,14 +548,16 @@ class HubPanel : public rex::ui::ImGuiDialog {
       const int e0 = dl->VtxBuffer.Size;
       const bool sel = e == v.cursor, ready = EntryReady(e);
       const ImU32 tint = !ready ? kOff : sel ? IM_COL32_WHITE : kDim;
-      if (const S::Pic ic = S::Img((std::string("modo_") + EntryKey(e)).c_str())) {
+      S::Pic ic = S::Img((std::string("modo_") + EntryKey(e)).c_str());
+      if (!ic) ic = S::Img("modo_extra");   // entrada nueva sin insignia propia
+      if (ic) {
         const float s = (sel ? 52.0f + 3.0f * std::sin(t * 5.0f) : 46.0f) * a.s;
         const ImVec2 c = a.At(kIconX + 23 + dx, y);
         S::DrawPic(dl, ic, ImVec2(c.x - s * 0.5f, c.y - s * 0.5f), ImVec2(c.x + s * 0.5f, c.y + s * 0.5f),
                    ImVec4(0, 0, 0, 0), ready ? (sel ? IM_COL32_WHITE : kDim) : kOff);
       }
       const bool beta = e == kTagTeam || e == kOnline;   // siempre como beta (Tag Team y Online)
-      const float right = Label(dl, a, EntryKey(e), kNames[e], kLabelX + dx, y, kLabelK, tint, sel,
+      const float right = Label(dl, a, EntryKey(e), EntryName(e), kLabelX + dx, y, kLabelK, tint, sel,
                                 kLabelMax - (beta ? 70.0f : 0.0f));
       if (beta) {
         if (const S::Pic b = S::Img("beta")) {
@@ -492,6 +615,92 @@ class HubPanel : public rex::ui::ImGuiDialog {
     }
   }
 
+  // Prueba de QueueSe (DBZ3_TEST_HUB_SE=1): con el menu principal 10 s seguidos a la vista, 12 s de sonidos desde este
+  // hilo (mover y aceptar cada 0,3 s), para compararlos con la linea "audio pico/rms" del log (cada 5 s).
+  void TestSe(const View& v, float t) {
+    static const bool on = [] {   // DBZ3_TEST_HUB_SE=log: solo el log de lo que suena, sin rafaga
+      const char* e = std::getenv("DBZ3_TEST_HUB_SE");
+      return e && std::strcmp(e, "log") != 0;
+    }();
+    if (!on) return;
+    if (!v.menu) {   // otra pantalla: se cuenta de nuevo al volver al menu
+      se_menu_at_ = -1;
+      return;
+    }
+    if (se_menu_at_ < 0) se_menu_at_ = t;
+    const float el = t - se_menu_at_;
+    if (el < 10.0f || el > 22.0f || t - se_last_ < 0.3f) return;
+    if (se_last_ < 0) REXLOG_INFO("dbz3 hub: prueba: 12 s de sonidos de la cola (QueueSe) desde ahora");
+    se_last_ = t;
+    QueueSe(se_n_++ % 2 ? kSeOkId : kSeMoveId);
+  }
+
+  // Vigila user_data/dbz3/hub_*.toml y rpg.toml (cada 0,5 s): si alguno cambia con el HUB en uso (InSession),
+  // aviso de guardado. La primera vuelta solo apunta las fechas (lo que habia al abrir el juego no es un guardado).
+  void WatchSaves(float t) {
+    if (t - watch_at_ < 0.5f) return;
+    watch_at_ = t;
+    std::error_code ec;
+    int64_t newest = 0;
+    for (const auto& f : std::filesystem::directory_iterator(dbz3::settings::UserDataRoot(), ec)) {
+      const std::string n = f.path().filename().string();
+      const bool hub = n.size() > 9 && n.compare(0, 4, "hub_") == 0 && n.compare(n.size() - 5, 5, ".toml") == 0;
+      if (!hub && n != "rpg.toml") continue;   // rpg.toml: monedero y partidas de los retos de rol (rpg.cpp)
+      const auto mt = f.last_write_time(ec);
+      if (!ec) newest = std::max<int64_t>(newest, int64_t(mt.time_since_epoch().count()));
+    }
+    if (watched_ && newest > newest_ && InSession()) ShowSaving();   // fuera del HUB: el resumen de un Duelo
+    newest_ = std::max(newest_, newest);
+    watched_ = true;
+  }
+
+  // Aviso de guardado como el del juego (ver kSaveX0): oscurece el area 4:3, caja verde con el texto y nuestro
+  // icono (hub/guardado) a la izquierda. Solo se dibuja: el mando sigue para el juego.
+  void DrawSaving(ImDrawList* dl, const ImGuiIO& io) {
+    const int64_t ms = ClockMs() - g_saving_at.load();
+    const int64_t shown = kSavingMs + kSavedMs;
+    if (ms < 0 || ms > shown + kSaveAnimMs) return;
+    const float k = std::min(Clamp01(float(ms) / kSaveAnimMs), Clamp01(float(shown + kSaveAnimMs - ms) / kSaveAnimMs));
+    const S::Area a = S::GameArea(io);
+    dl->AddRectFilled(a.p0, a.p1, IM_COL32(0, 0, 0, int(255 * kSaveDim * k)));
+    const float sc = 0.85f + 0.15f * Ease(k);
+    const ImVec2 c = a.At((kSaveX0 + kSaveX1) * 0.5f, (kSaveY0 + kSaveY1) * 0.5f);
+    const ImVec2 half((kSaveX1 - kSaveX0) * 0.5f * a.s * sc, (kSaveY1 - kSaveY0) * 0.5f * a.s * sc);
+    const ImVec2 p0(c.x - half.x, c.y - half.y), p1(c.x + half.x, c.y + half.y);
+    dl->AddRectFilled(p0, p1, IM_COL32(8, 187, 58, int(255 * kSaveFill * k)));
+    dl->AddRect(p0, p1, IM_COL32(30, 170, 80, int(255 * k)), 0, 0, std::max(1.0f, a.s));
+    if (k < 0.5f) return;   // el texto sale con la caja ya casi entera (como en el juego)
+    const int v0 = dl->VtxBuffer.Size;
+    const float ih = kSaveIconH * a.s * sc;
+    if (const S::Pic icon = SaveIcon(ih)) {
+      const float pulse = ms < kSavingMs ? 1.0f + 0.04f * std::sin(float(ms) * 0.008f) : 1.0f;   // late mientras guarda
+      const float h = ih * pulse, w = icon.w * h / icon.h;
+      const ImVec2 ic(p0.x + (40 * a.s + ih * 0.5f) * sc, c.y);
+      S::DrawPic(dl, icon, ImVec2(ic.x - w * 0.5f, ic.y - h * 0.5f), ImVec2(ic.x + w * 0.5f, ic.y + h * 0.5f));
+    }
+    ImFont* font = dbz3::launcher::ui::GetFonts().speech ? dbz3::launcher::ui::GetFonts().speech : ImGui::GetFont();
+    const float size = kSaveText * a.s * sc, step = kSaveStep * a.s * sc;
+    const char* text = Tr(ms < kSavingMs ? kSaving : kSaved);
+    int lines = 1;
+    for (const char* q = text; *q; ++q) lines += *q == '\n';
+    float y = c.y - step * float(lines) * 0.5f;
+    for (const char* s0 = text; *s0;) {
+      const char* e = std::strchr(s0, '\n');
+      if (!e) e = s0 + std::strlen(s0);
+      const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0, s0, e);
+      const ImVec2 at(c.x - ts.x * 0.5f, y + (step - ts.y) * 0.5f);
+      const float o = std::max(1.0f, 1.5f * a.s);   // perfil negro fino, como la letra del juego
+      for (const ImVec2 d : {ImVec2(-o, 0), ImVec2(o, 0), ImVec2(0, -o), ImVec2(0, o), ImVec2(-o, -o), ImVec2(o, o),
+                             ImVec2(-o, o), ImVec2(o, -o)}) {
+        dl->AddText(font, size, ImVec2(at.x + d.x, at.y + d.y), IM_COL32(0, 0, 0, 255), s0, e);
+      }
+      dl->AddText(font, size, at, IM_COL32(244, 244, 240, 255), s0, e);
+      y += step;
+      s0 = *e ? e + 1 : e;
+    }
+    FadeVerts(dl, v0, (k - 0.5f) * 2.0f);
+  }
+
   // El siguiente hub/vuelo_<n> que tenga el pack (se turnan); 0 sin ninguno.
   int NextFlyer() {
     for (int k = 1; k <= kMaxFlyers; ++k) {
@@ -503,12 +712,25 @@ class HubPanel : public rex::ui::ImGuiDialog {
   }
 
   float row_a_ = 0, screen_a_ = 0, stripe_y_ = -1, opened_at_ = 0, said_at_ = 0, page_at_ = -10, page_dir_ = 1;
+  float watch_at_ = -1;
+  int64_t newest_ = 0, front_at_ = -100000;   // front_at_: aviso que ya paso al final de la lista
+  bool watched_ = false, save_wait_ = false;
+  float se_menu_at_ = -1, se_last_ = -1;   // TestSe
+  int se_n_ = 0;
+  static constexpr int kSeMoveId = 2, kSeOkId = 3;   // save_wait_: aviso guardado para la vuelta al menu
   bool was_open_ = false, has_bg_ = false;
   int said_ = -2, page_ = -1, fly_ = 0, fly_last_ = 0;
   int64_t fly_t0_ = 0;
 };
 
 }  // namespace
+
+void ShowSaving() {   // otro guardado con el aviso en pantalla: vuelve a "Guardando" sin volver a entrar
+  const int64_t now = ClockMs(), at = g_saving_at.load();
+  const bool shown = now - at >= 0 && now - at <= kSavingMs + kSavedMs + kSaveAnimMs;
+  g_saving_at = shown ? now - std::min<int64_t>(now - at, kSaveAnimMs) : now;
+  REXLOG_INFO("dbz3 hub: aviso de guardado{}", shown ? " (sigue)" : "");
+}
 
 void CreatePanel() {
   static HubPanel* panel = nullptr;   // vive lo que el juego (el dibujante no borra sus dialogos)

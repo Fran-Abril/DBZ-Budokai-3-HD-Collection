@@ -4740,6 +4740,39 @@ bool D3D12RenderTargetCache::Dbz3BeginReadLastDepth(ID3D12Resource*& resource_ou
   return true;
 }
 
+bool D3D12RenderTargetCache::Dbz3BeginRelight(uint32_t index,
+                                              D3D12_CPU_DESCRIPTOR_HANDLE& color_rtv_out,
+                                              DXGI_FORMAT& color_format_out, uint32_t& width_out,
+                                              uint32_t& height_out) {
+  if (GetPath() != Path::kHostRenderTargets || index >= xenos::kMaxColorRenderTargets) {
+    return false;
+  }
+  RenderTarget* const* render_targets = last_update_accumulated_render_targets();
+  if (!render_targets || !render_targets[1 + index]) {
+    return false;
+  }
+  auto& color_rt = *static_cast<D3D12RenderTarget*>(render_targets[1 + index]);
+  RenderTargetKey color_key = color_rt.key();
+  if (color_key.msaa_samples != xenos::MsaaSamples::k1X || color_key.Is64bpp() ||
+      !color_rt.resource()) {
+    return false;
+  }
+  DXGI_FORMAT color_format = GetColorDrawDXGIFormat(color_key.GetColorFormat());
+  if (color_format == DXGI_FORMAT_UNKNOWN) {
+    return false;
+  }
+  D3D12_RESOURCE_DESC color_desc = color_rt.resource()->GetDesc();
+  command_processor_.PushTransitionBarrier(
+      color_rt.resource(), color_rt.SetResourceState(D3D12_RESOURCE_STATE_RENDER_TARGET),
+      D3D12_RESOURCE_STATE_RENDER_TARGET);
+  are_current_command_list_render_targets_valid_ = false;
+  color_rtv_out = color_rt.descriptor_draw().GetHandle();
+  color_format_out = color_format;
+  width_out = uint32_t(color_desc.Width);
+  height_out = color_desc.Height;
+  return true;
+}
+
 void D3D12RenderTargetCache::SetCommandListRenderTargets(
     RenderTarget* const* depth_and_color_render_targets) {
   assert_true(GetPath() == Path::kHostRenderTargets);

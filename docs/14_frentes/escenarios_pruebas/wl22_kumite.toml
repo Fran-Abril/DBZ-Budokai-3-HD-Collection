@@ -1,0 +1,15 @@
+# Reto de prueba WL-22 (frente escenarios): un combate con intro de cine y premio. Va en user_data/dbz3/modos/.
+nombre = "Prueba intro"
+name = "Intro test"
+vida = 3000
+vida_inicial = 0
+arrastra_vida = false
+recupera = 0
+pausa = false
+premio = 777
+intro = true
+
+[[combate]]
+rival = 7
+escenario = 7
+vida = 0

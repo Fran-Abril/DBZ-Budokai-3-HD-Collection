@@ -59,13 +59,11 @@ TOOLS_DIR = _first_existing(
 XBCOMPRESS = os.path.join(TOOLS_DIR, 'xbcompress.exe')
 XBDECOMPRESS = os.path.join(TOOLS_DIR, 'xbdecompress.exe')
 
-# AFS del B3 (modelos). Deteccion por prioridad: junto al exe (paquete release)
-# o en el proyecto de desarrollo. En el paquete "mod center hd/" vive DENTRO de
-# la carpeta del exe, asi que ROOT (padre de la carpeta del script) ES el exe.
-DEFAULT_AFS = _first_existing(
-    os.path.join(ROOT, 'assets', 'us', 'data_cmn.afs'),
-    os.path.join(ROOT, 'us', 'data_cmn.afs'),
-)
+# AFS del B3 (modelos): la misma deteccion validada que swap_b3 (antes solo assets/us y us, sin
+# comprobar que fuera el data_cmn.afs del Budokai 3 HD ni mirar eu/, DBZ3/us o la carpeta del launcher).
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+from swap_b3 import DEFAULT_AFS, b3_afs  # noqa: E402
 
 
 def sanitize_name(name):
@@ -579,9 +577,7 @@ def main():
     pb.set_defaults(func=cmd_build)
 
     args = ap.parse_args()
-    if not os.path.exists(args.afs):
-        print('ERROR: no se encontro %s' % args.afs)
-        return 1
+    args.afs = b3_afs(args.afs)
     if not os.path.exists(XBCOMPRESS):
         print('ERROR: no se encontro xbcompress en %s' % TOOLS_DIR)
         return 1

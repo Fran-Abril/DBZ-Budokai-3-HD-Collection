@@ -208,4 +208,7 @@ salta la attract demo battle 3D.
 - `mod center hd/pasarela/pasarela.py` (`info`, `extraer --salida DIR`, `prueba`): lee de la ISO de Budokai 1 del jugador la Leyenda de Mr. Satan (misma logica que `src/pasarela_b1.cpp`); lo extraido no va al repo.
 - `mod center hd/retos_predefinidos.py`: pone o quita un reto de `campanas/retos/` (torre, supervivencia, kumite) y la torre de la semana; tambien desde el Mod Kit (Historias > Retos predefinidos).
 - `tools/compilar.py`: compila el exe dual con candado compartido y copia las DLL canonicas.
-- `tools/pruebas.py`: pruebas en el juego por escenarios (.toml de pasos), hasta 3 copias a la vez; ver `docs/14_frentes/pruebas.md`.
+- `tools/pruebas.py`: pruebas en el juego por escenarios (.toml de pasos), hasta 3 copias a la vez y una prueba por copia (candado `D:\DBZ3HD\_en_uso_<copia>`); ver `docs/14_frentes/pruebas.md`.
+- `tools/eu_map.py`: mapa US->EU verificado de funciones y datos que usan los ficheros de `src/` (genera `src/eu_map_gen.h` y `docs/14_frentes/eu_mapa.txt`); `tools/eu_convertir.py`: pasa un fichero a ganchos/direcciones con pareja EU (`src/eu_map.h`). Ver `docs/14_frentes/eu.md`.
+- `studies/tools/frame_data.py`: tabla de frame data estilo Budokai 4 (entradas, cuadros, dano por situacion) desde los ficheros del juego; ver `docs/14_frentes/combate.md`.
+- `mod center hd/forma_unica.py`: respaldo de la capsula "Todas las transformaciones" (hoy la genera el propio juego al arrancar, `src/transformaciones.cpp`); ver `docs/14_frentes/transformaciones.md`.

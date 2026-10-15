@@ -1,0 +1,38 @@
+# Leyenda de Mr. Satan, regla de B1 en codigo: ki lento contra Piccolo (Mr. Satan gana la mitad de ki). Combate entero sin ring out (Mr. Satan se acerca y pega);
+# al acabar, el registro de VigilarCombate dice lo que hizo la regla.
+# python tools/pruebas.py correr campanas_test docs/16_pasarela_modos/pruebas/leyenda_regla_piccolo.toml
+descripcion = "Pasarela: leyenda, regla de B1: ki lento contra Piccolo (Mr. Satan gana la mitad de ki)"
+env = ["DBZ3_TEST_PASARELA=auto,desde=13,dificultad=0", "DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games"]
+pasos = [
+  'log "pasarela: ronda 7 \(1/1\): id 14 contra id 11 .*ki lento 0.50" 90',
+  'log "pasarela: paso 14: ki al empezar" 90',
+  'log "pasarela: paso 14 estado del combate 4" 60',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'tecla D 500', 'tecla L 150', 'tecla L 150', 'tecla A 500', 'tecla L 150', 'tecla L 150',
+  'captura 01_combate',
+  'log "pasarela: paso 14: reglas: .*[0-9]+ de ki perdido \(ki lento 0.50" 150',
+  'captura 02_final',
+]

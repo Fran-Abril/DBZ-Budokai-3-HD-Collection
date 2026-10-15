@@ -87,6 +87,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <cctype>
 #include <atomic>
 #include <cstring>
@@ -97,6 +98,11 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+namespace dbz3::formas {
+// transformaciones.cpp: genera mods/_forma_unica (nombres y panel de la capsula unica) si falta o cambio
+bool PrepareNamesMod(const std::vector<std::pair<int, uint32_t>>& banks, const std::string& roster_stamp);
+}
 
 namespace dbz3::roster {
 namespace {
@@ -149,6 +155,14 @@ std::map<uint32_t, uint32_t> g_cap_desc;
 std::map<uint32_t, int32_t> g_hud_fid;
 std::map<uint32_t, uint64_t> g_cap_owner_add;
 std::atomic<bool> g_caps_done{false};
+// Capsula de transformacion unica (ficha 14; mod generado por forma_unica.py con [forma_unica] en su
+// roster.toml): registros 1984 + ID, panel de descripcion y bancos de nombres ampliados (data_usi:
+// carga del banco original -> su copia con el nombre de la capsula unica).
+std::atomic<bool> g_unified_on{false};
+bool g_unified_all = false;              // todas = true: tambien las formas sin desbloquear
+uint32_t g_unified_desc = 0;
+std::vector<uint16_t> g_unified_ids;     // capsulas unicas creadas
+std::map<uint32_t, uint32_t> g_bank_redirect;   // 0x10000 | fid -> 0x10000 | fid
 // fichas de habilidades (lista de la pausa y rotulos de capsula en combate)
 constexpr uint32_t kCostumeCounts = 0x8245F150;   // select: trajes elegibles por casilla
 constexpr uint32_t kSkillTable = 0x82324468;   // 16 B: ID, trajes, HUD (data_cmn), indice
@@ -356,6 +370,14 @@ void ApplyExtraCostume(Guest& g, const toml::table& t, const std::string& mod, u
     if (fid_id >= 105 || !g.U32(kChar96 + fid_id * 96 + 8)) fid_id = id;
     const uint32_t mi = g.U8(kChar96 + fid_id * 96 + 16 + 8 * fi + 2);
     const uint32_t fid = uint32_t(fids[std::min<size_t>(f, fids.size() - 1)]);
+    // Forma con el modelo de OTRO personaje (Super Bu: 4-7 son Piccolo, Gotenks, Gohan y Bu fantasma): si ese ya
+    // tiene un traje con este numero, es suyo y no se pisa (antes se sobrescribia con el modelo de este traje y
+    // dependia del orden de las carpetas); si no lo tiene, se le anade como siempre.
+    if (fid_id != id && costume < g.U8(kChar96 + fid_id * 96 + 4)) {
+      REXLOG_INFO("dbz3 roster [{}]: traje {} de id {}: forma {} usa el modelo de id {}, que ya tiene su traje {} "
+                  "(no se toca)", mod, costume + 1, id, f, fid_id, costume + 1);
+      continue;
+    }
     if (mi == 0xFF || std::find(done.begin(), done.end(), (fid_id << 8) | mi) != done.end()) {
       REXLOG_INFO("dbz3 roster [{}]: traje {} de id {}: forma {} comparte el modelo {} (se ignora {})",
                   mod, costume + 1, id, f, mi, fid);
@@ -733,6 +755,60 @@ void ReadCapsule(const toml::table& t, const std::string& mod) {
   if (const int64_t d = Int(t["descripcion"], -1); d > 0 && d < 0x10000) g_cap_desc[uint32_t(id)] = uint32_t(d);
 }
 
+// Formas 1..k seguidas que agrupa la capsula unica de `id` (owned: solo hasta la primera sin desbloquear;
+// las capsulas de mods, IDs >= 596, son siempre tuyas). Mismo corte que la subida nativa (sub_82119108).
+int GroupableChain(Guest& g, uint32_t recs, uint32_t count, int id, bool owned) {
+  // PRUEBA (DBZ3_TEST_INV="1,2"): esas capsulas cuentan como desbloqueadas (sin tocar la partida)
+  static const std::string test_inv = [] { const char* e = std::getenv("DBZ3_TEST_INV"); return e ? "," + std::string(e) + "," : ""; }();
+  if (id < 0 || id >= kIds || !recs) return 0;
+  const uint32_t c372 = kChar372 + 372u * uint32_t(id);
+  const uint32_t n = std::min<uint32_t>(g.U32(c372 + 0xD0), forms::kForms);
+  const uint32_t inv = dbz3::GuestAddr(0x824BA110, 0x824BA100) + 0x2AFE9;   // inventario de la partida
+  int k = 0;
+  for (uint32_t f = 1; f < n; ++f) {
+    const uint32_t cap = g.U16(c372 + 212 + 20 * f);
+    if (cap == 0 || cap >= count) break;
+    if (!forms::Groupable(g.U8(c372 + 218 + 20 * f), int(cap), g.U8(recs + kSkcRec * cap + 8))) break;
+    if (owned && !g_unified_all && cap < 596 && g.U8(inv + cap) == 0 &&
+        test_inv.find("," + std::to_string(cap) + ",") == std::string::npos) break;
+    ++k;
+  }
+  return k;
+}
+
+std::string RosterStamp() {
+  std::string stamp;
+  std::ifstream file(ModsRoot() / "_roster" / "build.hash", std::ios::binary);
+  for (char c; stamp.size() < 256 && file.get(c);) {
+    if (c != '\r' && c != '\n') stamp += c;
+  }
+  return stamp;
+}
+
+// [forma_unica] descripcion = fid, bancos = [de, a, ...] (nativos), bancos_roster = [de, a, ...] y
+// roster_hash: los bancos del _roster (y 2663/2684) solo valen con el mismo _roster con que se hicieron.
+void ReadUnified(const toml::table& t, const std::string& mod) {
+  g_unified_on.store(true);
+  g_unified_all = t["todas"].value_or(false);
+  g_unified_desc = uint32_t(std::clamp<int64_t>(Int(t["descripcion"], 0), 0, 0xFFFF));
+  auto pairs = [](const std::vector<int64_t>& v) {
+    for (size_t k = 0; k + 1 < v.size(); k += 2) {
+      if (v[k] > 0 && v[k] < 0x10000 && v[k + 1] > 0 && v[k + 1] < 0x10000)
+        g_bank_redirect[0x10000u | uint32_t(v[k])] = 0x10000u | uint32_t(v[k + 1]);
+    }
+  };
+  pairs(Ints(t["bancos"]));
+  const std::string want = t["roster_hash"].value_or(std::string());
+  if (want == RosterStamp()) {
+    pairs(Ints(t["bancos_roster"]));
+  } else {
+    REXLOG_WARN("dbz3 roster [{}]: capsula unica: el _roster cambio desde que se hizo (vuelve a ejecutar "
+                "forma_unica.py): sin nombres en los menus de los personajes nuevos", mod);
+  }
+  REXLOG_INFO("dbz3 roster [{}]: capsula unica activa ({} bancos de nombres, descripcion {})", mod,
+              g_bank_redirect.size(), g_unified_desc);
+}
+
 void ApplyPatch(Guest& g, const toml::table& t, const std::string& mod) {
   const int64_t addr = Int(t["dir"], -1);
   if (addr < 0x82000000LL || addr >= 0x82700000LL) {
@@ -845,7 +921,7 @@ void GuardGeneratedMod() {
 // (si no, se reintenta desde los hooks del select y del combate).
 void EnsureCapsules() {
   if (g_caps_done.load() || !g_memory) return;
-  if (g_new_caps.empty() && g_cap_owner_add.empty() && (g_unlock.load() >> 44) == 0) {
+  if (g_new_caps.empty() && g_cap_owner_add.empty() && (g_unlock.load() >> 44) == 0 && !g_unified_on.load()) {
     g_caps_done.store(true);
     return;
   }
@@ -857,6 +933,7 @@ void EnsureCapsules() {
   if (n == 0 || n > 4096 || g.U32(kSkcRecPtr) != hdr + start) return;
   uint32_t total = n;
   if (!g_new_caps.empty()) total = std::max(total, g_new_caps.rbegin()->first + 1);
+  if (g_unified_on.load()) total = std::max(total, forms::kUnifiedBase + 64);
   const uint32_t buf = g.Alloc(start + kSkcRec * total);
   if (!buf) {
     REXLOG_ERROR("dbz3 roster: sin memoria para el catalogo de capsulas ampliado");
@@ -881,6 +958,27 @@ void EnsureCapsules() {
   for (const auto& [cid, bits] : g_cap_owner_add) {
     if (cid < total) or_owner(cid, bits);
   }
+  // capsula unica de cada personaje con 2+ transformaciones agrupables: registro de su primera
+  // transformacion, solo suya, sin requisito ni efecto, con la mitad de huecos (forms::UnifiedCost)
+  for (int id = 0; g_unified_on.load() && id < kIds; ++id) {
+    const int chain = GroupableChain(g, buf + start, total, id, false);
+    if (chain < 2) continue;
+    const uint16_t uid = forms::UnifiedId(id);
+    const uint32_t first = g.U16(kChar372 + 372u * uint32_t(id) + 232);   // capsula de la forma 1
+    std::array<uint8_t, 40> rec{};
+    std::memcpy(rec.data(), g.P(buf + start + kSkcRec * first), 40);
+    const uint64_t own = uint64_t(1) << id;
+    for (int b = 0; b < 8; ++b) rec[size_t(b)] = uint8_t(own >> (56 - 8 * b));
+    rec[8] = uint8_t((rec[8] & ~7) | forms::UnifiedCost(chain));
+    rec[14] = 0x01;                                   // se equipa en la forma normal
+    std::fill(rec.begin() + 16, rec.begin() + 36, 0);  // sin requisito, efecto ni "se convierte en"
+    g.Write(buf + start + kSkcRec * uid, rec.data(), 40);
+    if (g_unified_desc) g_cap_desc[uid] = g_unified_desc;
+    g_unified_ids.push_back(uid);
+  }
+  if (!g_unified_ids.empty())
+    REXLOG_INFO("dbz3 roster: {} capsulas unicas de transformacion ({}..{})", g_unified_ids.size(),
+                g_unified_ids.front(), g_unified_ids.back());
   g.W32(buf + 0x10, total);
   g.W32(kSkcHdrPtr, buf);
   g.W32(kSkcRecPtr, buf + start);
@@ -902,6 +1000,11 @@ void ApplyAtLaunch(rex::memory::Memory* memory) {
   g_hud_fid.clear();
   g_cap_owner_add.clear();
   g_caps_done.store(false);
+  g_unified_on.store(false);
+  g_unified_all = false;
+  g_unified_desc = 0;
+  g_unified_ids.clear();
+  g_bank_redirect.clear();
   g_unlock.store(0);
   g_skill_entries.clear();
   g_skill_recs.clear();
@@ -951,6 +1054,38 @@ void ApplyAtLaunch(rex::memory::Memory* memory) {
     if (auto* arr = doc["parche"].as_array()) {
       for (auto& e : *arr) {
         if (auto* t = e.as_table()) ApplyPatch(g, *t, info.name);
+      }
+    }
+    if (auto* t = doc["forma_unica"].as_table()) ReadUnified(*t, info.name);
+  }
+  // capsula unica: su nombre y su panel los hace el juego desde tus AFS (mods/_forma_unica, transformaciones.cpp)
+  // para cada personaje con 2+ formas con capsula, con el banco de nombres que usa (los IDs >= 44, el de g_hud_fid)
+  {
+    std::vector<std::pair<int, uint32_t>> banks;
+    for (int id = 0; id < kIds; ++id) {
+      const uint32_t c372 = kChar372 + 372u * uint32_t(id);
+      const uint32_t n = std::min<uint32_t>(g.U32(c372 + 0xD0), forms::kForms);
+      int caps = 0;
+      for (uint32_t f = 1; f < n; ++f) caps += g.U16(c372 + 212 + 20 * f) != 0;
+      uint32_t fid = 0xFFFF;
+      if (id < 44) {
+        fid = g.U16(kHudFace + 2u * uint32_t(id));
+      } else if (const auto it = g_hud_fid.find(uint32_t(id)); it != g_hud_fid.end()) {
+        fid = uint32_t(it->second) & 0xFFFF;
+      }
+      if (caps >= 2 && fid && fid != 0xFFFF) banks.emplace_back(id, fid);
+    }
+    if (dbz3::formas::PrepareNamesMod(banks, RosterStamp())) {
+      rex::filesystem::AfsResetModCache();   // el guest aun no ha leido nada
+      g_bank_redirect.clear();
+      std::ifstream in(ModsRoot() / "_forma_unica" / "roster.toml", std::ios::binary);
+      std::stringstream ss;
+      ss << in.rdbuf();
+      try {
+        const toml::table doc = toml::parse(ss.str());
+        if (auto* t = doc["forma_unica"].as_table()) ReadUnified(*t, "_forma_unica");
+      } catch (const toml::parse_error& e) {
+        REXLOG_ERROR("dbz3 roster [_forma_unica]: roster.toml invalido: {}", e.description());
       }
     }
   }
@@ -1028,6 +1163,23 @@ void OwnNewCapsules(uint32_t inventory) {
   for (const auto& [cid, rec] : g_new_caps) {
     if (cid < kInventorySize && g.U8(inventory + cid) == 0) g.W8(inventory + cid, 1);
   }
+}
+
+uint8_t UnifiedForms(int id) {
+  if (!g_unified_on.load() || !g_memory || id < 0 || id >= kIds) return 0;
+  EnsureCapsules();   // combate lanzado sin pasar por el select (HUB): la forma inicial se decide antes
+  Guest g(g_memory);
+  const uint32_t count = CapsuleCount();
+  const uint32_t uid = forms::UnifiedId(id);
+  const uint32_t recs = g.U32(kSkcRecPtr);
+  if (uid >= count || recs < 0x10000u || !((g.U32(recs + kSkcRec * uid + (id < 32 ? 4 : 0)) >> (id & 31)) & 1))
+    return 0;
+  const int k = GroupableChain(g, recs, count, id, true);
+  return uint8_t(((1u << (k + 1)) - 1) & ~1u);   // bits 1..k
+}
+
+uint32_t UnifiedListed(int id) {
+  return std::bitset<8>(UnifiedForms(id)).count() >= 2 ? forms::UnifiedId(id) : 0;
 }
 
 void GetCustomList(uint32_t id, uint16_t out[7]) {
@@ -1228,17 +1380,16 @@ forms::Snapshot ReadForms(int id, int suit) {
     form.required_ki_tenths = record[15];
     form.capsule_record_valid = true;
   }
+  if (const uint8_t grouped = UnifiedForms(id)) {
+    snapshot.unified = forms::UnifiedId(id);
+    for (int f = 1; f < snapshot.count; ++f) snapshot.forms[size_t(f)].grouped = (grouped >> f) & 1;
+  }
   return snapshot;
 }
 void ResetForms() { g_forms_verified.store(false); }
 void InitializeForms() {
-  std::string stamp;
-  std::ifstream file(ModsRoot() / "_roster" / "build.hash", std::ios::binary);
-  for (char c; stamp.size() < 256 && file.get(c);) {
-    if (c != '\r' && c != '\n') stamp += c;
-  }
   g_forms_scope = std::string(dbz3::g_guest_eu ? "eu:" : "us:") +
-      dbz3::settings::ModProfile() + ":" + stamp;
+      dbz3::settings::ModProfile() + ":" + RosterStamp();
   forms::Initialize(dbz3::settings::UserDataRoot() / "forma_inicial.txt");
   g_forms_verified.store(true);
 }
@@ -1378,6 +1529,16 @@ DBZ3_HOOK(sub_821B6ED8, dbz3eu_sub_821B5CC0) {
   const uint32_t tab = REX_LOAD_U32(st + 36);
   const uint64_t bit = uint64_t(1) << (int32_t(REX_LOAD_U32(st + 28)) & 63);
   const uint32_t inv = REX_LOAD_U32(st + 44);
+  const uint32_t uid = dbz3::roster::UnifiedListed(int32_t(REX_LOAD_U32(st + 28)));   // tuya sin tocar el inventario
+  // PRUEBA (DBZ3_TEST_OWN="1,2"): esas capsulas aparecen como tuyas en el editor (copia de pruebas)
+  if (static const char* own = std::getenv("DBZ3_TEST_OWN"); own && inv) {
+    for (const char* p = own; *p;) {
+      const uint32_t c = uint32_t(std::atoi(p));
+      if (c > 0 && c < 2048 && !REX_LOAD_U8(inv + c)) REX_STORE_U8(inv + c, 1);
+      while (*p && *p != ',') ++p;
+      if (*p) ++p;
+    }
+  }
   const uint32_t recs = REX_LOAD_U32(kSkcRecs);
   const uint32_t blk = st + 76 + 28 * tab;
   const uint32_t out = blk + 8;
@@ -1385,7 +1546,7 @@ DBZ3_HOOK(sub_821B6ED8, dbz3eu_sub_821B5CC0) {
   const uint32_t n = dbz3::roster::CapsuleCount();
   uint32_t skipped = 0, shown = 0;
   for (uint32_t id = 1; id < n; ++id) {
-    if (!ListedCapsule(base, recs + 40 * id, bit, tab, REX_LOAD_U8(inv + id))) continue;
+    if (!ListedCapsule(base, recs + 40 * id, bit, tab, id == uid ? 1u : REX_LOAD_U8(inv + id))) continue;
     if (int32_t(skipped) < int32_t(skip)) {
       ++skipped;
       continue;
@@ -1407,12 +1568,13 @@ DBZ3_HOOK(sub_821B6FE8, dbz3eu_sub_821B5DD0) {
   const uint32_t tab = REX_LOAD_U32(st + 36);
   const uint64_t bit = uint64_t(1) << (int32_t(REX_LOAD_U32(st + 28)) & 63);
   const uint32_t inv = REX_LOAD_U32(st + 44);
+  const uint32_t uid = dbz3::roster::UnifiedListed(int32_t(REX_LOAD_U32(st + 28)));
   const uint32_t blk = st + 28 * tab;
   const uint32_t n = dbz3::roster::CapsuleCount();
   int32_t pos = 0, count = 0;
   for (uint32_t id = 1; id < n; ++id) {
     if (int32_t(id) == want) pos = count;
-    if (ListedCapsule(base, recs + 40 * id, bit, tab, REX_LOAD_U8(inv + id))) ++count;
+    if (ListedCapsule(base, recs + 40 * id, bit, tab, id == uid ? 1u : REX_LOAD_U8(inv + id))) ++count;
   }
   REX_STORE_U16(blk + 102, uint16_t(count));
   if (count < 9) {
@@ -1591,6 +1753,16 @@ DBZ3_HOOK(sub_82146430, dbz3eu_sub_821A1F00) {
       break;
     }
   }
+  // ID sin entrada en el banco (#AZT: +0x10 n, +0x14 indice, +0x18 primer ID): el juego leeria fuera del
+  // indice. Pasa con una capsula nueva cuyo nombre no esta en ese banco (capsula unica sin forma_unica.py).
+  if (const uint32_t bank = ctx.r4.u32) {
+    const uint32_t k = ctx.r5.u32 - REX_LOAD_U32(bank + 24);
+    if (k >= REX_LOAD_U32(bank + 16) || !REX_LOAD_U32(bank + REX_LOAD_U32(bank + 20) + 4 * k)) {
+      static int logged = 0;
+      if (logged++ < 10) REXLOG_WARN("dbz3 roster: capsula {} sin nombre en el banco {:08X}", ctx.r5.u32, bank);
+      return;
+    }
+  }
   orig(ctx, base);
 }
 
@@ -1667,6 +1839,9 @@ DBZ3_HOOK(sub_821B9F90, dbz3eu_sub_821B8D78) {
 DBZ3_HOOK(sub_82083968, dbz3eu_sub_82083968) {
   if (t_desc_from && ctx.r3.u32 == t_desc_from) ctx.r3.u64 = t_desc_fid;
   if (t_hud_from && ctx.r3.u32 == t_hud_from) ctx.r3.u64 = t_hud_to;
+  // banco de nombres -> su copia con la capsula unica (forma_unica.py)
+  if (const auto it = dbz3::roster::g_bank_redirect.find(ctx.r3.u32); it != dbz3::roster::g_bank_redirect.end())
+    ctx.r3.u64 = it->second;
   orig(ctx, base);
 }
 

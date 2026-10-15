@@ -224,6 +224,93 @@ def convertir(hd, info=None):
     return bytes(b), "rampas de Budokai 2 convertidas: %d (%d nuevas)" % (escritas + nuevas, nuevas)
 
 
+def es_b1(b, mats):
+    """Modelo de Budokai 1 convertido: ningun material con rampa y tipo 0x1BD (los nativos: 0x1B5 / 0x29BD con
+    rampa, 0x1B4 / 0x1B4 sin ella)."""
+    sin = [mo for mo, _, r in mats if r == 0xFFFFFFFF and _be(b, mo + 0x38) & 0xFF == 0xBD
+           and not _be(b, mo + 0x3C) & 0x2800]
+    return bool(mats) and len(sin) == len(mats)
+
+
+def desde_b1(hd):
+    """Budokai 1 (frente Ports, 2026-10-15): sus materiales no traen rampa y el tipo 0x1BD/0x1BD; en B3 HD el
+    modelo salia blanco entero (Zarbon B1, normal y transformado). Se le da a cada textura base una rampa nueva
+    al estilo de B3 (la de B2 hecha con un perfil de sombra fijo: sombra en 3/5 del ancho, linea del terminador y
+    luz) y el tipo de los nativos con rampa (0x1B5 / 0x29BD, con el resto de bits). -> (bin, n rampas)."""
+    b = bytearray(hd)
+    if b[:4] != b"#AMB":
+        return bytes(hd), 0
+    ks = hijos(b)
+    awo = next((o for m, o, _, _ in ks if m == b"#AWO"), None)
+    zs = [(o, s, e) for m, o, s, e in ks if m == b"#AZT"]
+    if awo is None or not zs:
+        return bytes(hd), 0
+    z, _, zent = zs[0]
+    mats = materiales(b, awo)
+    if not es_b1(b, mats) or max(o for _, o, _, _ in ks) != z:
+        return bytes(hd), 0
+    tex = texturas(b, z)
+    bases = sorted({base for _, base, _ in mats if base in tex})
+    if len(tex) + len(bases) > MAX_TEX:
+        return bytes(hd), 0
+    nueva = {}
+    for t in bases:
+        img = leer_dds(b, tex[t])
+        h, w = img.shape[:2]
+        perfil = np.zeros(w)                          # alfa de sombra por columna (u = luz), como las rampas de B2
+        c = np.arange(w) / w
+        perfil[c < 0.625] = 51
+        perfil[(c >= 0.625) & (c < 0.6875)] = 68
+        perfil[(c >= 0.6875) & (c < 0.75)] = 85
+        perfil[(c >= 0.75) & (c < 0.8125)] = 34
+        plantilla = np.zeros((h, w, 4), np.uint8)
+        plantilla[..., 3] = perfil[None, :].astype(np.uint8)
+        data = _dds(rampa_nueva(plantilla, [img]), b[tex[t][1]:tex[t][1] + 128])
+        if len(data) != tex[t][2]:
+            continue
+        nueva[t] = _anadir(b, z, tex[t], data, None)
+    for mo, base, _ in mats:
+        if base in nueva:
+            struct.pack_into(">I", b, mo + 0x34, nueva[base])
+            struct.pack_into(">I", b, mo + 0x38, (_be(b, mo + 0x38) & ~0xFF) | 0xB5)
+            struct.pack_into(">I", b, mo + 0x3C, _be(b, mo + 0x3C) | 0x2800)
+    if nueva:
+        struct.pack_into(">I", b, zent + 4, len(b) - z)       # tamano del #AZT en la tabla del #AMB
+        b += b"\0" * ((-len(b)) % 32)
+    return bytes(b), len(nueva)
+
+
+def sombrear_planas(hd):
+    """Texturas base con alfa 255 en toda la imagen (en B3 = sin sombrear: el pelo de Goku de SDBH salia gris claro
+    con brillos) -> alfa 0 (banda sombreada, como las del juego). No toca las rampas. -> (bin, n)."""
+    b = bytearray(hd)
+    if b[:4] != b"#AMB":
+        return bytes(hd), 0
+    ks = hijos(b)
+    awo = next((o for m, o, _, _ in ks if m == b"#AWO"), None)
+    z = next((o for m, o, _, _ in ks if m == b"#AZT"), None)
+    if awo is None or z is None:
+        return bytes(hd), 0
+    tex = texturas(b, z)
+    mats = materiales(b, awo)
+    ramps = {r for _, _, r in mats}
+    n = 0
+    for t in sorted({base for _, base, r in mats if r != 0xFFFFFFFF and base not in ramps}):
+        if t not in tex:
+            continue
+        _, do, ds = tex[t]
+        if bytes(b[do + 84:do + 88]) != b"DXT3":
+            continue
+        img = leer_dds(b, tex[t])
+        if int(img[..., 3].min()) < 255:
+            continue
+        for k in range((ds - 128) // 16):     # bloque DXT3: 8 B de alfa (4 bits por pixel) + 8 B de color
+            o = do + 128 + 16 * k
+            b[o:o + 8] = bytes(8)
+        n += 1
+    return bytes(b), n
+
+
 def main(argv):
     if len(argv) >= 2 and argv[0] == "--info":
         sys.path.insert(0, os.path.join(HERE, "..", "mod center hd"))

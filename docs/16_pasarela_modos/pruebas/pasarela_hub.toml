@@ -1,0 +1,26 @@
+# Desde el HUB, como un jugador: fila HUB, pagina 2 (RB), entrada "Pasarela", menu de los modos de B1/B2/IW,
+# bajar a "Tablero", entrar, ver el tablero, B al menu, B al HUB.
+# python tools/pruebas.py correr campanas_test docs/16_pasarela_modos/pruebas/pasarela_hub.toml
+descripcion = "Pasarela: entrada Pasarela del HUB, menu de modos, tablero y vuelta"
+env = ["DBZ3_PS2_GAMES=D:/DBZ3HD/ps2_games"]
+pasos = [
+  'esperar_pantalla 5 30', 'esperar 1500',
+  'tecla W 1200', 'captura 01_fila_hub',
+  'tecla Space 2500', 'captura 02_hub',
+  'tecla 3 1500', 'esperar 500', 'captura 03_hub_pagina2',
+  'tecla Space 1500',
+  'log "hub: modo pasarela" 10',
+  'log "misiones: menu paso 1/0: menu" 10',
+  'esperar 1500', 'captura 04_menu_pasarela',
+  'tecla S 1000', 'esperar 500', 'captura 05_menu_tablero',
+  'tecla Space 1500',
+  'log "misiones: tablero: casilla 0" 10',
+  'esperar 1500', 'captura 06_tablero',
+  'tecla D 800', 'esperar 500', 'captura 07_tablero_otro_camino',
+  'tecla Backspace 1500',
+  'log "misiones: tablero paso 1/0: menu" 10',
+  'esperar 1000', 'captura 08_menu',
+  'tecla Backspace 2000',
+  'log "misiones: fuera de la pasarela" 10',
+  'esperar 2500', 'captura 09_vuelta_hub',
+]

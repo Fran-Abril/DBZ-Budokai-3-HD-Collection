@@ -1,5 +1,9 @@
 # Frente: Pasarela de modos (modos de B1, B2 e IW en el HUB)
 
+> Ronda 2 (2026-10-15): los ficheros de la pasarela pasan al frente campañas, que hizo lo que quedaba de la leyenda
+> (reglas en código, dificultad, puntos y resultado de B1) y la entrada **Pasarela** (saga de B1, tablero, misiones de B2,
+> retos de IW). Estado y pruebas: `docs/14_frentes/campanas.md` §0 y `docs/16_pasarela_modos/04_misiones_y_tablero.md`.
+
 Fecha: 2026-10-15. Solo US (con `g_guest_eu` no hay modo; los dos .cpp están en el `REMOVE_ITEM` solo-EU).
 Estudio por modo y formatos: `docs/16_pasarela_modos/` (README con la tabla de viabilidad).
 

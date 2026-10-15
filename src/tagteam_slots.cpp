@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "generated/dbz3_init.h"
-#include "guest_region.h"
+#include "eu_map.h"
 #include "roster_ext.h"
 #include "form_selection_state.h"
 #include <cstring>
@@ -55,7 +55,7 @@ bool ReadMemberCapsules(uint8_t* base, int side, int id, std::array<uint16_t, 8>
     if (it != g_caps[size_t(side)].end()) { c = it->second; custom = true; }
   }
   if (!custom) {
-    const uint32_t address = 0x8234ABB8u + 96u * uint32_t(id) + 80u;
+    const uint32_t address = dbz3::GA(0x8234ABB8u) + 96u * uint32_t(id) + 80u;
     if (!dbz3::roster::FormSelectionRange(address, 16, false)) return false;
     for (uint32_t i = 0; i < 8; ++i) c[i] = REX_LOAD_U16(address + 2*i);
   }
@@ -78,7 +78,7 @@ void PutCapsules(uint8_t* base, uint32_t rec, int side, int id) {
     }
   }
   if (!custom) {   // las suyas por defecto (char96 +80: n y 7 IDs)
-    const uint32_t c96 = 0x8234ABB8 + 96 * uint32_t(id);
+    const uint32_t c96 = dbz3::GA(0x8234ABB8) + 96 * uint32_t(id);
     for (uint32_t k = 0; k < 8; ++k) c[k] = REX_LOAD_U16(c96 + 80 + 2 * k);
   }
   for (uint32_t k = 0; k < 8; ++k) REX_STORE_U16(rec + 52 + 2 * k, c[k]);

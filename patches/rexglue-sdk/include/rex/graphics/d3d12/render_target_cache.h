@@ -66,6 +66,11 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   void Dbz3InvalidateBoundRenderTargets() { are_current_command_list_render_targets_valid_ = false; }
   bool Dbz3BeginReadLastDepth(ID3D12Resource*& resource_out, D3D12_CPU_DESCRIPTOR_HANDLE& srv_out,
                               uint32_t& width_out, uint32_t& height_out);
+  // dbz3 relight: color render target `index` of the last draw (1x MSAA,
+  // 32bpp), transitioned for drawing; the bound render targets are set again
+  // on the next draw.
+  bool Dbz3BeginRelight(uint32_t index, D3D12_CPU_DESCRIPTOR_HANDLE& color_rtv_out,
+                        DXGI_FORMAT& color_format_out, uint32_t& width_out, uint32_t& height_out);
 
   bool Update(bool is_rasterization_done, reg::RB_DEPTHCONTROL normalized_depth_control,
               uint32_t normalized_color_mask, const Shader& vertex_shader) override;

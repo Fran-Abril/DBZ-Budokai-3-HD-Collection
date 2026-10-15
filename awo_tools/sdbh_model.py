@@ -234,8 +234,26 @@ def load_source(folder):
     parts = {}
     for f in sorted(glob.glob(os.path.join(folder, "*.emd"))):
         key = os.path.splitext(os.path.basename(f))[0][len(base) + 1:]
+        # algunos personajes escriben _BODY / _FACE en mayusculas (bcbbr, bcmag, bcmnb, bcmnh, bctlh, bctls):
+        # antes "no hay cuerpo" (StopIteration) y la conversion fallaba
+        key = re.sub(r"_(body|face)$", lambda m: "_" + m.group(1).lower(), key, flags=re.I)
         parts[key] = read_emd(f)
     return {"name": base, "esk": Esk(esk[0]), "emb": read_emb(emb[0]), "parts": parts}
+
+
+def drop_broken(src):
+    """Quita las submallas que piden texturas que el .emb no trae o no se pueden leer (bcgo2b62: cara L42 con la
+    textura 16 de 14; antes IndexError) y las partes que se quedan vacias, con un aviso."""
+    emb = src["emb"]
+    for key in list(src["parts"]):
+        subs = src["parts"][key]
+        ok = [sm for sm in subs if all(t < len(emb) and emb[t][1] is not None for t in sm.texdefs)]
+        if len(ok) < len(subs):
+            print("aviso: %s: %d submalla(s) sin su textura en el .emb, fuera" % (key, len(subs) - len(ok)))
+        if ok:
+            src["parts"][key] = ok
+        else:
+            del src["parts"][key]
 
 
 def cmd_info(folder):
@@ -614,8 +632,10 @@ def awo_bytes(tpl, awgs, lists, nlist):
     return bytes(o.b)
 
 
-def material(lit, tex, ramp, diffuse=1.0):
-    vt = (0x1B5, 0x29BD) if lit else (0x1B4, 0x1B4)
+def material(lit, tex, ramp, diffuse=1.0, env=False):
+    """env: vtype 0xF5 (0xB5 + bit 0x40) = reflejo, como la cupula de Freezer o la visera del Gran Saiyaman:
+    el juego pinta la textura con la normal en camara (sphere map), no con la uv de la malla."""
+    vt = (0x1F5 if env else 0x1B5, 0x29BD) if lit else (0x1B4, 0x1B4)
     return struct.pack(">8f12I", diffuse, diffuse, diffuse, 0, 1, 1, 1, 0, 0, 5, 0, 5, tex,
                        ramp if lit else 0xFFFFFFFF, vt[0], vt[1], 0x44, 0x44, 0, 0)
 
@@ -857,6 +877,16 @@ def spikier_hair(sm, center, grow, lift, front_lift, keep_x=0.25):
     out.pos = center + d * np.minimum(r, r0)[:, None] + rodrigues(d * (e * (1 + grow * t))[:, None])
     out.nrm = rodrigues(sm.nrm)
     return out
+
+
+def uv_tint(img, uv):
+    """Color medio de la textura bajo las uv de una submalla (cuantizado: mismas claves de textura)."""
+    if not len(uv):
+        return (255, 255, 255)
+    h, w = img.shape[:2]
+    x = np.clip((np.mod(uv[:, 0], 1.0) * w).astype(int), 0, w - 1)
+    y = np.clip((np.mod(uv[:, 1], 1.0) * h).astype(int), 0, h - 1)
+    return tuple(int(min(255, round(c / 16) * 16)) for c in img[y, x, :3].astype(float).mean(0))
 
 
 def colored(img):
@@ -1174,6 +1204,10 @@ class Textures:
     def ramp(self, i):
         return self._get(("tpl", i))
 
+    def env(self, i, tint):
+        """Reflejo de un material ToonEnvironment_W de SDBH (su 3.a textura) tenido con el color de su base."""
+        return self._get(("env", i, tint))
+
     def conv_ramp(self, i, rows_from):
         """Rampa de SDBH convertida a la resta de B3: rampa = 1 - rampa SDBH (exacto con base blanca);
         las filas 56-63 (contorno) se copian de la rampa nativa `rows_from`."""
@@ -1190,6 +1224,21 @@ class Textures:
             if kind == "tpl":
                 items.append(self.tpl.textures[i])
                 info.append(("rampa plantilla %d" % i,) + tuple(self.tpl.textures[i][:2]))
+                continue
+            if kind == "env":       # alfa 0: la rampa de ropa lo sombrea, como los F5 nativos
+                rgba = self.emb[i][1].copy()
+                rgba[..., :3] = np.clip(np.rint(rgba[..., :3] * (np.array(extra[0], np.float32) / 255.0)), 0, 255)
+                rgba[..., 3] = 0
+                h, w = rgba.shape[:2]
+                # 128 px: el reflejo no necesita mas y no se pasa del presupuesto del AZT (Xeno Janemba: 642 KB
+                # con 256 px, por encima de los 610 de los nativos; 592 KB con 128)
+                s = min(1.0, min(self.cap, 128) / max(w, h))
+                if s < 1.0:
+                    w, h = int(w * s), int(h * s)
+                    rgba = resize_rgba(rgba, w, h)
+                    rgba[..., 3] = 0
+                items.append((w, h, 0x21, dds_dxt3(w, h) + encode_dxt3(rgba)))
+                info.append(("reflejo SDBH %d" % i, w, h))
                 continue
             if kind == "conv":
                 from PIL import Image
@@ -1245,14 +1294,20 @@ def convert(folder, template, out, belt_deg=80.0, cap=256, hand_tris=300, hand_c
     guest): las manos (una malla por variante) se reducen a hand_tris triangulos y su textura a
     hand_cap; el resto de texturas a `cap`."""
     src = load_source(folder)
+    drop_broken(src)
     tpl = Template(template)
     rtpl = Template(ramps) if ramps else tpl
     esk, emb = src["esk"], src["emb"]
     rig = Rig(tpl, esk, belt_deg)
     slots = {b: s for s, b in enumerate(tpl.palette) if s > 0}
     tx = Textures(emb, rtpl, cap)
+    # el cuerpo de Trunks nino y de Omega Shenron se llama XTRS_BODY_1 / 1SD_BODY_1: antes sin rampa de ropa y
+    # cualquier modelo de Heroes con esos donantes fallaba (TypeError en build); sin ninguna, la mas usada
+    any_ramp = rtpl.ramp_of(lambda lab: True)
     ramp_skin = rtpl.ramp_of(lambda lab: "HAND" in lab)
-    ramp_cloth = rtpl.ramp_of(lambda lab: bone_suffix(lab) == "BODY")
+    ramp_cloth = rtpl.ramp_of(lambda lab: re.fullmatch(r"BODY(_\d+)?", bone_suffix(lab)) is not None)
+    ramp_skin = any_ramp if ramp_skin is None else ramp_skin
+    ramp_cloth = any_ramp if ramp_cloth is None else ramp_cloth
     if hair:
         c = esk.world[esk.index["head"]][:3, 3] + np.array([0.0, 1.1, 0.0])
         for key, subs in src["parts"].items():
@@ -1282,7 +1337,11 @@ def convert(folder, template, out, belt_deg=80.0, cap=256, hand_tris=300, hand_c
     def mat_for(sm, mats, lit=None, ramp_sd=-1):
         base = sm.texdefs[0]
         lit = len(sm.texdefs) > 1 if lit is None else lit
-        if lit:
+        if len(sm.texdefs) >= 3:
+            # ToonEnvironment_W (las unicas submallas de SDBH con 3 texturas: base, rampa, reflejo) -> F5 con
+            # el reflejo como textura (antes: B5 con la base, casi siempre blanca: cupula de Freezer blanca)
+            m = material(True, tx.env(sm.texdefs[2], uv_tint(emb[base][1], sm.uv)), tx.ramp(ramp_cloth), env=True)
+        elif lit:
             r = ramp_sd if ramp_sd != -1 else (sm.texdefs[1] if len(sm.texdefs) > 1 else None)
             m = material(True, tx.sdbh(base), ramp_for(r))
         else:
@@ -1543,6 +1602,12 @@ def selftest():
     blk1 = struct.pack("<HHI", 0xF800, 0x001F, 0x1B1B1B1B)
     out = dxt1_to_dxt3(bytes(dds) + blk1, np.zeros((4, 4), np.uint8))
     assert out == bytes(8) + blk1, out.hex()
+    # reflejo: ToonEnvironment_W -> vtype F5 (el normal B5) y el tinte de la base bajo sus uv
+    assert struct.unpack_from(">I", material(True, 1, 2, env=True), 0x38)[0] == 0x1F5
+    assert struct.unpack_from(">I", material(True, 1, 2), 0x38)[0] == 0x1B5
+    img = np.zeros((4, 4, 4), np.uint8)
+    img[..., 0] = 255
+    assert uv_tint(img, np.array([[0.1, 0.2], [1.6, -0.3]])) == (255, 0, 0)
     print("selftest OK")
     return 0
 

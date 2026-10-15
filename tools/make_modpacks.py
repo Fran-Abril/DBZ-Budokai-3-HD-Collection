@@ -39,12 +39,14 @@ KIT_ENTRIES = ["roster_build", "importar", "swap_b3", "texture_b3", "texture_dum
                "log_en",          # English log of the tools when the Mod Kit is in EN
                "campana", "editor_historias",   # Historias page (montar) and its story editor
                "modos_reto",      # challenge modes card (run as a subprocess: no import reaches it)
-               "retos_predefinidos"]   # "Retos predefinidos" row (HUB challenges, tower of the week)
+               "retos_predefinidos",   # "Retos predefinidos" row (HUB challenges, tower of the week)
+               "forma_unica"]   # respaldo de la capsula "Todas las transformaciones" (hoy la crea el juego)
 # Standalone modder tools the Mod Kit window also exposes (advanced mode > Tools), with the
 # local modules they import (kit_modules follows them).
 KIT_EXTRA_TOOLS = ["name_banner", "portrait_hd", "extract_azt_afs", "awg_to_obj_b3", "awg0_export",
                    "awg_cara_export", "swap_matrix", "texture_upscale_b3", "psp_amo", "sb_amm", "csk_edit",
-                   "acm_parse", "sbport", "sb_tablas", "sdbh_model", "sb_tecnicas", "sb_voces"]
+                   "acm_parse", "sbport", "sb_tablas", "sdbh_model", "sb_tecnicas", "sb_voces",
+                   "cri"]   # voces de SDBH (importar.py lo importa dentro de una funcion: el rastreo no lo ve)
 KIT_DATA = ["catalog_b3.cat", "roster_db.json", "b1_capsulas.txt",   # b1_capsulas: nombres de B1 (importador)
             # sin estos el Kit fallaba en casa de los jugadores (log de un jugador, 2026-10-12): presets del
             # importador, nombres de los modelos de IW, codigos de Dragon Universe, etiquetas de texturas

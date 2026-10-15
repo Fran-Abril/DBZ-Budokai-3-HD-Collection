@@ -1,0 +1,3 @@
+descripcion = "Ficha 19: victoria alcanzable contra el gigante (escala 1.8): con la vida del jefe a 1 (DBZ3_TEST_KO) un golpe de Goku lo tumba y el combate acaba"
+env = ["DBZ3_TEST_BATTLE=0,7,7", "DBZ3_HUB_MODE=5", "DBZ3_GIGANTE=1.8", "DBZ3_SONDA_GIGANTE=1", "DBZ3_TEST_KO=1"]
+pasos = ["log \"hub: combate nativo\" 60", "log \"tag: empieza un combate\" 60", "log \"gigante: escala\" 60", "log \"prueba: el rival cae\" 30", "tecla D:700 100", "tecla L 250", "tecla L 250", "tecla L 250", "tecla L 250", "tecla L 250", "tecla Space 250", "tecla L 250", "tecla L 250", "tecla L 250", "tecla D:500 100", "tecla L 250", "tecla L 250", "tecla L 250", "tecla L 250", "log \"combate acabado\" 30", "esperar 1500", "captura 01_ko"]
