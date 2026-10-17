@@ -4600,7 +4600,11 @@ void LiveBanner(const char* name) {
 
 void SetPreviewDrawer(rex::ui::ImmediateDrawer* drawer) { g_preview_drawer = drawer; }
 bool PickFileDialog(std::string& out, const char* filter_desc, const char* filter_ext) {
+#if REX_PLATFORM_WIN32
   return PickFile(out, filter_desc, filter_ext, std::string(), GetForegroundWindow());   // encima del juego
+#else
+  return PickFile(out, filter_desc, filter_ext, std::string());
+#endif
 }
 std::string PathUtf8(const std::filesystem::path& p) { return rex::path_to_utf8(p); }
 rex::ui::ImmediateDrawer* PreviewDrawer() { return g_preview_drawer; }
