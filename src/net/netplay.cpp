@@ -480,6 +480,7 @@ bool Session::Host(uint16_t port, uint8_t delay, std::string* error) {
   if (!OpenSocket(port, error)) { role_ = Role::kNone; return false; }
   link_ = Link::kWaiting;
   last_recv_ms_ = NowMs();
+  StartModScan();
   static const bool room_ok = RoomSelfTest();   // codigo de sala: ida y vuelta
   if (!room_ok) REXLOG_ERROR("dbz3 online: el codigo de sala no pasa su prueba");
   // Internet: el router abre el puerto (UPnP) y, si no puede, un servidor STUN dice la IP publica
@@ -513,7 +514,11 @@ bool Session::Host(uint16_t port, uint8_t delay, std::string* error) {
     }
     const std::string ext = UpnpOpen(port, local);
     uint32_t ip = 0;
-    if (ext.empty() || inet_pton(AF_INET, ext.c_str(), &ip) != 1) return;
+    if (ext.empty()) return;
+    if (inet_pton(AF_INET, ext.c_str(), &ip) != 1) {   // IP publica ilegible: el puerto abierto se cierra (cuenta de room.cpp)
+      UpnpClose(port);
+      return;
+    }
     UpnpCloseAtExit(port);
     std::lock_guard<std::recursive_mutex> io(io_mu_);
     std::lock_guard<std::mutex> lock(mu_);
@@ -576,25 +581,49 @@ bool Session::Join(const std::string& ip, uint16_t port, std::string* error) {
   have_peer_ = true;
   link_ = Link::kWaiting;
   last_recv_ms_ = NowMs();
+  StartModScan();
   return true;
+}
+
+// La huella de los mods son segundos de disco: ni la interfaz (Poll) ni io_mu_ esperan por ella. El hilo solo
+// toma io_mu_ para dejar el resultado; SendHello calla hasta que esta (el invitado repite el HELLO cada 300 ms)
+// y una sesion ya cerrada (generation_) descarta lo suyo.
+// ponytail: un escaneo por sesion, sin cancelar; si Crear/Salir se repite rapido los viejos acaban solos.
+void Session::StartModScan() {
+  const uint64_t gen = generation_;
+  std::thread([this, gen] {
+    const auto t0 = NowMs();
+    std::vector<std::string> mods;
+    std::string hash;
+    bool ok = true;
+    try {
+      mods = ModFingerprints();
+      std::string acc;
+      for (const auto& m : mods) acc += m + "\n";
+      hash = rex::hash_bytes(acc);
+    } catch (const std::exception&) {
+      ok = false;
+    }
+    std::lock_guard<std::recursive_mutex> io(io_mu_);
+    if (gen != generation_) return;
+    if (!ok) {
+      Fail(Link::kError, T::T("no se pudieron comprobar los mods de este PC", "could not check this PC's mods"));
+      return;
+    }
+    my_mods_ = std::move(mods);
+    my_mods_hash_ = hash;
+    my_build_ = identity_;
+    // UI snapshot only: never read/write/download the personal save.
+    save_size_ = 0;
+    save_ready_ = true;
+    if (link_ == Link::kWaiting) last_recv_ms_ = NowMs();   // los 30 s del invitado cuentan desde su primer HELLO
+    REXLOG_INFO("dbz3 online: huella de {} mods lista en {} ms", my_mods_.size(), NowMs() - t0);
+  }).detach();
 }
 
 void Session::SendHello(uint8_t type) {
   std::lock_guard<std::recursive_mutex> io(io_mu_);
-  if (my_build_.empty()) {
-    my_build_ = identity_;
-    try { my_mods_ = ModFingerprints(); }
-    catch (const std::exception&) {
-      Fail(Link::kError, T::T("no se pudieron comprobar los mods de este PC", "could not check this PC's mods"));
-      return;
-    }
-    std::string acc;
-    for (const auto& m : my_mods_) acc += m + "\n";
-    my_mods_hash_ = rex::hash_bytes(acc);
-    // UI snapshot only: never read/write/download the personal save.
-    save_size_ = 0;
-    save_ready_ = true;
-  }
+  if (my_build_.empty()) return;   // StartModScan aun calcula la huella de los mods propios
   Writer w(type);
   w.str(my_build_, 40);
   w.str(my_mods_hash_, 40);
@@ -624,10 +653,8 @@ void Session::Handle(const std::vector<uint8_t>& pkt, bool) {
       if (!r.ok) return;
       if (peer_nonce_ && peer_nonce_ != nonce) return;
       peer_nonce_ = nonce;
+      if (my_build_.empty()) return;   // aun sin huella de mods propia: el otro repite el HELLO
       if (type == kHello && role_ == Role::kHost) SendHello(kHelloAck);
-      if (link_ == Link::kError) return;   // no se pudieron leer los mods propios: ese es el error a ensenar
-      if (my_build_.empty()) SendHello(kHello);
-      if (link_ == Link::kError) return;
       if (build != my_build_) {
         Fail(Link::kError, T::T("el otro PC tiene otra version del juego", "the other PC has another game version"));
         return;

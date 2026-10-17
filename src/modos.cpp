@@ -48,11 +48,13 @@
 #include "eu_map.h"
 #include "ingame/game_style.h"
 #include "ingame/hub_panel.h"
+#include "ingame/tutorial.h"
 #include "launcher/i18n.h"
 #include "launcher/launcher_state.h"
 #include "launcher/settings.h"
 #include "cine.h"
 #include "clima.h"
+#include "combate.h"
 #include "escenarios.h"
 #include "gigantes.h"
 #include "modos.h"
@@ -89,13 +91,14 @@ const char* L(const char* es, const char* en, const char* fr, const char* de, co
 namespace {
 namespace T = dbz3::i18n;
 namespace S = dbz3::ingame::style;
+namespace D = dbz3::ingame::style::mode;   // esquema comun de las pantallas de modo
 
 constexpr dbz3::GA kGame = 0x824BA110, kCfg = 0x8245EFC0, kReqCur = 0x8247A990, kMgrPtr = 0x823D6CF4, kResult = 0x823D6CE0;
 constexpr dbz3::GA kHud = 0x82324064;   // marcador del combate (su menu: +4272, +4292)
 constexpr dbz3::GA kWt = 0x8245F270, kWtScreen = 0x824681D0, kSlotToId = 0x82020618, kIdToSlot = 0x82020668;
 constexpr int kVidaNormal = 3000, kVidaTope = 7000;   // CFG por defecto: 3000; 7000 = rec+48 (tope de barras)
 const char* const kNombres[kTipos] = {"torre", "supervivencia", "kumite", "simulacion", "tienda",
-                                      "heroe", "torres", "abyss", "jefes", "torneo4"};
+                                      "heroe", "torres", "abyss", "jefes", "torneo4", "mision100"};
 const char* const kResNombres[] = {"derrota", "victoria", "abandono", "guardado"};
 
 int64_t NowMs() {
@@ -237,6 +240,7 @@ std::atomic<int64_t> g_lanzado_ms{0};    // ultimo combate pedido
 std::atomic<bool> g_fin_visible{false};  // pantalla del final del reto (hasta pulsar A)
 std::atomic<bool> g_tras_victoria{false};  // el combate pedido sigue a uno ganado (pantalla entre combates)
 std::atomic<bool> g_encadenado{false};     // el siguiente combate espera en negro (hub::HoldChain) a Lanzar
+std::atomic<bool> g_reintento{false};      // el combate pedido repite uno perdido (pantalla de revancha propia)
 
 uint8_t* Base() {
   if (uint8_t* b = g_base.load()) return b;
@@ -548,6 +552,7 @@ bool Lanzar() {   // con g_mu: pide el combate g_st.ganados
     return false;
   }
   g_st.fase = kCombate;
+  g_reintento = false;
   g_st.rival = c.id;
   g_st.escenario = c.escenario;
   g_lanzado_ms = NowMs();
@@ -598,7 +603,18 @@ void FinCombate(int raw, int winner, int reason, int hp, int rival_hp) {
   REXLOG_INFO("dbz3 modos: fin del combate {}/{}: gana el lado {} (motivo {}, resultado del juego {}), vida del "
               "jugador {}, del rival {}", g_st.ganados + 1, g_st.total, winner + 1, reason, raw, hp, rival_hp);
   g_st.recibido = int(g_lab.lado[1].dano);   // dano del rival al jugador (resumen del laboratorio)
-  if (hp <= 0 || !Gana(winner, reason)) return Terminar(winner < 0 && raw == 2 ? kGuardado : kDerrota);   // salir desde la pausa: guardado
+  if (hp <= 0 || !Gana(winner, reason)) {
+    if (winner < 0 && raw == 2) return Terminar(kGuardado);   // salir desde la pausa: guardado
+    // revancha con pantalla propia (el menu del final del juego ya no sale): el mismo combate espera en negro
+    // a A (Continue) o B (Abort). Los retos de rpg.cpp acaban al perder, como antes sin su revancha.
+    if (!g_reto.reintentar || g_reto.propio) return Terminar(kDerrota);
+    g_st.fase = kEntre;
+    g_st.resultado = kDerrota;
+    g_reintento = true;
+    g_tras_victoria = false;
+    Encadenar(false);
+    return;
+  }
   ++g_st.ganados;
   g_st.resultado = kVictoria;
   if (g_reto.arrastra) g_st.vida = std::clamp(hp + g_reto.recupera, 1, g_st.vida_max);
@@ -910,6 +926,14 @@ void SetReglas(const Reglas& r) {
   std::lock_guard<std::mutex> lk(g_mu);
   g_reglas = r;
 }
+void SetJugador(int id) {
+  std::lock_guard<std::mutex> lk(g_mu);
+  if (g_st.fase != kEntre || id == g_st.jugador || !Jugable(id)) return;
+  // el siguiente ya iba pedido (Encadenar) con el luchador de antes: fuera; Continue lo pide de nuevo (RequestBattle)
+  if (g_encadenado.exchange(false)) dbz3::hub::CancelChain();
+  REXLOG_INFO("dbz3 modos: {}: el combate siguiente con el id {} (antes {})", kNombres[g_st.tipo], id, g_st.jugador);
+  g_st.jugador = id;
+}
 // La pantalla del final del reto ya se vio (rpg.cpp): el HUB vuelve.
 void CerrarFin() { g_fin_visible = false; }
 // Rival del combate siguiente de un reto propio (entre combates).
@@ -1159,6 +1183,7 @@ const char* NombreTipo(int tipo) {
     case kAbyss: return "Abyss";
     case kJefes: return L("Kumite de jefes", "Boss Kumite", "Kumite des boss", "Boss-Kumite", "Kumite dei boss");
     case kTorneo4: return L("Torneo de 4", "4-Fighter Tournament", "Tournoi à 4", "Turnier zu viert", "Torneo a 4");
+    case kMision: return L("Misión 100", "Mission 100", "Mission 100", "Mission 100", "Missione 100");
     default: return "Kumite";
   }
 }
@@ -1203,8 +1228,17 @@ class ModosPanel : public rex::ui::ImGuiDialog {
  protected:
   void OnDraw(ImGuiIO& io) override {
     enum { kNinguna, kEntreP, kFinP, kRankP, kLabP, kRpgP } que = kNinguna;
-    const Estado st = Get();
+    Estado st = Get();
     const bool menu = MenuPrincipal();
+    // prueba de dibujo (frente R6, tools/pruebas.py r6_pantallas): DBZ3_TEST_R6_PANTALLA=entre|derrota|fin pinta en el
+    // menu principal esa pantalla con un reto de ejemplo, sin leer el mando (no cambia nada del reto ni de la partida)
+    static const char* const kPrueba = std::getenv("DBZ3_TEST_R6_PANTALLA");
+    const bool fingida = kPrueba && menu && st.fase == kNada && !g_rank_abierto.load() && !g_lab_abierto.load();
+    if (fingida) {
+      const bool fin = std::strcmp(kPrueba, "fin") == 0;
+      st.tipo = kTorre, st.ganados = fin ? 8 : 2, st.total = 8, st.rival = 7, st.escenario = 3, st.jugador = 0;
+      st.vida = 3200, st.vida_max = 4000, st.fase = fin ? kFin : kEntre, st.resultado = fin ? kVictoria : kNinguno;
+    }
     if (g_rank_abierto.load()) {
       que = kRankP;
     } else if (g_lab_abierto.load() && !g_practica.load()) {   // (durante la practica, el combate)
@@ -1214,7 +1248,7 @@ class ModosPanel : public rex::ui::ImGuiDialog {
                dbz3::rpg::Activa()) {   // selector y pantallas de los retos propios (rpg.cpp), tambien en la espera en negro
       que = kRpgP;
     } else if (st.propio) {
-    } else if (g_fin_visible.load() && menu && st.fase == kFin) {
+    } else if ((g_fin_visible.load() || fingida) && menu && st.fase == kFin) {
       que = kFinP;
     } else if ((menu || g_encadenado.load()) && st.fase == kEntre) {
       que = kEntreP;
@@ -1224,9 +1258,10 @@ class ModosPanel : public rex::ui::ImGuiDialog {
     }
     const bool tapado = dbz3::GameDimmed() || dbz3::OverlayOpen();
     Bloquear(que != kNinguna && !tapado);
-    if (que == kNinguna && !tapado && st.fase == kCombate && Pantalla() == 25) {
-      Contador(io, st);
-      if (st.propio) dbz3::rpg::Hud(ImGui::GetForegroundDrawList(), S::GameArea(io));
+    // el HUD del modo sale y se va con el marcador del juego (no en la presentacion ni en las definitivas)
+    if (que == kNinguna && !tapado && st.fase == kCombate && Pantalla() == 25 && dbz3::combate::HudNativoVisible()) {
+      const float info = Contador(io, st);
+      if (st.propio) dbz3::rpg::Hud(ImGui::GetForegroundDrawList(), S::GameArea(io), info);
     }
     if (que != ultima_) {
       ultima_ = que;
@@ -1236,10 +1271,13 @@ class ModosPanel : public rex::ui::ImGuiDialog {
     }
     if (que == kNinguna || tapado) return;
     uint16_t pulsado = Pad();
-    if (esperar_suelta_) {   // el boton que abrio la pantalla no cuenta hasta soltarlo todo
+    if (esperar_suelta_ || fingida) {   // el boton que abrio la pantalla no cuenta hasta soltarlo todo
       if (g_pad.load() == 0 && float(ImGui::GetTime()) - abierta_ > 0.25f) esperar_suelta_ = false;
       pulsado = 0;
     }
+    if ((que == kRpgP && dbz3::ingame::tutorial::Mostrar(dbz3::rpg::Heroe() ? "heroe" : "retos")) ||
+        dbz3::ingame::tutorial::Abierto())
+      pulsado = 0;   // F3: tutorial encima
     // sonidos del menu del juego (hub_menu.cpp, QueueSe: suenan sobre el menu principal): mover 2, aceptar 3, atras 5
     if (const int se = pulsado & kB ? 5 : pulsado & kA ? 3 : pulsado & (kUp | kDown | kLeft | kRight | kLb | kRb) ? 2 : -1;
         se >= 0) {
@@ -1252,10 +1290,25 @@ class ModosPanel : public rex::ui::ImGuiDialog {
     const float t = float(ImGui::GetTime());
     const float in = std::clamp((t - abierta_) / 0.2f, 0.0f, 1.0f);
     const int v0 = dl->VtxBuffer.Size;
-    S::Backdrop(dl, a, "fondo_duelo");
-    S::Host(dl, a, "anfitrion_tagteam_a", -68, 262, false);
+    // fondos propios 16:9 (assets_propios/png/add): Laboratorio, Modo Heroe y, en el resto, el del HUB (sin ellos, el
+    // del Duelo). Esquema comun de colocacion: S::mode (game_style.h); el laboratorio va sin anfitrion (tabla ancha).
+    // Pack Dragon HUB del autor (assets_propios/png/add/dragon_hub): fondo y anfitrion de cada pantalla; si falta
+    // la pieza, el fondo del HUB y el Kaio del Duelo como antes
+    const bool heroe = que == kRpgP && dbz3::rpg::Heroe(), m100 = que == kRpgP && dbz3::rpg::Mision100();
+    const char* fondo = que == kLabP ? "hub/fondo_lab" : heroe ? "hub/fondo_heroe" : m100 ? "hub/fondo_mision"
+                        : que == kRankP ? "hub/fondo_ranking" : que == kEntreP || que == kFinP ? "hub/fondo_retos"
+                                                                                               : "hub/fondo";
+    if (!S::Img(fondo)) fondo = "hub/fondo";
+    S::Backdrop(dl, a, S::Img(fondo) ? fondo : "fondo_duelo");
+    // de pie, pies abajo, ~437 px de alto (S::Host): Heroe su anfitrion, Mision 100 Vegeta, Ranking Whis, entre
+    // combates y final Goku, el selector de retos Trunks
+    const char* host = heroe ? "hub/anfitrion_heroe" : m100 ? "hub/anfitrion_vegeta"
+                       : que == kRankP ? "hub/anfitrion_whis" : que == kEntreP || que == kFinP ? "hub/anfitrion_goku"
+                                                                                              : "hub/anfitrion_trunks";
+    if (!S::Img(host)) host = "anfitrion_tagteam_a";
+    if (que != kLabP) S::Host(dl, a, host, D::kHostX, D::kHostY, false);
     S::Sides(dl, a);
-    if (que == kEntreP) DibujarEntre(dl, a, st);
+    if (que == kEntreP) DibujarEntre(dl, a, st, pulsado);
     else if (que == kRpgP) dbz3::rpg::Dibujar(dl, a, t, pulsado);
     else if (que == kFinP) DibujarFin(dl, a, st, pulsado);
     else if (que == kLabP) DibujarLab(dl, a, pulsado);
@@ -1301,23 +1354,23 @@ class ModosPanel : public rex::ui::ImGuiDialog {
     return pulsado;
   }
 
-  // Lineas centradas en el marco del juego (letra del menu, turquesa; la primera resaltada).
-  static void Marco(ImDrawList* dl, const S::Area& a, float y0, const std::vector<std::string>& lineas, float t,
-                    float letra = 38.0f) {
-    const float paso = 62, y1 = y0 + 24 + paso * float(lineas.size());
-    const ImVec2 f0 = a.At(300, y0), f1 = a.At(900, y1);
-    S::Frame(dl, f0, f1, a.s);
-    S::Highlight(dl, a.At(300, y0 + 10), a.At(900, y0 + 12 + paso), t);
+  // Lineas centradas en el marco del juego, en la columna del esquema comun (la primera, cabecera resaltada).
+  static void Marco(ImDrawList* dl, const S::Area& a, float y0, const std::vector<std::string>& lineas, float t) {
+    const float paso = 52, y1 = y0 + 2 * D::kPad + paso * float(lineas.size());
+    S::Frame(dl, a.At(D::kX0, y0), a.At(D::kX1, y1), a.s);
+    D::Stripe(dl, a, D::kX0, y0 + D::kPad + 2, D::kX1, y0 + D::kPad + paso - 2, t);
     for (size_t i = 0; i < lineas.size(); ++i) {
-      S::MenuText(dl, a.At(600, y0 + 12 + paso * (float(i) + 0.5f)), (i == 0 ? 46.0f : letra) * a.s,
-                  lineas[i].c_str(), i == 0, false);
+      S::MenuText(dl, a.At(D::kCx, y0 + D::kPad + paso * (float(i) + 0.5f)), (i == 0 ? D::kHead : D::kRow) * a.s,
+                  lineas[i].c_str(), i == 0, false, (D::kX1 - D::kX0 - 2 * D::kText) * a.s);
     }
   }
 
   // Durante el combate, bajo el reloj: "Piso 2 de 8" (letra del menu, sin marco: no tapa el marcador).
   // Marcador del HUB (res/ingame_ui/retos: marcador_<modo> 560x128 con la insignia a la izquierda y la caja del
   // texto en (128,25)-(538,106); cifras doradas num_*): palabra con la letra del menu y "N/M" con las cifras.
-  static void Contador(ImGuiIO& io, const Estado& st) {
+  // Bloque del HUD de los modos (S::mode::kHud*): marcador y debajo sus lineas; devuelve la y de la siguiente linea
+  // libre (para las reglas del reto propio, rpg::Hud).
+  static float Contador(ImGuiIO& io, const Estado& st) {
     const S::Area a = S::GameArea(io);
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     bool aguanta = false;
@@ -1330,47 +1383,90 @@ class ModosPanel : public rex::ui::ImGuiDialog {
     }
     // retos de rpg.cpp: su palabra y el marcador del modo parecido (torre: pisos; supervivencia: rondas; kumite)
     static constexpr int kMarcador[kTipos] = {kTorre, kSupervivencia, kKumite, kKumite, kSupervivencia,
-                                              kKumite, kTorre,         kTorre,  kKumite, kKumite};
+                                              kKumite, kTorre,         kTorre,  kKumite, kKumite, kKumite};
     const int base_tipo = kMarcador[std::clamp(st.tipo, 0, kTipos - 1)];
     const char* palabra = st.propio && !propia.empty() ? propia.c_str()
                           : base_tipo == kTorre        ? T::T("Piso", "Floor")
                           : base_tipo == kSupervivencia ? T::T("Oleada", "Wave")
                                                         : T::T("Jefe", "Boss");
-    if (!aguanta && !mods.empty()) S::MenuText(dl, a.At(600, 236), 24 * a.s, mods.c_str(), true, false);
+    float info = D::kHudInfoY;   // lineas bajo el marcador: "¡Aguanta!" o los modificadores, luego las reglas
+    const std::string linea = aguanta ? std::string(T::T("¡Aguanta!", "Survive!")) : mods;
+    if (!linea.empty()) {
+      S::MenuText(dl, a.At(600, info), 24 * a.s, linea.c_str(), true, false, 600 * a.s);
+      info += D::kHudLine;
+    }
     const S::Pic m = S::Img((std::string("retos/marcador_") + kNombres[base_tipo]).c_str());
     const std::string cifras = std::to_string(st.ganados + 1) + "/" + std::to_string(st.total);
-    std::vector<S::Pic> nums;
-    for (const char c : cifras) {
-      const S::Pic n = S::Img(c == '/' ? "retos/num_barra" : (std::string("retos/num_") + c).c_str());
-      if (!n) {
-        nums.clear();
-        break;
+    // cifras: las del marcador del juego (native_ui "cifras_hud", data_usi 0: 0-9 y "/" blancas con perfil, en naranja
+    // como el "2/2" del contador de rivales); sin ellas, las doradas propias retos/num_*
+    struct Cifra {
+      S::Pic p;
+      ImVec4 src;
+      float k;   // alto respecto a una cifra (la barra es mas baja)
+    };
+    std::vector<Cifra> nums;
+    const S::Pic hud = S::Img("cifras_hud");
+    if (hud) {
+      static constexpr float kX[10][2] = {{3, 30},   {46, 62},  {76, 104}, {112, 139}, {148, 175},
+                                          {2, 29},   {40, 67},  {77, 102}, {112, 140}, {148, 175}};
+      for (const char c : cifras) {
+        const int d = c - '0';
+        const float y = d < 5 ? 4 : 40;
+        nums.push_back(c == '/' ? Cifra{hud, ImVec4(124, 76, 139, 94), 0.6f}
+                                : Cifra{hud, ImVec4(kX[d][0], y, kX[d][1], y + 30), 1.0f});
       }
-      nums.push_back(n);
+    } else {
+      for (const char c : cifras) {
+        const S::Pic n = S::Img(c == '/' ? "retos/num_barra" : (std::string("retos/num_") + c).c_str());
+        if (!n) {
+          nums.clear();
+          break;
+        }
+        nums.push_back({n, ImVec4(0, 0, n.w, n.h), 1.0f});
+      }
     }
     if (!m || nums.empty()) {   // sin las piezas: solo la letra del menu
-      std::string txt = std::string(palabra) + " " + std::to_string(st.ganados + 1) + "/" + std::to_string(st.total);
-      if (aguanta) txt += T::T("  ¡Aguanta!", "  Survive!");
-      S::MenuText(dl, a.At(600, 182), 30 * a.s, txt.c_str(), true, false);
-      return;
+      const std::string txt = std::string(palabra) + " " + std::to_string(st.ganados + 1) + "/" + std::to_string(st.total);
+      S::MenuText(dl, a.At(600, D::kHudY + D::kHudH * 0.5f), 30 * a.s, txt.c_str(), true, false);
+      return info;
     }
-    const float h = 70, k = h / 128.0f, w = 560 * k, x0 = 600 - w * 0.5f, y0 = 148;
+    const float h = D::kHudH, k = h / 128.0f, w = 560 * k, x0 = 600 - w * 0.5f, y0 = D::kHudY;
     S::DrawPic(dl, m, a.At(x0, y0), a.At(x0 + w, y0 + h));
     const float bx0 = x0 + 128 * k, bx1 = x0 + 538 * k, cy = y0 + 65.5f * k, dh = 81 * k * 0.62f;
+    const float paso = hud ? 1.0f : -2.0f;   // las del juego van sueltas; las propias, montadas
+    const ImU32 tinte = hud ? IM_COL32(255, 160, 40, 255) : IM_COL32_WHITE;
+    auto ancho = [&](const Cifra& n) { return (n.src.z - n.src.x) * dh * n.k / (n.src.w - n.src.y); };
     float dw = 0;
-    for (const S::Pic& n : nums) dw += n.w * dh / n.h - 2;
+    for (const Cifra& n : nums) dw += ancho(n) + paso;
     float x = bx1 - 8 - dw;
-    for (const S::Pic& n : nums) {
-      const float nw = n.w * dh / n.h;
-      S::DrawPic(dl, n, a.At(x, cy - dh * 0.5f), a.At(x + nw, cy + dh * 0.5f));
-      x += nw - 2;
+    for (const Cifra& n : nums) {   // alineadas por abajo
+      const float nw = ancho(n), gh = dh * n.k;
+      S::DrawPic(dl, n.p, a.At(x, cy + dh * 0.5f - gh), a.At(x + nw, cy + dh * 0.5f), n.src, tinte);
+      x += nw + paso;
     }
-    S::MenuText(dl, a.At((bx0 + bx1 - 8 - dw) * 0.5f, cy), 32 * a.s, palabra, true, false);
-    if (aguanta) S::MenuText(dl, a.At(600, y0 + h + 16), 26 * a.s, T::T("¡Aguanta!", "Survive!"), true, false);
+    S::MenuText(dl, a.At((bx0 + bx1 - 8 - dw) * 0.5f, cy), 32 * h / 70 * a.s, palabra, true, false,
+                (bx1 - 16 - dw - bx0) * a.s);
+    return info;
   }
 
-  void DibujarEntre(ImDrawList* dl, const S::Area& a, const Estado& st) {
+  void DibujarEntre(ImDrawList* dl, const S::Area& a, const Estado& st, uint16_t pulsado) {
     S::Banner(dl, a, NombreReto(st.tipo).c_str());
+    static const bool kPruebaDerrota = [] {   // prueba de dibujo (DBZ3_TEST_R6_PANTALLA=derrota)
+      const char* e = std::getenv("DBZ3_TEST_R6_PANTALLA");
+      return e && std::strcmp(e, "derrota") == 0;
+    }();
+    if ((g_reintento.load() || kPruebaDerrota) && st.fase == kEntre) {   // combate perdido: revancha o dejar el reto
+      if (pulsado & kA) Continue();
+      else if (pulsado & kB) Abort();
+      Marco(dl, a, D::kTop, {T::T("Derrota", "Defeat"),
+                         Paso(st.tipo, st.ganados + 1, st.total) + "  -  " + NombrePj(st.rival) + "  (" +
+                             dbz3::escenarios::Nombre(st.escenario) + ")"},
+            float(ImGui::GetTime()));
+      D::Bubble(dl, a, T::T("¡No te rindas! Puedes repetir este combate o dejar el reto.",
+                            "Don't give up! You can retry this fight or leave the challenge."));
+      D::Help(dl, a, {{"A", T::T("Reintentar", "Retry")}, {"B", T::T("Dejar el reto", "Quit")}});
+      return;
+    }
     bool arrastra = false;
     std::string mods;   // modificadores del combate siguiente (ficha 09)
     {
@@ -1384,10 +1480,10 @@ class ModosPanel : public rex::ui::ImGuiDialog {
     if (arrastra) l.push_back(std::string(T::T("Vida ", "Health ")) + std::to_string(st.vida) + " / " +
                                      std::to_string(st.vida_max));
     if (!mods.empty()) l.push_back(mods);
-    Marco(dl, a, 190, l, float(ImGui::GetTime()));
+    Marco(dl, a, D::kTop, l, float(ImGui::GetTime()));
     const std::string bocadillo = Paso(st.tipo, st.ganados + 1, st.total) + ". " +
                                   T::T("¡Prepárate para el siguiente combate!", "Get ready for the next fight!");
-    S::Speech(dl, a.At(200, 615), a.At(840, 845), a.s, bocadillo.c_str(), 0.12f);
+    D::Bubble(dl, a, bocadillo.c_str());
   }
 
   void DibujarFin(ImDrawList* dl, const S::Area& a, const Estado& st, uint16_t pulsado) {
@@ -1431,9 +1527,9 @@ class ModosPanel : public rex::ui::ImGuiDialog {
       l.push_back(std::string(L("Premio: ", "Prize: ", "Prix : ", "Preis: ", "Premio: ")) + std::to_string(premio) +
                   " Zenie");
     }
-    Marco(dl, a, 190, l, float(ImGui::GetTime()));
-    S::Speech(dl, a.At(200, 615), a.At(840, 845), a.s, dice.c_str(), 0.12f);
-    S::HelpLine(dl, a.At(600, 868), 40 * a.s, {{"A", T::T("Aceptar", "OK")}});
+    Marco(dl, a, D::kTop, l, float(ImGui::GetTime()));
+    D::Bubble(dl, a, dice.c_str());
+    D::Help(dl, a, {{"A", T::T("Aceptar", "OK")}});
   }
 
   // ---- Ranking: pagina 0 = perfil del jugador (ficha 01); 1 = Elo por personaje; despues, records de cada modo ----
@@ -1527,39 +1623,41 @@ class ModosPanel : public rex::ui::ImGuiDialog {
     const Pagina& pg = paginas_[size_t(pagina_)];
     S::Banner(dl, a, "Ranking");
     // pagina: el selector de formato del juego (marco, letra y flechas)
-    const ImVec2 g0 = a.At(330, 118), g1 = a.At(870, 180);
+    // (arriba a la derecha, junto a la cinta: el hueco de la esquina del esquema comun)
+    const ImVec2 g0 = a.At(D::kCornerX0 + 40, D::kCornerY0), g1 = a.At(D::kX1 - 40, D::kCornerY1);
     S::Frame(dl, g0, g1, a.s);
-    S::MenuText(dl, ImVec2((g0.x + g1.x) * 0.5f, (g0.y + g1.y) * 0.5f), 42 * a.s, pg.titulo.c_str(), true, false);
-    S::Arrows(dl, ImVec2(g0.x - 18 * a.s, g0.y), ImVec2(g1.x + 18 * a.s, g1.y), 42 * a.s, t);
-    // tabla: 8 filas con la letra del menu; la primera (el lider) con la franja del juego
-    const float y0 = 196, paso = 49;
-    const ImVec2 f0 = a.At(330, y0), f1 = a.At(870, y0 + 16 + paso * 8);
-    S::Frame(dl, f0, f1, a.s);
+    S::MenuText(dl, ImVec2((g0.x + g1.x) * 0.5f, (g0.y + g1.y) * 0.5f), D::kHead * a.s, pg.titulo.c_str(), true, false,
+                g1.x - g0.x - 2 * D::kText * a.s);
+    S::Arrows(dl, ImVec2(g0.x - 18 * a.s, g0.y), ImVec2(g1.x + 18 * a.s, g1.y), 40 * a.s, t);
+    // tabla: hasta 8 filas con la letra del menu (el marco, al alto de las que hay); la primera (el lider) con la
+    // franja del juego. (paso 47: las 8 filas y el relleno kPad caben sin llegar al pico del bocadillo)
     const auto& filas = pg.filas;
+    const float y0 = D::kTop, paso = 47, x0 = D::kX0, x1 = D::kX1;
+    const ImVec2 f0 = a.At(x0, y0), f1 = a.At(x1, y0 + 2 * D::kPad + paso * float(std::clamp(int(filas.size()), 1, 8)));
+    S::Frame(dl, f0, f1, a.s);
     if (filas.empty()) {
-      S::MenuText(dl, a.At(600, y0 + 16 + paso * 4), 36 * a.s, T::T("Aún no hay combates", "No fights yet"), false,
-                  true);
+      S::MenuText(dl, a.At(D::kCx, y0 + D::kPad + paso * 0.5f), D::kRow * a.s, T::T("Aún no hay combates", "No fights yet"),
+                  false, true);
     }
     for (size_t i = 0; i < filas.size() && i < 8; ++i) {
-      const float y = y0 + 8 + paso * (float(i) + 0.5f);
-      if (i == 0) S::Highlight(dl, a.At(330, y - paso * 0.5f + 2), a.At(870, y + paso * 0.5f - 2), t);
-      const float k = 32 * a.s;
-      S::MenuText(dl, a.At(366, y), k, filas[i].pos.c_str(), i == 0, false);
+      const float y = y0 + D::kPad + paso * (float(i) + 0.5f);
+      if (i == 0) D::Stripe(dl, a, x0, y - paso * 0.5f + 2, x1, y + paso * 0.5f - 2, t);
+      const float k = D::kSmall * a.s;
+      S::MenuText(dl, a.At(x0 + 48, y), k, filas[i].pos.c_str(), i == 0, false);
       static const char* const kMedallas[] = {"retos/medalla_1_bronce", "retos/medalla_2_plata", "retos/medalla_3_oro",
                                               "retos/medalla_4_platino", "retos/medalla_5_diamante"};
       if (filas[i].medalla > 0) {
         if (const S::Pic md = S::Img(kMedallas[filas[i].medalla - 1])) {
           const float r = paso * 0.42f;
-          S::DrawPic(dl, md, a.At(410 - r, y - r), a.At(410 + r, y + r));
+          S::DrawPic(dl, md, a.At(x0 + 96 - r, y - r), a.At(x0 + 96 + r, y + r));
         }
       }
-      S::MenuText(dl, a.At(560, y), k, filas[i].nombre.c_str(), i == 0, false);
-      S::MenuText(dl, a.At(728, y), k, filas[i].valor.c_str(), i == 0, false);
-      S::MenuText(dl, a.At(830, y), k * 0.85f, filas[i].extra.c_str(), i == 0, false);
+      S::MenuText(dl, a.At(x0 + 265, y), k, filas[i].nombre.c_str(), i == 0, false, 240 * a.s);
+      S::MenuText(dl, a.At(x0 + 480, y), k, filas[i].valor.c_str(), i == 0, false, 160 * a.s);
+      S::MenuText(dl, a.At(x1 - D::kText - 50, y), k, filas[i].extra.c_str(), i == 0, false, 100 * a.s);
     }
-    S::Speech(dl, a.At(200, 615), a.At(840, 845), a.s, pg.dice.c_str(), 0.12f);
-    S::HelpLine(dl, a.At(600, 868), 40 * a.s, {{"LB", T::T("Anterior", "Previous")}, {"RB", T::T("Siguiente", "Next")},
-                                               {"B", T::T("Atrás", "Back")}});
+    D::Bubble(dl, a, pg.dice.c_str());
+    D::Help(dl, a, {{"LB", T::T("Anterior", "Previous")}, {"RB", T::T("Siguiente", "Next")}, {"B", T::T("Atrás", "Back")}});
   }
 
   // Laboratorio: el ultimo combate (de cualquier modo), la frame data de sus ultimos golpes y la practica contra
@@ -1568,25 +1666,36 @@ class ModosPanel : public rex::ui::ImGuiDialog {
     Lab lab;
     bool captura = false;
     int muneco = 0;
-    if (pulsado & kUp) lab_fila_ = (lab_fila_ + 2) % 3;
-    if (pulsado & kDown) lab_fila_ = (lab_fila_ + 1) % 3;
+    // filas: 0 luchador, 1 rival (izquierda/derecha: cualquier jugable), 2 practicar, 3 muneco, 4 captura
+    if (pulsado & kUp) lab_fila_ = (lab_fila_ + 4) % 5;
+    if (pulsado & kDown) lab_fila_ = (lab_fila_ + 1) % 5;
+    if (lab_jug_ < 0) {   // al abrir: los del ultimo Duelo
+      int traje = 0;
+      UltimoDuelo(&lab_jug_, &traje);
+      uint8_t* base = Base();
+      lab_riv_ = base ? int8_t(REX_LOAD_U8(kGame + 32)) : -1;
+      if (!Jugable(lab_riv_) || lab_riv_ == lab_jug_) lab_riv_ = lab_jug_ == 7 ? 0 : 7;
+    }
+    const int lado = pulsado & kRight ? 1 : pulsado & kLeft ? -1 : 0;
+    auto otro = [](int id, int dir) {
+      for (int k = 0; k < 64; ++k)
+        if (Jugable(id = (id + dir + 64) % 64)) break;
+      return id;
+    };
+    if (lado && lab_fila_ == 0) lab_jug_ = otro(lab_jug_, lado);
+    if (lado && lab_fila_ == 1) lab_riv_ = otro(lab_riv_, lado);
     {
       std::lock_guard<std::mutex> lk(g_mu);
       CargarDatos();
       const bool cambia = (pulsado & (kA | kLeft | kRight)) != 0;
-      if (lab_fila_ == 1 && cambia) {
+      if (lab_fila_ == 3 && cambia) {
         g_muneco = 1 - g_muneco;
         GuardarDatos();
-      } else if (lab_fila_ == 2 && cambia) {
+      } else if (lab_fila_ == 4 && cambia) {
         g_lab_captura = !g_lab_captura;
         GuardarDatos();
-      } else if (lab_fila_ == 0 && (pulsado & kA)) {   // practica: el luchador del Duelo contra el rival del Duelo
-        int jugador = 0, traje = 0;
-        UltimoDuelo(&jugador, &traje);
-        uint8_t* base = Base();
-        int rival = base ? int8_t(REX_LOAD_U8(kGame + 32)) : -1;
-        if (!Jugable(rival) || rival == jugador) rival = jugador == 7 ? 0 : 7;
-        if (!EmpezarPractica(jugador, rival)) REXLOG_WARN("dbz3 modos: laboratorio: no se pudo pedir la practica");
+      } else if (lab_fila_ <= 2 && (pulsado & kA)) {   // practica: el luchador elegido contra el rival elegido
+        if (!EmpezarPractica(lab_jug_, lab_riv_)) REXLOG_WARN("dbz3 modos: laboratorio: no se pudo pedir la practica");
       }
       lab = g_lab;
       captura = g_lab_captura;
@@ -1613,23 +1722,27 @@ class ModosPanel : public rex::ui::ImGuiDialog {
         l.emplace_back(buf);
       }
     }
-    S::Frame(dl, a.At(300, 108), a.At(900, 108 + 16 + 36 * float(l.size())), a.s);
+    // esquema comun sin anfitrion (la tabla necesita el ancho): resumen en la esquina de arriba a la derecha, tabla y
+    // opciones centradas, separadas D::kGap, y el bocadillo abajo sin pico
+    // (texto desde el filo de la linea del marco, pad; resumen 28.., tabla 200..432, opciones 472..686, bocadillo 728..)
+    const float pad = D::kPad - 4, sy0 = 28;
+    S::Frame(dl, a.At(D::kCornerX0, sy0), a.At(D::kX1, sy0 + 2 * pad + 32 * float(l.size())), a.s);
     for (size_t i = 0; i < l.size(); ++i) {
-      S::MenuText(dl, a.At(600, 116 + 36 * (float(i) + 0.5f)), (i == 0 ? 30.0f : 25.0f) * a.s, l[i].c_str(), i == 0,
-                  false);
+      S::MenuText(dl, a.At((D::kCornerX0 + D::kX1) * 0.5f, sy0 + pad + 32 * (float(i) + 0.5f)), D::kSmall * a.s,
+                  l[i].c_str(), i == 0, false, (D::kX1 - D::kCornerX0 - 2 * D::kText) * a.s);
     }
     // frame data de los ultimos golpes (los mas nuevos arriba)
-    const float x0 = 200, x1 = 1000, y0 = 246, paso = 36;
-    S::Frame(dl, a.At(x0, y0), a.At(x1, y0 + 16 + paso * 7), a.s);
-    const float cx[5] = {330, 560, 670, 780, 900};
+    const float x0 = 150, x1 = 1050, y0 = 200 + pad - 8, paso = 28;   // y0 + 8 = primera fila, como antes
+    S::Frame(dl, a.At(x0, 200), a.At(x1, 200 + 2 * pad + paso * 7), a.s);
+    const float cx[5] = {300, 560, 680, 800, 940};
     const char* cab[5] = {L("Golpe", "Hit", "Coup", "Treffer", "Colpo"),
                           L("Arranque", "Startup", "Démarrage", "Anlauf", "Avvio"),
                           L("Daño", "Damage", "Dégâts", "Schaden", "Danni"),
                           L("Ventaja", "Advantage", "Avantage", "Vorteil", "Vantaggio"),
                           L("Resultado", "Result", "Résultat", "Ergebnis", "Risultato")};
-    for (int c = 0; c < 5; ++c) S::MenuText(dl, a.At(cx[c], y0 + 8 + paso * 0.5f), 24 * a.s, cab[c], true, false);
+    for (int c = 0; c < 5; ++c) S::MenuText(dl, a.At(cx[c], y0 + 8 + paso * 0.5f), D::kSmall * a.s, cab[c], true, false);
     if (lab.golpes.empty()) {
-      S::MenuText(dl, a.At(600, y0 + 8 + paso * 3.5f), 26 * a.s,
+      S::MenuText(dl, a.At(600, y0 + 8 + paso * 3.5f), D::kSmall * a.s,
                   L("Sin golpes medidos: practica contra el muñeco", "No hits measured: practice against the dummy",
                     "Aucun coup mesuré : entraîne-toi contre le mannequin",
                     "Keine Treffer gemessen: übe gegen die Puppe", "Nessun colpo misurato: allenati contro il manichino"),
@@ -1639,16 +1752,16 @@ class ModosPanel : public rex::ui::ImGuiDialog {
       const Golpe& g = lab.golpes[lab.golpes.size() - 1 - i];
       const float y = y0 + 8 + paso * (float(i) + 1.5f);
       std::snprintf(buf, sizeof(buf), "%s %03X", NombrePj(g.id).c_str(), g.codigo);
-      S::MenuText(dl, a.At(cx[0], y), 22 * a.s, buf, false, false);
-      S::MenuText(dl, a.At(cx[1], y), 24 * a.s, std::to_string(g.arranque).c_str(), false, false);
-      S::MenuText(dl, a.At(cx[2], y), 24 * a.s, std::to_string(int(g.dano)).c_str(), false, false);
+      S::MenuText(dl, a.At(cx[0], y), D::kSmall * a.s, buf, false, false, 250 * a.s);
+      S::MenuText(dl, a.At(cx[1], y), D::kSmall * a.s, std::to_string(g.arranque).c_str(), false, false);
+      S::MenuText(dl, a.At(cx[2], y), D::kSmall * a.s, std::to_string(int(g.dano)).c_str(), false, false);
       if (g.listo_a >= 0 && g.listo_v >= 0) {
         std::snprintf(buf, sizeof(buf), "%+d", g.listo_v - g.listo_a);
       } else {
         std::snprintf(buf, sizeof(buf), "-");
       }
-      S::MenuText(dl, a.At(cx[3], y), 24 * a.s, buf, false, false);
-      S::MenuText(dl, a.At(cx[4], y), 24 * a.s,
+      S::MenuText(dl, a.At(cx[3], y), D::kSmall * a.s, buf, false, false);
+      S::MenuText(dl, a.At(cx[4], y), D::kSmall * a.s,
                   g.guardia ? L("Guardia", "Guard", "Garde", "Abwehr", "Guardia") : L("Golpe", "Hit", "Touché", "Treffer",
                                                                                       "Colpito"),
                   false, false);
@@ -1662,18 +1775,29 @@ class ModosPanel : public rex::ui::ImGuiDialog {
         std::string(L("Captura por fotograma: ", "Frame capture: ", "Capture image par image : ", "Bild-für-Bild-Aufnahme: ",
                       "Cattura per fotogramma: ")) +
         (captura ? L("SÍ", "ON", "OUI", "AN", "SÌ") : L("NO", "OFF", "NON", "AUS", "NO"));
-    const std::string filas[3] = {L("Practicar contra el muñeco", "Practice against the dummy",
-                                    "S'entraîner contre le mannequin", "Gegen die Puppe üben", "Allenarsi col manichino"),
-                                  fila_muneco, fila_captura};
-    const float oy = 528, op = 38;
-    S::Frame(dl, a.At(300, oy), a.At(900, oy + 16 + op * 3), a.s);
-    for (int i = 0; i < 3; ++i) {
-      const float y = oy + 8 + op * (float(i) + 0.5f);
-      if (i == lab_fila_) S::Highlight(dl, a.At(300, y - op * 0.5f + 2), a.At(900, y + op * 0.5f - 2), t);
-      S::MenuText(dl, a.At(600, y), 28 * a.s, filas[i].c_str(), i == lab_fila_, false);
+    const std::string filas[5] = {
+        std::string(L("Luchador: ", "Fighter: ", "Combattant : ", "Kämpfer: ", "Lottatore: ")) + NombrePj(lab_jug_),
+        std::string(L("Rival: ", "Rival: ", "Adversaire : ", "Gegner: ", "Avversario: ")) + NombrePj(lab_riv_),
+        L("Practicar contra el muñeco", "Practice against the dummy", "S'entraîner contre le mannequin",
+          "Gegen die Puppe üben", "Allenarsi col manichino"),
+        fila_muneco, fila_captura};
+    const float oy = 200 + 2 * pad + paso * 7 + 40, op = 34;
+    S::Frame(dl, a.At(300, oy), a.At(900, oy + 2 * D::kPad + op * 5), a.s);
+    for (int i = 0; i < 5; ++i) {
+      const float y = oy + D::kPad + op * (float(i) + 0.5f);
+      if (i == lab_fila_) D::Stripe(dl, a, 300, y - op * 0.5f + 1, 900, y + op * 0.5f - 1, t);
+      // luchador y rival: las flechas del juego dentro del marco (antes "<  >" con letras)
+      if (i == lab_fila_ && i <= 1) S::Arrows(dl, a.At(352, y - op * 0.5f), a.At(848, y + op * 0.5f), 28 * a.s, t);
+      S::MenuText(dl, a.At(600, y), D::kRow * a.s, filas[i].c_str(), i == lab_fila_, false, (600 - 2 * D::kText) * a.s);
     }
     const char* dice =
-        lab_fila_ == 0
+        lab_fila_ <= 1
+            ? L("Elige con izquierda y derecha quién practica y quién hace de muñeco. A: empezar.",
+                "Use left and right to pick who practices and who is the dummy. A: start.",
+                "Choisis avec gauche et droite qui s'entraîne et qui sert de mannequin. A : commencer.",
+                "Wähle mit links und rechts, wer übt und wer die Puppe ist. A: starten.",
+                "Scegli con sinistra e destra chi si allena e chi fa da manichino. A: inizia.")
+        : lab_fila_ == 2
             ? L("Combate sin tiempo contra un muñeco que no ataca. Al salir (pausa) vuelves aquí con la tabla: arranque "
                 "en cuadros, daño y ventaja (+ = te recuperas antes).",
                 "Untimed fight against a dummy that doesn't attack. When you leave (pause) you come back here with the "
@@ -1684,7 +1808,7 @@ class ModosPanel : public rex::ui::ImGuiDialog {
                 "zurück: Anlauf in Bildern, Schaden und Vorteil (+ = du erholst dich zuerst).",
                 "Incontro senza tempo contro un manichino che non attacca. Uscendo (pausa) torni qui con la tabella: "
                 "avvio in fotogrammi, danni e vantaggio (+ = ti riprendi prima).")
-        : lab_fila_ == 1
+        : lab_fila_ == 3
             ? L("Quieto: recibe cada golpe. En guardia: lo bloquea (ves la ventaja en guardia).",
                 "Standing: takes every hit. Guarding: blocks it (you see the advantage on guard).",
                 "Immobile : il prend chaque coup. En garde : il le bloque (tu vois l'avantage en garde).",
@@ -1695,14 +1819,14 @@ class ModosPanel : public rex::ui::ImGuiDialog {
                 "Chaque image (action, vie et position des deux) va dans user_data/dbz3/laboratorio.csv.",
                 "Jedes Bild (Aktion, Leben und Position beider) landet in user_data/dbz3/laboratorio.csv.",
                 "Ogni fotogramma (azione, vita e posizione di entrambi) va in user_data/dbz3/laboratorio.csv.");
-    S::Speech(dl, a.At(200, 690), a.At(840, 850), a.s, dice, 0.12f);
-    S::HelpLine(dl, a.At(600, 872), 38 * a.s,
-                {{"A", lab_fila_ == 0 ? L("Practicar", "Practice", "S'entraîner", "Üben", "Allenati")
+    S::Speech(dl, a.At(200, 728), a.At(1000, 852), a.s, dice, -1.0f);
+    D::Help(dl, a,
+                {{"A", lab_fila_ <= 2 ? L("Practicar", "Practice", "S'entraîner", "Üben", "Allenati")
                                       : L("Cambiar", "Change", "Changer", "Ändern", "Cambia")},
                  {"B", L("Atrás", "Back", "Retour", "Zurück", "Indietro")}});
   }
 
-  int ultima_ = -1, pagina_ = 0, lab_fila_ = 0;
+  int ultima_ = -1, pagina_ = 0, lab_fila_ = 0, lab_jug_ = -1, lab_riv_ = -1;
   float abierta_ = 0;
   bool esperar_suelta_ = true, bloqueado_ = false;
   uint16_t ultimo_ = 0;
@@ -1718,6 +1842,12 @@ void CrearPanel() {
 void PedirPanel() {
   if (!g_panel_pedido.exchange(true)) dbz3::launcher::DeferUi(&CrearPanel);
 }
+// prueba de dibujo (frente R6, DBZ3_TEST_R6_PANTALLA): el panel se crea al llegar al menu principal
+const bool g_prueba_r6 = std::getenv("DBZ3_TEST_R6_PANTALLA") && (std::thread([] {
+                           while (dbz3::ingame::GameScreen() != 5) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                           PedirPanel();
+                         }).detach(),
+                                                                  true);
 
 // ---- HUB (hub_menu.cpp): A en la entrada (hilo del juego, menu principal activo) ----
 // Retos: con el ultimo personaje del Duelo (partida+31/+33) o, si hay uno guardado, con el suyo. Mientras dure
@@ -1739,7 +1869,8 @@ bool EsJugable(int id) { return Jugable(id); }
 namespace {
 bool RetoEnCurso() {
   const int f = Get().fase;
-  return f == kCombate || f == kEntre || (f == kFin && g_fin_visible.load()) || dbz3::rpg::Busy();
+  // (g_prueba_r6: la pantalla fingida de la prueba de dibujo tapa el HUB como la de verdad)
+  return f == kCombate || f == kEntre || (f == kFin && g_fin_visible.load()) || dbz3::rpg::Busy() || g_prueba_r6;
 }
 // Torre / Supervivencia / Kumite del HUB: el selector de retos de rpg.cpp (el clasico y los nuevos de cada entrada).
 void AbrirSelector(int entrada) {
@@ -1760,7 +1891,19 @@ const bool g_hub = dbz3::hub::RegisterMode("torre", [] { AbrirSelector(kTorre); 
                    dbz3::hub::RegisterMode("supervivencia", [] { AbrirSelector(kSupervivencia); }, &RetoEnCurso) &&
                    dbz3::hub::RegisterMode("kumite", [] { AbrirSelector(kKumite); }, &RetoEnCurso) &&
                    dbz3::hub::RegisterMode("ranking", &AbrirRanking, &RankingAbierto) &&
-                   dbz3::hub::RegisterMode("laboratorio", &AbrirLab, &LabAbierto);
+                   dbz3::hub::RegisterMode("laboratorio", &AbrirLab, &LabAbierto) &&
+                   dbz3::hub::RegisterEntry("mision100", {"Misión 100", "Mission 100", "Mission 100", "Mission 100", "Missione 100"},
+                                            {"Cien misiones por sagas: combates, contrarreloj, aguantar, reglas especiales, "
+                                             "Tag Team y supervivencia. ¡Consigue el rango S en todas!",
+                                             "A hundred missions by saga: battles, time attacks, survival, special rules "
+                                             "and Tag Team. Get the S rank in all of them!",
+                                             "Cent missions par saga : combats, contre la montre, survie, règles spéciales "
+                                             "et Tag Team. Obtiens le rang S partout !",
+                                             "Hundert Missionen nach Sagas: Kämpfe, Zeitangriffe, Durchhalten, Sonderregeln "
+                                             "und Tag Team. Hol dir überall Rang S!",
+                                             "Cento missioni per saga: scontri, contro il tempo, resistenza, regole speciali "
+                                             "e Tag Team. Ottieni il grado S in tutte!"},
+                                            [] { AbrirSelector(3); }, &RetoEnCurso);
 
 // PRUEBAS. DBZ3_TEST_MODO="tipo,jugador[,traje]" (tipo: torre, supervivencia, kumite): empieza el reto cuando
 // el menu principal lleva 3 s en pantalla y, al acabar, escribe el ranking en el log.
@@ -1788,6 +1931,11 @@ const bool g_test = [] {
       std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
     PedirPanel();
+    if (tipo == kMision) {   // DBZ3_TEST_MODO=mision100,jugador,n: la mision n (1-100) de la Mision 100
+      REXLOG_INFO("dbz3 modos: prueba: mision 100 n {} con id {}: {}", traje, jugador,
+                  dbz3::rpg::ProbarMision(traje, jugador) ? "empieza" : "no se pudo empezar");
+      return;
+    }
     REXLOG_INFO("dbz3 modos: prueba: {} con id {} (traje {}): {}", kNombres[tipo], jugador, traje,
                 Start(tipo, jugador, traje) ? "empieza" : "no se pudo empezar");
     while (Get().fase != kFin) std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -1914,6 +2062,7 @@ DBZ3_HOOK_EU(sub_821A28A8) {
     int slot = SlotOf(base, id);
     if (slot >= 0) REX_STORE_U16(e + 8, uint16_t(slot));
     else slot = int16_t(REX_LOAD_U16(e + 8));
+    if (slot < 0) continue;
     g_t_cell[size_t(i)] = slot;
     if (REX_LOAD_U16(kSlotToId + 2 * uint32_t(slot)) != uint32_t(id)) g_t_id[size_t(i)] = id;
     REXLOG_INFO("dbz3 modos: torneo: plaza {} = id {} (casilla {})", i, id, slot);
@@ -1940,24 +2089,15 @@ DBZ3_HOOK_EU(sub_821A5A30) {
 
 // Menu del final del combate (estado 7 del combate, sub_820FF750 cada fotograma): sub_820DF568 lee la fila elegida
 // del menu del marcador (B = *0x82324064: +4272 bit 0 = aun eligiendo, +4292 = fila). Fila 2 ("Reselect
-// Characters") = R 4 y salir (sub_820FF820). En un reto ganado se elige sola: del WINNER! al combate siguiente sin
-// menu. Tras perder sale el menu (Battle Again? = reintentar el mismo combate).
+// Characters") = R 4 y salir (sub_820FF820). En los combates del HUB (retos, pasarela, laboratorio) no sale nunca:
+// tras el WINNER! se sale y cada modo ensena su pantalla (siguiente combate, revancha o resultado).
 DBZ3_HOOK_EU(sub_820FF750) {
-  using namespace dbz3::modos;
   if (dbz3::hub::OwnBattle()) {
-    const uint32_t mgr = REX_LOAD_U32(kMgrPtr), hud = REX_LOAD_U32(kHud);
-    bool gana = false, sin_revancha = false;
-    if (mgr) {
-      std::lock_guard<std::mutex> lk(g_mu);
-      gana = g_st.fase == kCombate &&
-             Gana(int32_t(REX_LOAD_U32(mgr + 35136)), int32_t(REX_LOAD_U32(mgr + 35132))) &&
-             LoadF(base, mgr + 2096 + 6080) > 0.0f;
-      sin_revancha = g_st.fase == kCombate && g_reto.propio && !g_reto.reintentar;   // rpg: perder acaba el reto
-    }
-    if ((gana || sin_revancha) && hud && (REX_LOAD_U32(hud + 4272) & 1)) {
+    const uint32_t hud = REX_LOAD_U32(dbz3::modos::kHud);
+    if (hud && (REX_LOAD_U32(hud + 4272) & 1)) {
       REX_STORE_U32(hud + 4272, REX_LOAD_U32(hud + 4272) & ~1u);
       REX_STORE_U16(hud + 4292, 2);
-      REXLOG_INFO("dbz3 modos: {}: sin menu final", gana ? "victoria, al combate siguiente" : "derrota sin revancha");
+      REXLOG_INFO("dbz3 modos: sin menu final (pantalla propia del modo)");
     }
   }
   orig(ctx, base);

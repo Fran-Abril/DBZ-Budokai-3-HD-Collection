@@ -2573,6 +2573,9 @@ class ModsPage(Page):
         if m["type"] == "personaje":
             ttk.Button(bf, text=T("Editar personaje", "Edit character"),
                        command=lambda: self.app.goto("characters", mod=m["name"])).pack(fill="x", pady=(6, 0))
+            # feedback de jugadores: "¿se podria importar como TRAJE (Vegeta GT de IW como traje de Vegeta)?"
+            ttk.Button(bf, text=T("Convertir en traje de su personaje base", "Make it a costume of its base character"),
+                       command=lambda: self.as_costume(m["name"])).pack(fill="x", pady=(6, 0))
         if self.adv and m["toml"]:
             ttk.Button(bf, text=T("Editar ajustes (formulario)", "Edit settings (form)"),
                        command=lambda: TomlFormDialog(self.app, m["toml"], self.refresh)).pack(fill="x", pady=(6, 0))
@@ -2583,6 +2586,20 @@ class ModsPage(Page):
                 ttk.Button(bf, text=T("Editar texto…", "Edit text…"),
                            command=lambda: TextEditor(self.app, [os.path.join(m["dir"], f) for f in files],
                                                       self.refresh)).pack(fill="x", pady=(6, 0))
+
+    def as_costume(self, mod):
+        """importar.py traje: el port como traje extra de su donante (mod nuevo traje_<mod>; el port no cambia)."""
+        golpes_base = self.app.ask(T("Se crea un traje extra del personaje base con el modelo de este port (el port "
+                                     "no se toca).\n\n¿Con los golpes del personaje base? (Sí = sus golpes y "
+                                     "cápsulas; No = los del port)",
+                                     "An extra costume of the base character is made with this port's model (the port "
+                                     "is not touched).\n\nUse the base character's moves? (Yes = its moves and "
+                                     "capsules; No = the port's)"))
+        args = ["traje", mod, "--mods", self.env.mods] + (["--sin-enlace"] if golpes_base else [])
+        self.run(cmd_script(self.env, "importar.py", args), T("Traje desde ", "Costume from ") + mod,
+                 done=lambda job: self.refresh(), status=self.status,
+                 ok_text=T("Traje creado (mod traje_%s). Se ve al pulsar JUGAR." % mod,
+                           "Costume made (mod traje_%s). It shows up when you press PLAY." % mod))
 
     def toggle(self):
         m = self.selected()
@@ -2712,10 +2729,12 @@ class TomlFormDialog(tk.Toplevel):
         g.columnconfigure(1, weight=1)
         self.vars = {}
         hints = {
-            "voces": T("iw:NOMBRE | b3:ID | donante | ninguna",
-                       "iw:NAME | b3:ID | donante (= the donor's) | ninguna (= none)"),
-            "gritos": T("iw:NOMBRE | b1:N | donante | ninguno",
-                        "iw:NAME | b1:N | donante (= the donor's) | ninguno (= none)"),
+            "voces": T("iw:NOMBRE | sb2:COD | b3:ID | wav:voces (tus frases: voces/07.wav...) | donante | ninguna",
+                       "iw:NAME | sb2:CODE | b3:ID | wav:voces (your lines: voces/07.wav...) | donante (= the "
+                       "donor's) | ninguna (= none)"),
+            "gritos": T("iw:NOMBRE | b1:N | sb2:COD | wav:gritos (tus .wav en gritos/) | donante | ninguno",
+                        "iw:NAME | b1:N | sb2:CODE | wav:gritos (your .wav in gritos/) | donante (= the donor's) | "
+                        "ninguno (= none)"),
             "formas": T("número de formas (vacío = las del donante)", "number of forms (empty = the donor's)"),
             "despues_de": T("su casilla aparece tras este personaje", "its cell shows up after this character"),
             "id": T("plaza en la rueda (vacío = automática)", "wheel slot (empty = automatic)"),

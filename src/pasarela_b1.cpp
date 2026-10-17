@@ -14,14 +14,35 @@
 #include "pasarela.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <system_error>
+#include <thread>
+
+#include <rex/logging.h>
+#include <rex/platform.h>
 
 #include "launcher/settings.h"
+#include "launcher/i18n.h"
+#include "launcher/launcher_state.h"
+
+#if REX_PLATFORM_WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
+#endif
 
 namespace dbz3::pasarela {
 namespace {
@@ -265,6 +286,23 @@ const char* SufijoAfs(const std::string& lang) {
 
 int B1aB3(int id_b1) { return id_b1 >= 0 && id_b1 < int(std::size(kB1aB3)) ? kB1aB3[id_b1] : 0; }
 
+namespace T = dbz3::i18n;
+
+namespace {
+// ps2_games/<nombre>.ruta -> su ISO (o carpeta); vacia si ya no existe. Otro archivo: el mismo.
+std::filesystem::path Destino(const std::filesystem::path& e) {
+  std::string n = Lower(e.filename().string());
+  if (n.size() < 5 || n.compare(n.size() - 5, 5, ".ruta") != 0) return e;
+  std::ifstream f(e, std::ios::binary);
+  std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+  std::error_code ec;
+  const std::filesystem::path p = std::filesystem::u8path(s);
+  return !s.empty() && std::filesystem::exists(p, ec) ? p : std::filesystem::path();
+}
+bool EsRuta(const std::string& n) { return n.size() > 5 && n.compare(n.size() - 5, 5, ".ruta") == 0; }
+}  // namespace
+
 std::filesystem::path BuscarIsoB1() {
   std::vector<std::filesystem::path> dirs;   // DBZ3_PS2_GAMES (pruebas) sustituye a la carpeta junto al juego
   if (const char* e = std::getenv("DBZ3_PS2_GAMES")) dirs.emplace_back(e);
@@ -275,10 +313,10 @@ std::filesystem::path BuscarIsoB1() {
     for (const auto& e : std::filesystem::directory_iterator(d, ec)) {
       const std::string n = Lower(e.path().filename().string());
       // como iso.find_game("b1"): "... Budokai (Europe) ...", "(USA)"...; ni Shin Budokai ni Budokai 2/3
-      if (e.is_regular_file(ec) && n.size() > 4 && n.compare(n.size() - 4, 4, ".iso") == 0 &&
+      if (e.is_regular_file(ec) && ((n.size() > 4 && n.compare(n.size() - 4, 4, ".iso") == 0) || EsRuta(n)) &&
           (n.find("budokai (") != std::string::npos || n.find("budokai 1") != std::string::npos) &&
           n.find("shin") == std::string::npos) {
-        isos.push_back(e.path());
+        if (const auto p = Destino(e.path()); !p.empty()) isos.push_back(p);
       }
     }
     std::sort(isos.begin(), isos.end());
@@ -295,6 +333,7 @@ bool LeerLeyendaSatan(const std::filesystem::path& path, const std::string& lang
   }
   out = DatosB1{};
   out.iso = path.filename().string();
+  out.ruta = path;
   out.elf = BootElf(iso);
   const std::vector<uint8_t> elf = iso.ReadFile(out.elf, 0, iso.Info(out.elf).second);
   const int tabla = TablaSatan(elf);
@@ -330,8 +369,15 @@ bool LeerLeyendaSatan(const std::filesystem::path& path, const std::string& lang
   out.satan = Textura(pantalla, 1);
   out.logo = Textura(pantalla, 2);
   out.res.letrero = Textura(pantalla, 6);
+  out.res.pulsa = Textura(pantalla, 5);
   for (int k = 0; k < 3; ++k) out.res.dificultad[k] = Textura(pantalla, 7 + k);
+  out.res.barra = Textura(pantalla, 3);
   const std::vector<uint8_t> res = afs.Entry(size_t(banco - 1));
+  out.res.letras[0] = Textura(res, 3);
+  out.res.letras[1] = Textura(res, 4);
+  out.res.tienes_peq = Textura(res, 20);
+  out.res.cifras_peq = Textura(res, 23);
+  out.res.clave = Textura(res, 25);
   out.res.tablon = Textura(res, 15);
   out.res.retadores = Textura(res, 16);
   out.res.cruz = Textura(res, 17);
@@ -340,8 +386,163 @@ bool LeerLeyendaSatan(const std::filesystem::path& path, const std::string& lang
   out.res.tienes = Textura(res, 21);
   out.res.cifras = Textura(res, 22);
   out.res.chibis = Textura(res, 24);
+  out.res.estilo = Textura(res, 6);
+  out.res.cara_satan = Textura(res, 7);
+  for (int k = 0; k < 6; ++k) out.res.consejos[k] = Textura(res, k == 0 ? 8 : 9 + k);
   return true;
 }
+
+// ---- Voces de B1 (ADX_JP.AFS): ADX de CRI (4 bits, mono o estereo; como "mod center hd/gritos.py" adx_decode) ----
+namespace {
+std::vector<int16_t> Adx(const std::vector<uint8_t>& b, int& hz) {
+  if (b.size() < 32 || b[0] != 0x80) return {};
+  auto be32 = [&](size_t o) { return uint32_t(b[o]) << 24 | uint32_t(b[o + 1]) << 16 | uint32_t(b[o + 2]) << 8 | b[o + 3]; };
+  const size_t off = size_t(b[2] << 8 | b[3]) + 4, bs = b[5], ch = b[7];
+  hz = int(be32(8));
+  const uint32_t total = be32(12), cut = uint32_t(b[16] << 8 | b[17]);
+  if (hz <= 0 || ch < 1 || ch > 2 || bs < 3) return {};
+  const double z = std::cos(2 * 3.14159265358979 * cut / hz), a = std::sqrt(2.0) - z, bb = std::sqrt(2.0) - 1;
+  const double c = (a - std::sqrt((a + bb) * (a - bb))) / bb;
+  const int c1 = int(std::floor(c * 8192)), c2 = int(std::floor(c * c * -4096));
+  const size_t spb = (bs - 2) * 2;
+  std::vector<int16_t> out;
+  out.reserve(total);
+  int hist[2][2] = {};
+  std::vector<int> s(spb * 2);
+  for (size_t o = off; out.size() < total && o + bs * ch <= b.size(); o += bs * ch) {
+    for (size_t k = 0; k < ch; ++k) {
+      const uint8_t* fr = &b[o + k * bs];
+      const int scale = (fr[0] << 8 | fr[1]) + 1;
+      int& h1 = hist[k][0];
+      int& h2 = hist[k][1];
+      for (size_t i = 0; i < spb; ++i) {
+        int nib = (i & 1) ? fr[2 + i / 2] & 15 : fr[2 + i / 2] >> 4;
+        if (nib >= 8) nib -= 16;
+        const int v = std::clamp(nib * scale + ((c1 * h1 + c2 * h2) >> 12), -32768, 32767);
+        s[k * spb + i] = v;
+        h2 = h1;
+        h1 = v;
+      }
+    }
+    for (size_t i = 0; i < spb && out.size() < total; ++i) {
+      out.push_back(int16_t(ch == 2 ? (s[i] + s[spb + i]) / 2 : s[i]));
+    }
+  }
+  return out;
+}
+
+std::mutex g_voz_mu;
+std::vector<uint8_t> g_wav;          // lo que suena (PlaySound lo lee mientras suena)
+std::atomic<uint32_t> g_voz_turno{0};
+}  // namespace
+
+void CallarVozB1() {
+  ++g_voz_turno;
+#if REX_PLATFORM_WIN32
+  std::lock_guard<std::mutex> lk(g_voz_mu);
+  PlaySoundW(nullptr, nullptr, 0);
+#endif
+}
+
+// ponytail: suena por winmm (PlaySound), aparte de la mezcla del juego: sigue el volumen general y el silencio del
+// lanzador al empezar, no si cambian a mitad; el SDK no tiene entrada de PCM propio (haria falta mezclar en su
+// callback de SDL). Solo Windows.
+void OirVozB1(const std::filesystem::path& iso_path, std::vector<int> entradas, float volumen) {
+  const uint32_t turno = ++g_voz_turno;
+  std::thread([iso_path, entradas = std::move(entradas), volumen, turno] {
+    Iso iso;
+    Afs afs;
+    const std::string p = iso.Open(iso_path) ? iso.Find("adx_jp.afs") : std::string();
+    if (p.empty() || !afs.Open(iso, p)) return;
+    std::vector<int16_t> pcm;
+    int hz = 0, marca = -1;
+    for (const int e : entradas) {
+      if (e < 0) {   // -ms: la siguiente entra a esos ms del principio (los cuadros de B1), no tras medio segundo
+        marca = -e;
+        continue;
+      }
+      int h = 0;
+      std::vector<int16_t> v = Adx(afs.Entry(size_t(e)), h);
+      if (v.empty() || (hz && h != hz)) continue;
+      hz = h;
+      if (marca >= 0) pcm.resize(std::max(pcm.size(), size_t(int64_t(marca) * hz / 1000)), 0);
+      else if (!pcm.empty()) pcm.insert(pcm.end(), size_t(hz) / 2, 0);   // medio segundo entre una y otra
+      marca = -1;
+      pcm.insert(pcm.end(), v.begin(), v.end());
+    }
+    std::string lista;
+    for (const int e : entradas) lista += " " + std::to_string(e);
+    REXLOG_INFO("dbz3 pasarela: voz de B1 (ADX_JP.AFS{}): {:.1f} s a {} Hz{}", lista, hz ? double(pcm.size()) / hz : 0.0,
+                hz, volumen > 0 ? "" : " (sin sonido: silencio o volumen 0)");
+    if (pcm.empty() || volumen <= 0 || turno != g_voz_turno.load()) return;
+    for (int16_t& x : pcm) x = int16_t(std::clamp(int(float(x) * volumen), -32768, 32767));
+    // WAV PCM 16 bits mono
+    const uint32_t datos = uint32_t(pcm.size() * 2);
+    std::vector<uint8_t> w(44 + datos);
+    auto u32 = [&](size_t o, uint32_t v) { std::memcpy(&w[o], &v, 4); };
+    auto u16 = [&](size_t o, uint16_t v) { std::memcpy(&w[o], &v, 2); };
+    std::memcpy(&w[0], "RIFF", 4);
+    u32(4, 36 + datos);
+    std::memcpy(&w[8], "WAVEfmt ", 8);
+    u32(16, 16);
+    u16(20, 1);
+    u16(22, 1);
+    u32(24, uint32_t(hz));
+    u32(28, uint32_t(hz) * 2);
+    u16(32, 2);
+    u16(34, 16);
+    std::memcpy(&w[36], "data", 4);
+    u32(40, datos);
+    std::memcpy(&w[44], pcm.data(), datos);
+#if REX_PLATFORM_WIN32
+    std::lock_guard<std::mutex> lk(g_voz_mu);
+    if (turno != g_voz_turno.load()) return;
+    PlaySoundW(nullptr, nullptr, 0);   // suelta g_wav antes de cambiarlo
+    g_wav = std::move(w);
+    PlaySoundW(reinterpret_cast<LPCWSTR>(g_wav.data()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+#endif
+  }).detach();
+}
+
+// F5: un ADX de un AFS de la copia del jugador (IW: USR/ADX_CMN.AFS...) por su propio waveOut, para que varios se
+// mezclen (filas del resultado y su musica) sin cortar la voz de PlaySound. CallarAdxPs2 corta los que suenan.
+namespace {
+std::atomic<uint32_t> g_adx_gen{0};
+}
+void OirAdxPs2(const std::filesystem::path& juego, const std::string& afs, int entrada, float volumen) {
+  if (volumen <= 0) return;
+  const uint32_t gen = g_adx_gen.load();
+  std::thread([juego, afs, entrada, volumen, gen] {
+    AfsPs2 a;
+    int hz = 0;
+    std::vector<int16_t> pcm = a.Abrir(juego, afs) ? Adx(a.Entrada(size_t(entrada)), hz) : std::vector<int16_t>();
+    REXLOG_INFO("dbz3 pasarela: ADX {} {}: {:.1f} s", afs, entrada, hz ? double(pcm.size()) / hz : 0.0);
+    if (pcm.empty() || gen != g_adx_gen.load()) return;
+    for (int16_t& x : pcm) x = int16_t(std::clamp(int(float(x) * volumen), -32768, 32767));
+#if REX_PLATFORM_WIN32
+    WAVEFORMATEX f{};
+    f.wFormatTag = WAVE_FORMAT_PCM;
+    f.nChannels = 1;
+    f.nSamplesPerSec = DWORD(hz);
+    f.wBitsPerSample = 16;
+    f.nBlockAlign = 2;
+    f.nAvgBytesPerSec = DWORD(hz) * 2;
+    HWAVEOUT wo = nullptr;
+    if (waveOutOpen(&wo, WAVE_MAPPER, &f, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) return;
+    WAVEHDR h{};
+    h.lpData = reinterpret_cast<LPSTR>(pcm.data());
+    h.dwBufferLength = DWORD(pcm.size() * 2);
+    if (waveOutPrepareHeader(wo, &h, sizeof(h)) == MMSYSERR_NOERROR) {
+      if (waveOutWrite(wo, &h, sizeof(h)) == MMSYSERR_NOERROR)
+        while (!(h.dwFlags & WHDR_DONE) && gen == g_adx_gen.load()) Sleep(20);
+      waveOutReset(wo);
+      waveOutUnprepareHeader(wo, &h, sizeof(h));
+    }
+    waveOutClose(wo);
+#endif
+  }).detach();
+}
+void CallarAdxPs2() { ++g_adx_gen; }
 
 // ---- Infinite World (ficha 02 C): textos de las misiones ----
 // DATA_USA.AFS de IW (USA): desde la entrada 132, un #AMB por mision [#AMT descripcion, #AMT titulo] en el orden del
@@ -357,7 +558,9 @@ std::filesystem::path BuscarIW() {
     for (const auto& e : std::filesystem::directory_iterator(d, ec)) {
       const std::string n = Lower(e.path().filename().string());
       if (n.find("infinite world") == std::string::npos) continue;
-      if (e.is_directory(ec) || (n.size() > 4 && n.compare(n.size() - 4, 4, ".iso") == 0)) hay.push_back(e.path());
+      if (e.is_directory(ec) || (n.size() > 4 && n.compare(n.size() - 4, 4, ".iso") == 0) || EsRuta(n)) {
+        if (const auto p = Destino(e.path()); !p.empty()) hay.push_back(p);
+      }
     }
     std::sort(hay.begin(), hay.end());
     if (!hay.empty()) return hay.front();
@@ -423,6 +626,166 @@ bool LeerMisionesIW(const std::filesystem::path& iw, const std::vector<int>& num
     out.misiones.push_back(std::move(mi));
   }
   return true;
+}
+
+// ---- Lectura generica de los juegos de PS2 del jugador (B1, B2, IW): ISO o carpeta extraida ----
+struct AfsPs2::Impl {
+  Iso iso;
+  std::ifstream f;
+  std::string en_iso;
+  std::vector<std::pair<uint32_t, uint32_t>> tab;
+  std::vector<uint8_t> Leer(uint64_t off, uint32_t n) {
+    if (!en_iso.empty()) return iso.ReadFile(en_iso, off, n);
+    std::vector<uint8_t> b(n);
+    f.clear();
+    f.seekg(std::streamoff(off));
+    f.read(reinterpret_cast<char*>(b.data()), std::streamsize(n));
+    b.resize(size_t(std::max<std::streamsize>(0, f.gcount())));
+    return b;
+  }
+};
+
+bool AfsPs2::Abrir(const std::filesystem::path& juego, const std::string& afs) {
+  auto d = std::make_shared<Impl>();
+  std::error_code ec;
+  const std::string nombre = Lower(afs);
+  if (std::filesystem::is_directory(juego, ec)) {
+    for (const auto& e : std::filesystem::recursive_directory_iterator(juego, ec)) {
+      if (Lower(e.path().filename().string()) == nombre) {
+        d->f.open(e.path(), std::ios::binary);
+        break;
+      }
+    }
+    if (!d->f) return false;
+  } else if (!d->iso.Open(juego) || (d->en_iso = d->iso.Find(nombre)).empty()) {
+    return false;
+  }
+  const std::vector<uint8_t> h = d->Leer(0, 8);
+  if (h.size() < 8 || std::memcmp(h.data(), "AFS", 3) != 0) return false;
+  const uint32_t n = std::min<uint32_t>(U32(h, 4), 65536);
+  const std::vector<uint8_t> t = d->Leer(8, 8 * n);
+  for (uint32_t k = 0; 8 * k + 8 <= t.size(); ++k) d->tab.push_back({U32(t, 8 * k), U32(t, 8 * k + 4)});
+  if (d->tab.empty()) return false;
+  d_ = std::move(d);
+  return true;
+}
+size_t AfsPs2::Cuantas() const { return d_ ? d_->tab.size() : 0; }
+std::vector<uint8_t> AfsPs2::Entrada(size_t k, uint32_t n) {
+  if (!d_ || k >= d_->tab.size() || !d_->tab[k].second) return {};
+  return d_->Leer(d_->tab[k].first, std::min(n, d_->tab[k].second));
+}
+
+std::vector<uint8_t> HijoAmb(const std::vector<uint8_t>& amb, uint32_t c) {
+  if (amb.size() < 0x20 || std::memcmp(amb.data(), "#AMB", 4) != 0 || c >= U32(amb, 0x10)) return {};
+  const uint32_t t = U32(amb, 0x14);
+  if (size_t(t) + 16 * (c + 1) > amb.size()) return {};
+  const uint32_t o = U32(amb, t + 16 * c), sz = U32(amb, t + 16 * c + 4);
+  return size_t(o) + sz <= amb.size() ? std::vector<uint8_t>(amb.begin() + o, amb.begin() + o + sz) : std::vector<uint8_t>();
+}
+int CuantasAmt(const std::vector<uint8_t>& amt) { return AmtN(amt); }
+Imagen TexturaAmt(const std::vector<uint8_t>& amt, int j) { return AmtN(amt) > 0 ? Textura(amt, j) : Imagen{}; }
+
+std::filesystem::path BuscarJuego(const std::string& clave) {
+  std::filesystem::path d = dbz3::settings::UserSettingsPath().parent_path() / "ps2_games";
+  if (const char* e = std::getenv("DBZ3_PS2_GAMES")) d = e;
+  std::vector<std::filesystem::path> hay;
+  std::error_code ec;
+  const std::string c = Lower(clave);
+  for (const auto& e : std::filesystem::directory_iterator(d, ec)) {
+    const std::string n = Lower(e.path().filename().string());
+    if (n.find(c) == std::string::npos) continue;
+    if (e.is_directory(ec) || (n.size() > 4 && n.compare(n.size() - 4, 4, ".iso") == 0) || EsRuta(n)) {
+      if (const auto p = Destino(e.path()); !p.empty()) hay.push_back(p);
+    }
+  }
+  std::sort(hay.begin(), hay.end());
+  return hay.empty() ? std::filesystem::path() : hay.front();
+}
+
+std::filesystem::path IsoPs2(int juego) {
+  return juego == 0 ? BuscarIsoB1() : juego == 1 ? BuscarJuego("budokai 2") : BuscarIW();
+}
+
+// Serie del SYSTEM.CNF (BOOT2 = cdrom0:\SLES_518.39;1 -> "sles_518.39"), vacia si no es una ISO de PS2 legible.
+static std::string SeriePs2(const std::filesystem::path& p) {
+  Iso iso;
+  if (!iso.Open(p)) return {};
+  const std::string cnf = iso.Find("system.cnf");
+  if (cnf.empty()) return "?";
+  const std::vector<uint8_t> b = iso.ReadFile(cnf, 0, 512);
+  std::string s = Lower(std::string(b.begin(), b.end()));
+  const size_t i = s.find("cdrom0:");
+  if (i == std::string::npos) return "?";
+  size_t j = i + 7;
+  while (j < s.size() && (s[j] == '\\' || s[j] == '/')) ++j;
+  size_t k = j;
+  while (k < s.size() && s[k] != ';' && s[k] != '\r' && s[k] != '\n') ++k;
+  return s.substr(j, k - j);
+}
+
+std::string RegistrarIsoPs2(int juego, const std::filesystem::path& iso) {
+  // series conocidas (las de las copias medidas; otra region no se rechaza, solo se avisa en el registro)
+  static const char* const kSerie[3][2] = {{"sles_512.33", ""}, {"sles_518.39", ""}, {"slus_218.42", ""}};
+  static const char* const kNombre[3] = {"Budokai 1", "Budokai 2", "Infinite World"};
+  const std::string s = SeriePs2(iso);
+  if (s.empty())
+    return T::T("Ese archivo no es una ISO de PlayStation 2 legible.", "That file is not a readable PlayStation 2 ISO.");
+  for (int g = 0; g < 3; ++g) {
+    if (g != juego && s == kSerie[g][0]) {
+      return std::string(T::T("Esa ISO es de ", "That ISO is ")) + kNombre[g] + T::T(", no de ", ", not ") + kNombre[juego] +
+             ".";
+    }
+  }
+  if (s != kSerie[juego][0]) REXLOG_INFO("dbz3 ps2: {} con serie {} (otra region?): se acepta", kNombre[juego], s);
+  std::filesystem::path d = dbz3::settings::UserSettingsPath().parent_path() / "ps2_games";
+  if (const char* e = std::getenv("DBZ3_PS2_GAMES")) d = e;
+  std::error_code ec;
+  std::filesystem::create_directories(d, ec);
+  static const char* const kRuta[3] = {"Dragon Ball Z Budokai 1.ruta", "Dragon Ball Z Budokai 2.ruta",
+                                       "Dragon Ball Z Infinite World.ruta"};
+  std::ofstream f(d / kRuta[juego], std::ios::binary | std::ios::trunc);
+  f << dbz3::launcher::PathUtf8(std::filesystem::absolute(iso, ec));
+  f.close();
+  if (f.fail()) return T::T("No se pudo guardar la eleccion (carpeta ps2_games).", "Could not save the choice (ps2_games folder).");
+  REXLOG_INFO("dbz3 ps2: {} -> {} (serie {})", kNombre[juego], iso.string(), s);
+  return {};
+}
+
+namespace {
+std::atomic<bool> g_eligiendo{false};
+std::mutex g_eleccion_mu;
+std::string g_eleccion;
+}  // namespace
+
+void ElegirIsoPs2EnSegundoPlano(int juego) {
+  if (g_eligiendo.exchange(true)) return;
+  std::thread([juego] {
+    const std::string r = ElegirIsoPs2(juego);
+    {
+      std::lock_guard<std::mutex> lk(g_eleccion_mu);
+      g_eleccion = r == "-" ? std::string()
+                   : r.empty() ? std::string(T::T("¡Listo! Ya puedes jugarlo.", "Done! You can play it now."))
+                               : r;
+    }
+    g_eligiendo = false;
+  }).detach();
+}
+
+std::string AvisoEleccionPs2() {
+  if (g_eligiendo) {
+    return T::T("Elige la ISO en la ventana que se ha abierto (si no la ves, mira la barra de tareas).",
+                "Pick the ISO in the window that just opened (if you can't see it, check the taskbar).");
+  }
+  std::lock_guard<std::mutex> lk(g_eleccion_mu);
+  return g_eleccion;
+}
+
+std::string ElegirIsoPs2(int juego) {
+  static const char* const kDesc[3] = {"Dragon Ball Z Budokai (PS2) .iso", "Dragon Ball Z Budokai 2 (PS2) .iso",
+                                       "Dragon Ball Z Infinite World (PS2) .iso"};
+  std::string out;
+  if (!dbz3::launcher::PickFileDialog(out, kDesc[juego], "*.iso")) return "-";
+  return RegistrarIsoPs2(juego, std::filesystem::u8path(out));
 }
 
 }  // namespace dbz3::pasarela

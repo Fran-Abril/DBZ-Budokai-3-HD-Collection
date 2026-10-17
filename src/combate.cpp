@@ -32,6 +32,8 @@
 #include "generated/dbz3_init.h"
 #include "eu_map.h"
 #include "ingame/game_style.h"
+#include "iw_minijuegos.h"
+#include "cinematica.h"
 #include "launcher/i18n.h"
 #include "launcher/launcher_state.h"
 #include "net/netplay.h"
@@ -318,11 +320,12 @@ std::atomic<int> g_muneco_api{-1};   // SetMuneco (Laboratorio de modos.cpp): -1
 std::atomic<int> g_muneco_lado{-1};  // lado al que se le dio el mando virtual (-1 = ninguno)
 int Muneco() {   // lado del muneco (bit 0), en guardia (bit 1), dando patadas (bit 2, solo pruebas), o -1
   static const char* env = std::getenv("DBZ3_COMBATE_MUNECO");
-  if (const int api = g_muneco_api.load(); api >= 0) return api == 0 ? -1 : (g_lados2 ? 0 : 1) | (api == 2 ? 2 : 0);
+  if (const int api = g_muneco_api.load(); api >= 0)
+    return api == 0 ? -1 : (g_lados2 ? 0 : 1) | (api == 2 ? 2 : 0) | (api == 3 ? 4 : 0);
   const std::string& v = REXCVAR_GET(dbz3_combate_prueba_muneco);
   const std::string m = v.empty() && env ? env : v;
-  if (m != "quieto" && m != "guardia" && m != "ataca" && m != "pk") return -1;
-  return (g_lados2 ? 0 : 1) | (m == "guardia" ? 2 : 0) | (m == "ataca" ? 4 : 0) | (m == "pk" ? 8 : 0);
+  if (m != "quieto" && m != "guardia" && m != "ataca" && m != "pk" && m != "ki") return -1;
+  return (g_lados2 ? 0 : 1) | (m == "guardia" ? 2 : 0) | (m == "ataca" ? 4 : 0) | (m == "pk" ? 8 : 0) | (m == "ki" ? 16 : 0);
 }
 bool EsMuneco(uint8_t* base, uint32_t x) { return g_muneco_lado.load() >= 0 && SideOf(base, x) == g_muneco_lado.load(); }
 bool MunecoMandoActivo(uint8_t* base) {   // fuera de la pelea el mando 2 vuelve a ser el de verdad
@@ -355,7 +358,8 @@ void MunecoMando(uint8_t* base) {
   const int modo = Muneco();
   // G mantenida; K cada 12 cuadros (cadena de patadas); o P y K a la vez cada 40 (P+K, ventana 0x04 del #CSK)
   ++n;
-  const uint8_t quiero = modo & 2 ? 4 : (modo & 4) && n % 12 == 0 ? 2 : (modo & 8) && n % 40 == 0 ? 3 : 0;
+  // y "ki" (pruebas de la Leyenda de Mr. Satan): E cada 45 cuadros = una bola de ki al jugador
+  const uint8_t quiero = modo & 2 ? 4 : (modo & 4) && n % 12 == 0 ? 2 : (modo & 8) && n % 40 == 0 ? 3 : (modo & 16) && n % 45 == 0 ? 8 : 0;
   for (uint32_t j = 0; quiero && j < 8; ++j) {
     const uint8_t b = m ? REX_LOAD_U8(m + (kMunecoPad + 4382) * 8 + j) : 0;
     if (b == quiero || (quiero == 3 && (b == 1 || b == 2))) ahora = uint16_t(ahora | (0x100u << j));
@@ -473,6 +477,20 @@ void DefinitivaLog(uint8_t* base) {
   }
 }
 
+// ---------------------------------------------------------------- modo ondas (prueba IV de la Nave de Babidi)
+// B2, modo de combate 9: el ordenador no elige ningun movimiento (FUN_001d1c40 da -2: nodo de reposo), tras cada reaccion
+// vuelve a la guardia (FUN_001d1db0 da 1 = accion 1) y a toda onda que le llega la devuelve (FUN_001d1980 da 2 -> FUN_001f7fc0
+// da 5). El que tiene que devolver es el jugador; el contador (OndasDevueltas) cuenta sus devoluciones. Aqui: el rival es el
+// muneco en guardia (mando virtual 2: G mantenida, sin IA) y lleva la habilidad Deflect-Back (X+8125+16, la que lee
+// sub_82116FA0 con la guardia pulsada), que se repone cada cuadro (sub_82112260 la recalcula de las capsulas).
+std::atomic<bool> g_ondas_modo{false};
+std::atomic<int> g_ondas_muneco_antes{-1};   // el muneco que habia antes de entrar al modo
+void OndasRival(uint8_t* base, uint32_t st) {
+  const int lado = g_muneco_lado.load();
+  if (!g_ondas_modo.load() || lado < 0 || (st != 3 && st != 4)) return;
+  REX_STORE_U8(Fighter(base, lado) + 8125 + 16, 1);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- panel (hilo de dibujo)
@@ -554,6 +572,7 @@ DBZ3_HOOK_EU(sub_821100B0) {
     static bool panel = false;
     if (!panel) panel = true, dbz3::launcher::DeferUi(&CrearPanel);
     MunecoCuadro(base, st);
+    OndasRival(base, st);
     if (st == 4) Avisos(base), PruebaCuadro(ctx, base);
     if (st >= 4 && st <= 7) DefinitivaLog(base);
     OtroDano(ctx, base, st);
@@ -707,7 +726,10 @@ DBZ3_HOOK_EU(sub_8208FD58) {
     MunecoMando(base);   // el mando del muneco no se lee: es el virtual
     return;
   }
+  dbz3::iwmini::Mando(base, user, false);   // minijuegos de IW (frente P4): palanca relativa a la camara
   orig(ctx, base);
+  dbz3::iwmini::Mando(base, user, true);
+  dbz3::cinematica::Mando(base, user);   // escenas 3D (frente R3)
   if (user > 3 || BattleState(base) != 4) return;
   dbz3::formas::PruebaMando(base, user);   // frente transformaciones: P+K+G de prueba (DBZ3_TEST_PKG)
   const int bit = CancelButton();
@@ -746,9 +768,78 @@ DBZ3_HOOK_EU(sub_8208FD58) {
 }
 
 namespace dbz3::combate {
-void SetMuneco(int modo) {   // 0 nada, 1 quieto, 2 guardia, -1 el ajuste dbz3_combate_prueba_muneco
-  g_muneco_api = modo;
-  REXLOG_INFO("dbz3 combate: muneco {}", modo == 1 ? "quieto" : modo == 2 ? "en guardia" : modo == 0 ? "no" : "del ajuste");
+void SetMuneco(int modo) {   // 0 nada, 1 quieto, 2 guardia, 3 ataca, -1 el ajuste dbz3_combate_prueba_muneco
+  if (g_muneco_api.exchange(modo) == modo) return;
+  REXLOG_INFO("dbz3 combate: muneco {}", modo == 1 ? "quieto" : modo == 2 ? "en guardia" : modo == 3 ? "ataca" : modo == 0 ? "no" : "del ajuste");
+}
+}  // namespace dbz3::combate
+
+// Marcador del combate (2026-10-16, frente P4). El objeto del marcador (*0x82324064) registra 4 tareas al crearse
+// (sub_820DCBC0): "FIX MAIN" (sub_820DCA10), "FIX PREDRAW" (sub_820DC080), "FIX DRAW" (sub_820DC1A8, o sub_820DC230
+// en el modo 6) y "FIX POSTDRAW" (sub_820DBB00). FIX DRAW pinta las barras, caras, "V", reloj (sub_820DBCF0) y los
+// avisos (sub_820EB9F0) solo si mgr+35253 != 1 y 0x823CD870 tiene el bit alto: asi lo apaga el juego. OcultarHud
+// salta esa tarea entera.
+std::atomic<bool> g_ocultar_hud{false};
+std::atomic<int64_t> g_fix_draw_ms{0};   // (frente R6) ultima vez que el juego llamo a FIX DRAW: HudNativoVisible
+DBZ3_HOOK_EU(sub_820DC1A8) {
+  g_fix_draw_ms = dbz3::combate::NowMs();
+  if (g_ocultar_hud.load()) return;
+  orig(ctx, base);
+}
+DBZ3_HOOK_EU(sub_820DC230) {
+  g_fix_draw_ms = dbz3::combate::NowMs();
+  if (g_ocultar_hud.load()) return;
+  orig(ctx, base);
+}
+// (frente R14) Contadores de golpes y dano ("2 HITS!!", "80 DMG."): son tareas aparte por jugador, registradas en
+// sub_820DF248 ("[FIX]DMG %dP" + "DMGDRW %dP" = sub_820DDCA0) y sub_820DF330 ("[FIX]CMB %dP" + "CMBDRW %dP" =
+// sub_820DDFE8). OcultarHud salta tambien sus dibujos.
+DBZ3_HOOK_EU(sub_820DDCA0) {
+  if (g_ocultar_hud.load()) return;
+  orig(ctx, base);
+}
+DBZ3_HOOK_EU(sub_820DDFE8) {
+  if (g_ocultar_hud.load()) return;
+  orig(ctx, base);
+}
+// y el segundo callback de cada tarea [FIX] (sub_820DDC20 de DMG y sub_820DDF68 de CMB: dos llamadas a sub_820ACCA0),
+// que es el que pinta el contador mientras se desvanece (seguia viendose "48 DMG." del lado 2: R14 segunda vuelta)
+DBZ3_HOOK_EU(sub_820DDC20) {
+  if (g_ocultar_hud.load()) return;
+  orig(ctx, base);
+}
+DBZ3_HOOK_EU(sub_820DDF68) {
+  if (g_ocultar_hud.load()) return;
+  orig(ctx, base);
+}
+// y los avisos del combate ("FIRST ATTACK!!", contraataque, rotura de guardia: tareas "[MSG]FATK/CNTR/GBREAK %dP"),
+// que pinta la tarea "[MSGDRW]ID=%d" (sub_820DE490, registrada en sub_820DEAC8)
+DBZ3_HOOK_EU(sub_820DE490) {
+  if (g_ocultar_hud.load()) return;
+  orig(ctx, base);
+}
+namespace dbz3::combate {
+void OcultarHud(bool ocultar) {
+  if (g_ocultar_hud.exchange(ocultar) != ocultar) REXLOG_INFO("dbz3 combate: marcador {}", ocultar ? "oculto" : "visible");
+}
+bool HudNativoVisible() {   // (frente R6) la misma condicion con la que FIX DRAW pinta, solo lectura
+  rex::Runtime* rt = rex::Runtime::instance();
+  uint8_t* base = rt ? rt->virtual_membase() : nullptr;
+  if (!base || g_ocultar_hud.load()) return false;
+  // y que el juego haya llamado a FIX DRAW hace nada (< 100 ms): en la vuelta de camara del escenario el objeto del
+  // marcador y las dos marcas ya dan "visible" pero el juego no lo pinta (captura
+  // 20261016-033323_hub_test_r6_hud\a0_presentacion.png)
+  if (NowMs() - g_fix_draw_ms.load() > 100) return false;
+  const uint32_t mgr = REX_LOAD_U32(kMgrPtr), hud = REX_LOAD_U32(dbz3::GA(0x82324064));
+  // ...y la puerta de sub_820DBCF0 (barras, caras, reloj): ([0x823CD870] & [0x823CD874]) con los bits 31 y 1 y el
+  // puntero [0x823CC6CC] puesto. FIX DRAW corre tambien en la vuelta de camara (captura
+  // 20261016-033826_hub_test_r6_hud\a0_presentacion.png) y es esta puerta la que no pinta.
+  // ponytail: 0x823CD874 y 0x823CC6CC por distancia a 0x823CD870 (en EU es la misma direccion); si EU falla, su pareja
+  // con tools/eu_map.py.
+  const dbz3::GA kBanderas = dbz3::GA(0x823CD870);
+  const uint32_t v = REX_LOAD_U32(kBanderas) & REX_LOAD_U32(kBanderas + 4);
+  return mgr != 0 && hud != 0 && REX_LOAD_U8(mgr + 35253) != 1 && (v & 0x80000002u) == 0x80000002u &&
+         REX_LOAD_U32(kBanderas - 0x11A4) != 0;
 }
 }  // namespace dbz3::combate
 
@@ -760,6 +851,68 @@ DBZ3_HOOK_EU(sub_8208FC40) {
     REX_STORE_U32(kPads + 184 * kMunecoPad, 3);
     ctx.r3.u64 = 1;
     return;
+  }
+  orig(ctx, base);
+}
+
+// ---------------------------------------------------------------- ondas devueltas (Nave de Babidi, prueba IV)
+// B2 (descompilado b2.c): FUN_001e2610 (onda contra luchador) pregunta a FUN_001f7fc0 y, con 5 = "devuelta", llama a
+// FUN_001ebf40(luchador, 3), que en el modo 9 (prueba IV) suma 1 al contador del luchador (+0x9bb8); al acabar,
+// FUN_001d41e0 lo deja como resultado (FUN_001d6580) y FUN_00265ab0 paga 3 Kili por onda. B3 trae la misma regla:
+// sub_82116FA0 = FUN_001f7fc0 (mismos 5.0 / 12.0 cuadros desde que se pulsa la guardia, X+6008, y las habilidades
+// Deflect / Deflect-Back, X+8140 / X+8141). sub_82119B38 (la onda toca al luchador) recibe 5 (o 6: su golpe la
+// devuelve) y, para devolverla, llama a sub_82122488(1, 26, ...) desde 0x82119D00 (EU 0x82119E00), la unica llamada
+// asi. Ese es el suceso: se cuenta por lado (el defensor es r30 de sub_82119B38, que sigue viva al entrar aqui).
+// Solo el 5 (guardia): el 6 (golpe en curso, accion 15) no tiene equivalente en B2.
+namespace dbz3::combate {
+namespace {
+std::atomic<int> g_ondas[2] = {};
+// Leyenda de Mr. Satan (pasarela.cpp, REFLECT / CUT-OFF de B1): las otras dos salidas de sub_82119B38 con el resultado de
+// sub_82116FA0 (3/4 = onda desviada, sub_82122488(1, 25) desde 0x82119D90 US / 0x82119E90 EU; 5/6 = devuelta, la de
+// arriba) y la devuelta con un golpe (accion 15)
+std::atomic<int> g_ondas_golpe[2] = {};
+std::atomic<int> g_ondas_desv[2] = {};
+}
+int OndasDevueltas(int lado) { return lado >= 0 && lado < 2 ? g_ondas[lado].load() : 0; }
+// tipo 0 devuelta con la guardia, 1 devuelta con un golpe, 2 desviada (CUT-OFF de B1)
+int OndasEvento(int lado, int tipo) {
+  if (lado < 0 || lado > 1) return 0;
+  return tipo == 0 ? g_ondas[lado].load() : tipo == 1 ? g_ondas_golpe[lado].load() : g_ondas_desv[lado].load();
+}
+void OndasCero() { g_ondas[0] = g_ondas[1] = 0; }
+// Modo ondas (prueba IV): el rival pasa a ser el muneco en guardia con Deflect-Back mientras dure; false lo deja como estaba.
+void OndasModo(bool on) {
+  if (g_ondas_modo.exchange(on) == on) return;
+  if (on)
+    g_ondas_muneco_antes = g_muneco_api.exchange(2);
+  else
+    g_muneco_api = g_ondas_muneco_antes.load();
+  REXLOG_INFO("dbz3 combate: modo ondas {} (muneco {})", on ? "si" : "no", g_muneco_api.load());
+}
+}  // namespace dbz3::combate
+
+DBZ3_HOOK_EU(sub_82122488) {
+  using namespace dbz3::combate;
+  if (ctx.r3.u32 == 1 && ctx.r4.u32 == 26 && ctx.lr == (dbz3::g_guest_eu ? 0x82119E00u : 0x82119D00u)) {
+    const uint32_t x = ctx.r30.u32;   // el defensor
+    const int lado = SideOf(base, x);
+    if (lado >= 0 && REX_LOAD_U16(x + kAct) != 15) {
+      const int n = ++g_ondas[lado];
+      REXLOG_INFO("dbz3 combate: onda devuelta por el lado {} (accion {}, guardia {} cuadros, tiempo {:.1f}): {}", lado + 1,
+                  REX_LOAD_U16(x + kAct), int32_t(REX_LOAD_U32(x + 5040)), LoadF(base, x + 6008), n);
+    } else if (lado >= 0) {
+      const int n = ++g_ondas_golpe[lado];
+      REXLOG_INFO("dbz3 combate: onda devuelta a golpe por el lado {} (accion 15, codigo {:03X}): {}", lado + 1,
+                  REX_LOAD_U32(x + 2928) & 0xFFF, n);
+    }
+  } else if (ctx.r3.u32 == 1 && ctx.r4.u32 == 25 && ctx.lr == (dbz3::g_guest_eu ? 0x82119E90u : 0x82119D90u)) {
+    const uint32_t x = ctx.r30.u32;   // el defensor; r25 = resultado de sub_82116FA0 (3 o 4)
+    const int lado = SideOf(base, x);
+    if (lado >= 0) {
+      const int n = ++g_ondas_desv[lado];
+      REXLOG_INFO("dbz3 combate: onda desviada por el lado {} (resultado {}, accion {}, guardia {} cuadros, tiempo {:.1f}): {}",
+                  lado + 1, ctx.r25.u32, REX_LOAD_U16(x + kAct), int32_t(REX_LOAD_U32(x + 5040)), LoadF(base, x + 6008), n);
+    }
   }
   orig(ctx, base);
 }

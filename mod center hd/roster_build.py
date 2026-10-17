@@ -525,6 +525,87 @@ def cam_pad_clips(cam, donor_cam):
     return mine.build(), n
 
 
+IW_CINE = range(0x480, 0x500)
+# ports de IW cuyo BSP de tecnicas no prepara los efectos de la definitiva del donante (guion del donante): Baby
+# (definitiva de Vegeta: la orden de efecto 13/banco 1 encontraba su objeto sin preparar, +148 = 0, y el juego se
+# cerraba en lr 0x820CFF1C; con el BSP de Vegeta la definitiva va entera, R9 2026-10-16)
+IW_TECNICAS_DONANTE = {"c:super baby vegeta 2"}      # codigos de agarre/definitiva que piden los guiones del donante
+
+
+def iw_guion_donante(cam, anm_bins, dcam, danm):
+    """Ports de IW: guiones (#SPX) y camaras (#ACC, #ACL) del donante, como en los ports de B1 (R9, 2026-10-16).
+    El #SPX de IW usa ordenes que B3 no tiene (filas de su tabla mas largas: 0x35-0x37, 0x86-0x88, 0x99-0x9A...):
+    la definitiva de Goku GT cerraba el juego o se quedaba colgada. Con el guion del donante, su definitiva
+    (ranura 0: sub(capsula, 0x4A0, ...)) y el agarre (20) piden los codigos 0x480-0x4FF del moveset: los que el de
+    IW tiene se quedan con su animacion de IW (Goku GT: los mismos codigos y duraciones que Goku); los que faltan se
+    injertan del donante con su animacion. Los golpes con guion de una ranura que el donante no tiene (IW 1 y 50)
+    pasan a la 0 (la definitiva). Las animaciones de la victima (2o y 3er #ACM) son las del donante, como sus
+    guiones. -> (cam, anm_bins, notas)."""
+    def kid(b, tag):
+        return next((k for k, e in enumerate(capsulas.amb_children(b)) if e[1] and b[e[0]:e[0] + 4] == tag), None)
+
+    def data(b, k):
+        e = capsulas.amb_children(b)[k]
+        return b[e[0]:e[0] + e[1]]
+    rep = []
+    swap = {}
+    for tag in (b"#ACC", b"#ACL", b"#SPX"):
+        k, dk = kid(cam, tag), kid(dcam, tag)
+        if k is not None and dk is not None:
+            swap[k] = data(dcam, dk)
+    cam = capsulas.amb_rebuild(cam, swap)
+    spx = swap.get(kid(cam, b"#SPX"))
+    ns = struct.unpack_from("<I", spx, 0x18)[0]
+    slots = {i for i, x in enumerate(struct.unpack_from("<%dI" % ns, spx, 0x20)) if x != 0xFFFFFFFF}
+    rep.append("guiones y camaras del donante (ranuras %s)" % sorted(slots))
+    _, dso, dss = capsulas.csk_child(danm)
+    dcsk = danm[dso:dso + dss]
+    d_acm = [k for k, e in enumerate(capsulas.amb_children(danm)) if e[2] == 3]
+    _, d_anims = acm_read(data(danm, d_acm[0]))
+    out = []
+    for anm in anm_bins:
+        k, so, ss = capsulas.csk_child(anm)
+        csk = bytearray(anm[so:so + ss])
+        n, lst = struct.unpack_from(">II", csk, 0x10)
+        nhr, ho = struct.unpack_from(">II", csk, 0x18)
+        moved = set()
+        for h in range(nhr):
+            for ln in range(8):
+                st, sl = struct.unpack_from(">HH", csk, ho + 128 * h + 16 * ln + 4)
+                if st == 3 and sl not in slots:
+                    struct.pack_into(">H", csk, ho + 128 * h + 16 * ln + 6, 0)
+                    moved.add(sl)
+        acm_k = [i for i, e in enumerate(capsulas.amb_children(anm)) if e[2] == 3]
+        if not acm_k:            # forma que solo cambia golpes (#CSK sin #ACM): usa los de la forma 1
+            out.append(capsulas.amb_rebuild(anm, {k: bytes(csk)}))
+            continue
+        acm = data(anm, acm_k[0])
+        n_own = len(acm_read(acm)[1])
+        new, grafted = [], []
+        for code in IW_CINE:
+            so_d = capsulas.csk_block_at(dcsk, code)
+            if not so_d or capsulas.csk_block_at(csk, code):
+                continue
+            a, bank = struct.unpack_from(">HH", dcsk, so_d)
+            csk = bytearray(capsulas.csk_graft(bytes(csk), code, dcsk, code))
+            if bank == 3 and a < len(d_anims) and d_anims[a][3] is not None:
+                struct.pack_into(">H", csk, capsulas.csk_block_at(csk, code), n_own + len(new))
+                new.append(d_anims[a])
+            grafted.append(code)
+        repl = {k: bytes(csk)}
+        if new:
+            repl[acm_k[0]] = acm_append(acm, new)
+        for i, j in zip(acm_k[1:], d_acm[1:]):          # victima (2o y 3er #ACM): los del donante
+            repl[i] = data(danm, j)
+        out.append(capsulas.amb_rebuild(anm, repl))
+        if moved:
+            rep.append("golpes con guion de las ranuras %s (que el donante no tiene) -> ranura 0" % sorted(moved))
+        if grafted:
+            rep.append("%d codigos de agarre/definitiva del donante injertados (%s..%s)" % (
+                len(grafted), hex(grafted[0]), hex(grafted[-1])))
+    return cam, out, rep
+
+
 def bsp_resources(bsp):
     """Recursos que el juego apunta al procesar un BSP de tecnicas (sub_82126490): hijos de [0] y de [1] y hijos
     de la raiz desde el 2. La ranura tiene sitio para 64."""
@@ -2043,6 +2124,9 @@ def build(a):
                 # las mismas que las del Yamcha del juego)
                 bsp = (load_bin(os.path.join(d, c["tecnicas"]), work)
                        if c.get("tecnicas") and c["tecnicas"] != "donante" else None)
+                if bsp is not None and c.get("origen_fuente") == "iw" and c.get("origen_clave") in IW_TECNICAS_DONANTE:
+                    bsp = None
+                    log("   %s: tecnicas del donante (con su BSP de IW la definitiva del donante cerraba el juego)" % name)
             except Exception as e:  # noqa: BLE001 (un BSP ilegible no tumba el montaje de todos)
                 log("   %s: aviso: tecnicas propias ilegibles (%s): las del donante" % (name, e))
                 bsp = None
@@ -2104,8 +2188,11 @@ def build(a):
                         sk = altura.skeleton(first_hd)
                         ref = (altura.skeleton(cmn.entry(dn["models"][0])), cmn.entry(dn["anm"][0]))
                         fixed, low = [], {}
+                        # ports de IW: todos los codigos en que el donante pisa el suelo (Goku GT flotaba en 185 de
+                        # ellos, auditoria10/A); ground_moves ya exige al donante apoyado en ese codigo
+                        codes = range(0x400) if c.get("origen_fuente") == "iw" else altura.GROUND_CODES
                         for b in anm_bins:
-                            b, rep = altura.ground_moves(b, sk, ref)
+                            b, rep = altura.ground_moves(b, sk, ref, codes=codes)
                             fixed.append(b)
                             low.update(rep)
                         anm_bins = fixed
@@ -2164,6 +2251,14 @@ def build(a):
                     notes.append("definitiva con animaciones propias: %d codigos de la cinematica" % len(done[0][1]))
                 except Exception as e:  # noqa: BLE001
                     notes.append("aviso: definitiva con las animaciones del donante (%s)" % e)
+            # IW: guiones del donante (sus ordenes de IW colgaban o cerraban la definitiva); guion = "propio" lo evita
+            if (c.get("origen_fuente") == "iw" and cam is not None and anm_bins
+                    and str(c.get("guion", "donante")).lower() != "propio"):
+                try:
+                    cam, anm_bins, rep = iw_guion_donante(cam, anm_bins, cmn.entry(dn["cam"]), cmn.entry(dn["anm"][0]))
+                    notes += list(dict.fromkeys(rep))
+                except Exception as e:  # noqa: BLE001
+                    notes.append("aviso: guion de IW sin cambiar por el del donante (%s)" % e)
             # todos (ports de IW incluidos) deben poder entrar en modo hiper y lanzar su definitiva
             try:
                 fcam = cam if cam is not None else cmn.entry(dn["cam"])
@@ -2244,7 +2339,7 @@ def build(a):
                 spec = c.get("voces", "donante")
                 if isinstance(spec, str) and spec.lower().startswith("iw:") and iw_voices is None:
                     iw_voices = voces.IwVoices(getattr(a, "iw", None))
-                v_lines, v_note = voces.resolve(spec, voice_out, iw_voices, donor=donor)
+                v_lines, v_note = voces.resolve(spec, voice_out, iw_voices, donor=donor, base=d)
                 extra += v_lines
                 log("   %s: %s" % (name, v_note))
             except Exception as e:  # noqa: BLE001

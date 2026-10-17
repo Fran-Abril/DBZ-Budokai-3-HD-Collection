@@ -11,6 +11,7 @@
 // (personaje que vuela hacia la camara al entrar; sin el, solo el fundido) y hub/guardado (icono del aviso de
 // guardado; sin el pack, el nuestro CC0 de generar.py).
 #include "hub_panel.h"
+#include "tutorial.h"
 
 #include <algorithm>
 #include <atomic>
@@ -36,6 +37,7 @@
 #include "../launcher/ui_kit.h"
 #include "../escenarios.h"
 #include "../modos.h"
+#include "../pasarela.h"
 #include "game_style.h"
 
 namespace dbz3 {
@@ -106,9 +108,15 @@ constexpr int kSayRow = kMaxEntries;   // el bocadillo dice lo de la fila HUB (n
 
 // geometria (px del area 4:3 a 900 de alto)
 constexpr float kInX0 = 110, kInX1 = 568;                  // interior del marco del menu
-constexpr float kRow0 = 118, kPitch = 61, kStripe = 58;    // 8 filas en el sitio de las 6 del juego
+// 8 filas en el sitio de las 6 del juego; franjas en 87..544 para que el marco propio (kFrame*, con su linea fuera de
+// ellas, como el Duelo) acabe antes del recuadro de pagina (kBoxY0) y el bocadillo propio (kBubbleY0) despues
+constexpr float kRow0 = 114, kPitch = 57.5f, kStripe = 54;
+constexpr float kFrameY0 = 67, kFrameY1 = 566, kBubbleY0 = 684, kBubbleY1 = 864;
 constexpr float kIconX = 120, kLabelX = 180, kLabelK = 0.6f, kLabelMax = 372;
-constexpr float kBoxX0 = 160, kBoxY0 = 606, kBoxX1 = 520, kBoxY1 = 650;   // la fila HUB (bajo el marco)
+// la fila HUB bajo el marco del menu principal, como ONLINE bajo el del Duelo: colgada de la linea de abajo del marco
+// (sus esquinas la pisan) y su linea de abajo antes del bocadillo del juego (y 650). Entre el marco (~600) y el
+// bocadillo no cabe entera: antes 606..650 pisaba el bocadillo (captura 20261016-021719_combate_test_iw_minijuego)
+constexpr float kBoxX0 = 160, kBoxY0 = 596, kBoxX1 = 520, kBoxY1 = 636;
 constexpr float kLogoX = 962, kLogoY = 94, kLogoW = 400;   // logo sobre el papel de la cinta
 constexpr ImU32 kDim = IM_COL32(148, 148, 148, 255), kOff = IM_COL32(90, 90, 110, 200);
 constexpr int kMaxFlyers = 8;                              // hub/vuelo_1..8 del pack
@@ -179,8 +187,9 @@ float Label(ImDrawList* dl, const S::Area& a, const char* key, const char* name,
 // Texto en el bocadillo del menu principal (el del juego queda vacio): letra redonda gris oscuro; `title`
 // (opcional) en un renglon propio en naranja oscuro, como los nombres del juego; `marks` (opcional) en el
 // ultimo renglon con el icono del guardado delante (hub/guardado).
+// cy/room: centro y alto libre (px del area) del bocadillo; de serie, los del bocadillo del juego.
 void BubbleText(ImDrawList* dl, const S::Area& a, const std::string& title, const char* text, float alpha,
-                const std::string& marks = {}) {
+                const std::string& marks = {}, float cy = 754, float room = 1e9f) {
   if (alpha <= 0.01f) return;
   ImFont* font = dbz3::launcher::ui::GetFonts().menu;
   if (!font) font = ImGui::GetFont();
@@ -207,11 +216,11 @@ void BubbleText(ImDrawList* dl, const S::Area& a, const std::string& title, cons
     if (!title.empty()) split(title.c_str(), 1);
     split(text, 0);
     if (!marks.empty()) split(marks.c_str(), 2);
-    if (lines.size() <= 4) break;
+    if (lines.size() <= 4 && step * float(lines.size()) <= room * a.s) break;
     size *= 0.88f;
     step *= 0.84f;
   }
-  float y = a.At(0, 754).y - step * float(lines.size()) * 0.5f;
+  float y = a.At(0, cy).y - step * float(lines.size()) * 0.5f;
   bool first_mark = true;
   for (const Line& l : lines) {
     const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0, l.s, l.e);
@@ -366,6 +375,7 @@ class HubPanel : public rex::ui::ImGuiDialog {
         said_at_ = t;
       }
       if (screen_a_ > 0.0f) DrawScreen(dl, a, v, t, dt);
+      if (v.open && !closing && v.fade == Fade::kNone) dbz3::ingame::tutorial::Mostrar("hub");   // F3
       if (row_a_ > 0.0f) DrawRow(dl, a, v, t);
       if (say >= 0 && (row_a_ > 0.0f || screen_a_ > 0.0f)) DrawHelp(dl, a, say, t, std::max(row_a_, screen_a_));
     }
@@ -465,6 +475,19 @@ class HubPanel : public rex::ui::ImGuiDialog {
           body += " ";
           body += Tr(kSoon);
         }
+      } else if (std::strcmp(EntryKey(say), "pasarela") == 0) {   // el avance de cada campana (progreso.toml)
+        namespace Pa = dbz3::pasarela;
+        static double leido = -10;
+        static std::string avance;
+        if (t - leido > 2.0) {
+          leido = t;
+          char buf[160];
+          std::snprintf(buf, sizeof(buf), "IW %d/%d - B2 %d/9 - %s %d/11", Pa::LeerProgreso("iw_hecho", 0), 96,
+                        Pa::LeerProgreso("tablero_b2_fase", 0), dbz3::i18n::T("Satán", "Satan"),
+                        Pa::LeerProgreso("hercule", 0));
+          avance = buf;
+        }
+        marks = avance;
       } else if (say == kQuick) {   // el ultimo combate rapido, con el nombre del escenario
         if (int p1, p2, st; LastQuick(&p1, &p2, &st)) {
           body += std::string("\n") + Tr(kLastQuick) + dbz3::modos::Nombre(p1) + Tr(kVs) + dbz3::modos::Nombre(p2) +
@@ -497,10 +520,56 @@ class HubPanel : public rex::ui::ImGuiDialog {
         else body += "\n" + m;
       }
     }
+    {   // Escalafon del Dojo (rangos al estilo Tekken, pasarela.h): el rango y sus PE en cada fila; al ascender, el
+        // aviso arriba unos segundos (rango_ascenso = nivel + 1, lo pone RangoMejora)
+      namespace Pa = dbz3::pasarela;
+      static int pe = -1, ascenso = 0;
+      static double leido = -10, aviso_hasta = 0;
+      if (t - leido > 2.0) {
+        leido = t;
+        pe = Pa::RangoPE();
+        if (const int a = Pa::LeerProgreso("rango_ascenso", 0); a > 0) {
+          ascenso = a;
+          aviso_hasta = t + 6.0;
+          Pa::GuardarProgreso("rango_ascenso", 0);
+        }
+      }
+      const std::string rango = std::string(dbz3::i18n::T("Rango", "Rank")) + ": " + Pa::RangoNombre(Pa::RangoNivel(pe)) +
+                                " (" + std::to_string(pe) + " PE)";
+      marks = marks.empty() ? rango : marks + " - " + rango;
+      if (ascenso > 0 && t < aviso_hasta)
+        title = std::string(dbz3::i18n::T("¡Ascenso! ", "Promotion! ")) + Pa::RangoNombre(ascenso - 1) + " - " + title;
+      // placa del rango (pack Dragon HUB: hub/rango_01..11, 512x128) encima del bocadillo, a la derecha; al ascender,
+      // grande en el centro con un golpe de escala. "Maestro" lleva el texto dibujado: otro idioma = la placa vacia
+      // con el nombre encima
+      auto placa = [&](int nivel, ImVec2 c, float w, float k_alpha) {
+        const bool texto = nivel == 10 && std::string(dbz3::i18n::LangCode()) != "es";
+        char nombre[32];
+        std::snprintf(nombre, sizeof(nombre), texto ? "hub/rango_%02d_vacia" : "hub/rango_%02d", nivel + 1);
+        const S::Pic pl = S::Img(nombre);
+        if (!pl) return;
+        const float h = pl.h * w / pl.w;
+        const int v1 = dl->VtxBuffer.Size;
+        S::DrawPic(dl, pl, ImVec2(c.x - w * 0.5f, c.y - h * 0.5f), ImVec2(c.x + w * 0.5f, c.y + h * 0.5f));
+        if (texto) {
+          const char* tx = Pa::RangoNombre(nivel);
+          const float fs = h * 0.42f, tw = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, tx).x;
+          dl->AddText(ImGui::GetFont(), fs, ImVec2(c.x + w * 0.12f - tw * 0.5f, c.y - fs * 0.5f), IM_COL32_WHITE, tx);
+        }
+        FadeVerts(dl, v1, alpha * k_alpha);
+      };
+      placa(Pa::RangoNivel(pe), a.At(662, 646), 256 * a.s, 1.0f);
+      if (ascenso > 0 && t < aviso_hasta) {
+        const float u = Clamp01(float(t - (aviso_hasta - 6.0)) / 0.35f), fuera = Clamp01(float(aviso_hasta - t) / 0.5f);
+        placa(ascenso - 1, a.At(600, 330), 640 * a.s * (1.0f + 0.35f * (1.0f - Ease(u))), Ease(u) * fuera);
+      }
+    }
     if (has_bg_) {   // con el fondo del pack, el bocadillo del juego queda debajo: el nuestro (vacio) y el texto encima
       const int v0 = dl->VtxBuffer.Size;
-      S::Speech(dl, a.At(30, 650), a.At(790, 858), a.s, "", 0.88f);
+      S::Speech(dl, a.At(30, kBubbleY0), a.At(790, kBubbleY1), a.s, "", 0.88f);
       FadeVerts(dl, v0, alpha);
+      BubbleText(dl, a, title, body.c_str(), alpha, marks, (kBubbleY0 + kBubbleY1) * 0.5f, kBubbleY1 - kBubbleY0 - 28);
+      return;
     }
     BubbleText(dl, a, title, body.c_str(), alpha, marks);
   }
@@ -515,7 +584,7 @@ class HubPanel : public rex::ui::ImGuiDialog {
       const ImVec2 c(sw * 0.5f, sh * 0.5f), half(bg.w * k * 0.5f, bg.h * k * 0.5f);
       S::DrawPic(dl, bg, ImVec2(c.x - half.x, c.y - half.y), ImVec2(c.x + half.x, c.y + half.y));
       S::Sides(dl, a);
-      S::Frame(dl, a.At(kInX0, 85), a.At(kInX1, 590), a.s);
+      S::Frame(dl, a.At(kInX0 - S::mode::kLine - 2, kFrameY0), a.At(kInX1 + S::mode::kLine + 2, kFrameY1), a.s);
     }
     DrawTitle(dl, a, t);
     // pagina del cursor y sus filas
@@ -556,15 +625,35 @@ class HubPanel : public rex::ui::ImGuiDialog {
         S::DrawPic(dl, ic, ImVec2(c.x - s * 0.5f, c.y - s * 0.5f), ImVec2(c.x + s * 0.5f, c.y + s * 0.5f),
                    ImVec4(0, 0, 0, 0), ready ? (sel ? IM_COL32_WHITE : kDim) : kOff);
       }
-      const bool beta = e == kTagTeam || e == kOnline;   // siempre como beta (Tag Team y Online)
+      // estado de cada modo junto a su nombre: BETA (jugable, aun se pule) o EXPERIMENTAL (en construccion: las
+      // campanas portadas de IW/B2 y los minijuegos de IW). Los demas, sin marca.
+      const std::string key = EntryKey(e);
+      const int estado = key == "pasarela" || key == "minijuegos" ? 2
+                         : key == "tagteam" || key == "online" || key == "satan" || key == "mision100" ||
+                                   key == "laboratorio" || key == "escenarios"
+                             ? 1
+                             : 0;
       const float right = Label(dl, a, EntryKey(e), EntryName(e), kLabelX + dx, y, kLabelK, tint, sel,
-                                kLabelMax - (beta ? 70.0f : 0.0f));
-      if (beta) {
+                                kLabelMax - (estado == 1 ? 70.0f : estado == 2 ? 150.0f : 0.0f));
+      if (estado == 1) {
         if (const S::Pic b = S::Img("beta")) {
           const float h = 26 * a.s, w = b.w * h / b.h;
           const ImVec2 p0 = a.At(right + 6, y - 22);
           S::DrawPic(dl, b, p0, ImVec2(p0.x + w, p0.y + h), ImVec4(0, 0, 0, 0), sel ? IM_COL32_WHITE : kDim);
         }
+      } else if (estado == 2) {   // pegatina de texto (sin pieza propia): ambar, como un aviso de obras
+        static const char* const kExp[5] = {"EXPERIMENTAL", "EXPERIMENTAL", "EXPÉRIMENTAL", "EXPERIMENTELL",
+                                            "SPERIMENTALE"};
+        const char* tx = kExp[std::clamp(T::LangCode()[0] == 'e' && T::LangCode()[1] == 's' ? 0
+                                         : T::LangCode()[0] == 'f' ? 2 : T::LangCode()[0] == 'd' ? 3
+                                         : T::LangCode()[0] == 'i' ? 4 : 1, 0, 4)];
+        const float fs = 17 * a.s, tw = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, tx).x;
+        const ImVec2 p0 = a.At(right + 6, y - 21), p1(p0.x + tw + 14 * a.s, p0.y + 24 * a.s);
+        const int alpha_i = sel ? 255 : 190;
+        dl->AddRectFilled(p0, p1, IM_COL32(232, 150, 20, alpha_i), 6 * a.s);
+        dl->AddRect(p0, p1, IM_COL32(90, 40, 0, alpha_i), 6 * a.s, 0, 1.5f * a.s);
+        dl->AddText(ImGui::GetFont(), fs, ImVec2(p0.x + 7 * a.s, p0.y + (p1.y - p0.y - fs) * 0.5f),
+                    IM_COL32(40, 20, 0, alpha_i), tx);
       }
       FadeVerts(dl, e0, in);
     }

@@ -9,7 +9,8 @@
 
   python tools/novas_mods.py publicar [--mods DIR] [--solo id ...]
       Empaqueta los mods de tools/novas_mods.toml (carpeta mods/ del juego), escribe la
-      version en su manifest.txt, genera catalogo.toml y lo sube al repo con git.
+      version en su manifest.txt, genera catalogo.toml (con `size` y `sha256` del zip entero;
+      el launcher comprueba el sha256 tras bajar y no instala si no coincide) y lo sube al repo con git.
 
       Mods grandes (`release = "<tag>"` en el toml, p. ej. el pack de texturas HD de 2,9 GB):
       git no admite ficheros de mas de 100 MB, asi que el zip va FUERA del repo, partido en
@@ -25,6 +26,7 @@
 """
 import argparse
 import getpass
+import hashlib
 import json
 import os
 import shutil
@@ -90,6 +92,15 @@ def pack(src, mod_id, version, name, out_zip, author=None):
                 kind = zipfile.ZIP_STORED if f.lower().endswith(STORED) else zipfile.ZIP_DEFLATED
                 z.write(p, mod_id + "/" + rel, compress_type=kind)
         z.writestr(mod_id + "/manifest.txt", manifest_with_version(os.path.join(src, "manifest.txt"), version, name, author))
+
+
+def sha256_file(path):
+    """SHA-256 (hex) del zip entero: el launcher lo comprueba tras la descarga (campo opcional `sha256`)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(8 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
 
 
 def toml_str(s):
@@ -165,6 +176,7 @@ def cmd_publicar(a):
         else:
             out.append(("archivo = " if nuevo else "zip = ") + toml_str(zrel))
         out.append("size = %d" % os.path.getsize(zpath))
+        out.append('sha256 = "%s"' % sha256_file(zpath))    # el zip entero (en los partidos, ya unido)
         if "autor" in m:
             out.append("autor = " + toml_str(m["autor"]))
         if "enlaces" in m:
@@ -194,6 +206,7 @@ def prueba():
         f = os.path.join(d, "x.zip")
         data = os.urandom(2500)
         open(f, "wb").write(data)
+        assert sha256_file(f) == hashlib.sha256(data).hexdigest()
         parts = split(f, 1000)
         assert [os.path.getsize(p) for p in parts] == [1000, 1000, 500]
         assert b"".join(open(p, "rb").read() for p in parts) == data

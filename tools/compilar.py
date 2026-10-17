@@ -1,50 +1,45 @@
-#!/usr/bin/env python3
-"""compilar.py - compila el exe dual con un candado compartido (varios agentes a la vez, uno compila).
+r"""Compila el juego (out/build/win-amd64-dual) de uno en uno cuando varios agentes trabajan a la vez.
 
-  python tools/compilar.py            # espera su turno, compila dbz3 (out/build/win-amd64-dual) y copia las DLL canonicas
+  python tools\compilar.py            (espera su turno, compila y deja solo las lineas de error)
 
-El candado es la carpeta D:\\DBZ3HD\\_compilando (mkdir atomico). Si un compilado anterior murio, el candado se
-considera viejo a los 30 min. Las DLL canonicas (rexglue-sdk-0.10/out/win-amd64-baseline) se copian al terminar:
-el build las pisa con otras antiguas (AGENTS.md s4/s7).
+Turno: carpeta E:\DBZ3HD_trabajo\coord\compilando (mkdir es atomico); si lleva mas de 20 min, se da por muerta y se
+aparta (nunca se borra). Codigo de salida = el de cmake. Si falla en un archivo que no es tuyo, espera y reintenta:
+otro agente lo esta editando.
 """
 import os
-import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BUILD = os.path.join(ROOT, "out", "build", "win-amd64-dual")
-DLLS = os.path.join(ROOT, "rexglue-sdk-0.10", "out", "win-amd64-baseline")
-LOCK = r"D:\DBZ3HD\_compilando"
+R = Path(__file__).resolve().parent.parent
+TURNO = Path(r"E:\DBZ3HD_trabajo\coord\compilando")
 
 
 def main():
+    TURNO.parent.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     while True:
         try:
-            os.mkdir(LOCK)
+            TURNO.mkdir()
             break
         except FileExistsError:
-            if time.time() - os.path.getmtime(LOCK) > 1800:   # candado de un compilado que murio
-                os.rename(LOCK, LOCK + "_viejo_%d" % int(time.time()))
-                continue
-            if time.time() - t0 > 3600:
-                print("compilar: una hora esperando el candado %s" % LOCK)
-                return 2
-            time.sleep(5)
+            if time.time() - TURNO.stat().st_mtime > 20 * 60:
+                try:
+                    TURNO.rename(TURNO.with_name(f"compilando_viejo_{int(time.time())}"))
+                except OSError:
+                    pass
+            time.sleep(3)
     try:
-        print("compilar: turno tras %.0f s" % (time.time() - t0), flush=True)
-        r = subprocess.run(["cmake", "--build", BUILD, "--target", "dbz3"], capture_output=True, text=True)
-        out = (r.stdout or "") + (r.stderr or "")
-        errs = [l for l in out.splitlines() if "error" in l.lower()]
-        for name in ("rexruntime.dll", "rexgpu-xenos.dll"):
-            shutil.copy2(os.path.join(DLLS, name), os.path.join(BUILD, name))
-        print("\n".join(errs[:40]) if errs else out.strip().splitlines()[-1] if out.strip() else "")
-        print("compilar: %s (%.0f s)" % ("OK" if r.returncode == 0 else "FALLO", time.time() - t0))
+        print(f"turno de compilar tras {time.time() - t0:.0f} s", flush=True)
+        r = subprocess.run(["cmake", "--build", str(R / "out" / "build" / "win-amd64-dual")], capture_output=True,
+                           text=True, errors="replace")
+        lineas = [l for l in (r.stdout + r.stderr).splitlines() if "error" in l.lower() or "FAILED" in l]
+        print("\n".join(lineas[:40]) if lineas else "sin errores", flush=True)
+        print(f"codigo {r.returncode}", flush=True)
         return r.returncode
     finally:
-        os.rmdir(LOCK)
+        TURNO.rmdir()
 
 
 if __name__ == "__main__":

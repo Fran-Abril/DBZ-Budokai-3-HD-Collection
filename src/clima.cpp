@@ -17,6 +17,8 @@
 
 #include "cine.h"
 #include "gigantes.h"
+#include "iw_minijuegos.h"
+#include "cinematica.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -103,6 +105,8 @@ DBZ3_HOOK_EU(sub_820C2058) {
   if (st == 4) ++g_frames;
   dbz3::cine::Fotograma(base, st, st == 4 ? g_frames : 0);
   dbz3::gigantes::Fotograma(base, st == 4 ? g_frames : 0);
+  dbz3::iwmini::Fotograma(base, st);   // minijuegos de IW (frente P4): modo libre con camara detras
+  dbz3::cinematica::Fotograma(base, st);   // escenas 3D (frente R3)
   if (!Activo() || !mgr) return;
   static const bool sonda = std::getenv("DBZ3_SONDA_CLIMA") != nullptr;
   if (sonda && g_frames == 1) {

@@ -437,3 +437,11 @@ Todas importadas con `importar.py oficial ... --recetas ports_vision.toml --mods
 
 ### Propuestas para otros dueños
 - `src/` (iconos del relevo en el HUD de Tag Team): los IDs ≥ 44 muestran una letra (G, V, F) en vez del icono de la rueda. El icono ya existe en el roster, así que se podría usar ese.
+
+## Voces propias desde WAV (2026-10-16)
+- **Uso:** en `personaje.toml`, `voces = "wav:voces"`. Lee `<mod>/voces/NN*.wav`, donde NN es el número de la frase (0-49), por ejemplo `07_victoria.wav` (voces.py, `wav_block`).
+- **Formatos:** PCM de 8, 16, 24 o 32 bits, mono o estéreo y cualquier frecuencia. Se pasa a 24 kHz y a ADX (`sb_voces.adx_encode`).
+- **Frases sin WAV:** se quedan las del donante.
+- **Avisos:** salen los ficheros sin número y los que no se pueden leer.
+- **Prueba:** `python "mod center hd/voces.py" --prueba-wav` (ida y vuelta del ADX). Falta probarlo en el juego con un port.
+- Los gritos ya admitían `gritos = "wav:gritos"`. El Kit los muestra los dos en las pistas de la ficha.

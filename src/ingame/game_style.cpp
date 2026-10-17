@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 
+#include <rex/cvar.h>
 #include <rex/ui/image_decode.h>
 #include <rex/ui/immediate_drawer.h>
 
@@ -30,15 +31,19 @@ ImFont* MenuFont() {
 }
 
 // Nueve trozos: las esquinas (m px de la textura) no se deforman; k = px de pantalla por px de textura.
+// top_mid (x0, x1 px de la textura, opcional): tramo del borde de arriba que se estira en vez del entero.
 void NineSlice(ImDrawList* dl, const Pic& p, ImVec4 src, float m, ImVec2 q0, ImVec2 q1, float k,
-               ImU32 tint = IM_COL32_WHITE) {
+               ImU32 tint = IM_COL32_WHITE, ImVec2 top_mid = ImVec2(0, 0)) {
   const float xs[4] = {q0.x, q0.x + m * k, q1.x - m * k, q1.x}, ys[4] = {q0.y, q0.y + m * k, q1.y - m * k, q1.y};
   const float us[4] = {src.x / p.w, (src.x + m) / p.w, (src.z - m) / p.w, src.z / p.w};
   const float vs[4] = {src.y / p.h, (src.y + m) / p.h, (src.w - m) / p.h, src.w / p.h};
   for (int j = 0; j < 3; ++j)
-    for (int i = 0; i < 3; ++i)
-      dl->AddImage(p.tex, ImVec2(xs[i], ys[j]), ImVec2(xs[i + 1], ys[j + 1]), ImVec2(us[i], vs[j]),
-                   ImVec2(us[i + 1], vs[j + 1]), tint);
+    for (int i = 0; i < 3; ++i) {
+      const bool clean = j == 0 && i == 1 && top_mid.y > top_mid.x;
+      dl->AddImage(p.tex, ImVec2(xs[i], ys[j]), ImVec2(xs[i + 1], ys[j + 1]),
+                   ImVec2(clean ? top_mid.x / p.w : us[i], vs[j]), ImVec2(clean ? top_mid.y / p.w : us[i + 1], vs[j + 1]),
+                   tint);
+    }
 }
 
 // Texto con perfil y relleno en dos tonos (arriba/abajo), como las letras del juego.
@@ -99,7 +104,7 @@ Pic Img(const char* name) {
   // sin mod: la pieza del juego (native_ui, sacada de los AFS del jugador) y si no, ingame_ui/
   // (lo nuestro: titulos). Mientras se extrae no se guarda el fallo, se reintenta.
   const bool in_mod = std::any_of(cands.begin(), cands.end(), [&](const auto& f) { return std::filesystem::exists(f, ec); });
-  if (!in_mod) {
+  if (!in_mod && std::strncmp(name, "hub/", 4) != 0) {   // hub/*: siempre nuestras (pack Dragon HUB), tambien en el launcher
     if (!native_ui::Ready()) {
       cache.erase(it);
       return {};
@@ -187,9 +192,13 @@ void Highlight(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float t) {
   }
 }
 
-void MenuText(ImDrawList* dl, ImVec2 center, float size, const char* text, bool selected, bool disabled) {
+void MenuText(ImDrawList* dl, ImVec2 center, float size, const char* text, bool selected, bool disabled, float max_w) {
   ImFont* font = MenuFont();
-  const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0, text);
+  ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0, text);
+  if (max_w > 0 && ts.x > max_w) {   // no se sale del marco: letra mas pequena
+    size *= max_w / ts.x;
+    ts = font->CalcTextSizeA(size, FLT_MAX, 0, text);
+  }
   const ImVec2 pos(center.x - ts.x * 0.5f, center.y - ts.y * 0.5f);
   // como las filas del juego (data_usi 2055): turquesa, perfil negro fino y aro claro por fuera
   const float th = size * 0.05f;
@@ -197,12 +206,13 @@ void MenuText(ImDrawList* dl, ImVec2 center, float size, const char* text, bool 
     OutlinedText(dl, font, size, pos, text, ring, ring, ring, th * 2.0f);
     OutlinedText(dl, font, size, pos, text, top, bottom, IM_COL32(0, 0, 0, 255), th);
   };
+  // las no elegidas, un turquesa algo mas apagado pero legible sobre el panel oscuro; las apagadas, gris claro
   if (disabled) {
-    draw(IM_COL32(70, 82, 120, 200), IM_COL32(55, 65, 100, 200), IM_COL32(110, 120, 160, 90));
+    draw(IM_COL32(150, 158, 172, 235), IM_COL32(118, 126, 142, 235), IM_COL32(40, 44, 58, 170));
   } else if (selected) {
     draw(IM_COL32(2, 210, 231, 255), IM_COL32(2, 182, 200, 255), IM_COL32(223, 223, 223, 210));
   } else {
-    draw(IM_COL32(2, 120, 135, 255), IM_COL32(2, 100, 115, 255), IM_COL32(150, 165, 175, 160));
+    draw(IM_COL32(40, 178, 195, 255), IM_COL32(22, 148, 165, 255), IM_COL32(185, 198, 205, 175));
   }
 }
 
@@ -228,8 +238,13 @@ void Banner(ImDrawList* dl, const Area& a, const char* text, const char* title) 
   }
   const auto& fonts = dbz3::launcher::ui::GetFonts();
   ImFont* font = fonts.banner ? fonts.banner : ImGui::GetFont();
-  OutlinedText(dl, font, 72 * a.s, a.At(60, 45), text, IM_COL32(255, 215, 60, 255), IM_COL32(245, 120, 20, 255),
-               IM_COL32(90, 35, 10, 255), 72 * a.s * 0.06f);
+  // un titulo largo ("Supervivencia con tienda") se encoge para no salirse del pergamino (texto de x 60 a 450)
+  float size = 72 * a.s;
+  const float w = font->CalcTextSizeA(size, FLT_MAX, 0, text).x, room = 390 * a.s;
+  if (w > room) size *= room / w;
+  const ImVec2 at = a.At(60, 45);
+  OutlinedText(dl, font, size, ImVec2(at.x, at.y + (72 * a.s - size) * 0.45f), text, IM_COL32(255, 215, 60, 255),
+               IM_COL32(245, 120, 20, 255), IM_COL32(90, 35, 10, 255), size * 0.06f);
 }
 
 void Speech(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float s, const char* text, float tail_x) {
@@ -238,8 +253,9 @@ void Speech(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float s, const char* text, flo
   if (const Pic b = Img("bocadillo")) {
     // bocadillo del juego (data_usi 2055): cuerpo 5,32-585,196 en nueve trozos y el pico (340..450
     // x 4..42, centro en x 395) encima, en su sitio o reflejado si sale hacia la izquierda
+    // (el borde de arriba se estira desde 60..330: en 340..450 la textura lleva el hueco donde se pega el pico)
     const float k = 1.1f * s;
-    NineSlice(dl, b, ImVec4(5, 32, 585, 196), 30, p0, p1, k);
+    NineSlice(dl, b, ImVec4(5, 32, 585, 196), 30, p0, p1, k, IM_COL32_WHITE, ImVec2(60, 330));
     if (tail_x >= 0) {
       const bool left = tail_x < 0.5f;
       const float cx = p0.x + (p1.x - p0.x) * tail_x, x0 = left ? cx - (450 - 395) * k : cx - (395 - 340) * k;
@@ -267,11 +283,34 @@ void Speech(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float s, const char* text, flo
               IM_COL32(25, 25, 25, 255), text, nullptr, wrap);
 }
 
+namespace mode {
+void Stripe(ImDrawList* dl, const Area& a, float x0, float y0, float x1, float y1, float t) {
+  Highlight(dl, a.At(x0 + kLine, y0), a.At(x1 - kLine, y1), t);
+}
+void Bubble(ImDrawList* dl, const Area& a, const char* text) {
+  // a la derecha del anfitrion (no le tapa el cuerpo), con el pico hacia el
+  Speech(dl, a.At(400, 652), a.At(kX1, 848), a.s, text, 0.14f);   // (0.14: el pico no sale del borde)
+}
+void Help(ImDrawList* dl, const Area& a, const std::vector<std::pair<const char*, const char*>>& items) {
+  HelpLine(dl, a.At(600, 872), 38 * a.s, items);
+}
+}  // namespace mode
+
+bool Borders() { return rex::cvar::GetFlagByName("dbz3_ui_side_borders") == "true"; }
+
 void Backdrop(ImDrawList* dl, const Area& a, const char* image) {
-  // fondos del juego: dibujo 4:3 en la esquina de una textura de 1024 (900x672 o 912x684)
+  // fondos del juego: dibujo 4:3 en la esquina de una textura de 1024 (900x672 o 912x684); los nuestros, 16:9
+  // enteros. Sin bordes (o con un fondo ancho) llenan toda la ventana, recortando lo que sobra.
   if (const Pic p = image ? Img(image) : Pic{}) {
-    const float w = p.w == p.h ? 900.0f : p.w;
-    DrawPic(dl, p, a.p0, a.p1, ImVec4(0, 0, w, w * 0.75f));
+    const bool wide = p.w > p.h * 1.5f;
+    const float w = wide ? p.w : p.w == p.h ? 900.0f : p.w, h = wide ? p.h : w * 0.75f;
+    if (!wide && Borders()) {
+      DrawPic(dl, p, a.p0, a.p1, ImVec4(0, 0, w, h));
+      return;
+    }
+    const ImVec2 d = ImGui::GetIO().DisplaySize;
+    const float k = std::max(d.x / w, d.y / h), x0 = (d.x - w * k) * 0.5f, y0 = (d.y - h * k) * 0.5f;
+    DrawPic(dl, p, ImVec2(x0, y0), ImVec2(x0 + w * k, y0 + h * k), ImVec4(0, 0, w, h));
     return;
   }
   dl->AddRectFilledMultiColor(a.p0, a.p1, IM_COL32(250, 170, 70, 255), IM_COL32(250, 170, 70, 255),
@@ -286,7 +325,9 @@ void Host(ImDrawList* dl, const Area& a, const char* image, float x, float y, bo
   const Pic p = Img(image);
   if (!p) return;
   const float k = 1.33f * a.s;   // como los Kaio del Duelo
-  dl->PushClipRect(a.p0, a.p1, true);
+  // con bordes se corta en el area 4:3 (las tiras lo tapan); sin ellos, en la ventana
+  if (Borders()) dl->PushClipRect(a.p0, a.p1, true);
+  else dl->PushClipRect(ImVec2(0, 0), ImGui::GetIO().DisplaySize, true);
   DrawPic(dl, p, a.At(x, y), ImVec2(a.At(x, y).x + p.w * k, a.At(x, y).y + p.h * k), ImVec4(0, 0, 0, 0),
           IM_COL32_WHITE, mirror);
   dl->PopClipRect();
@@ -294,8 +335,9 @@ void Host(ImDrawList* dl, const Area& a, const char* image, float x, float y, bo
 
 void Sides(ImDrawList* dl, const Area& a) {
   // data_usi 2033, 128x1024: tira opaca en x 14..63 y su sombra a la izquierda; es la de la derecha
-  // y la izquierda va reflejada (la sombra cae siempre hacia dentro), a 1.33 como en el Duelo
-  const Pic p = Img("borde");
+  // y la izquierda va reflejada (la sombra cae siempre hacia dentro), a 1.33 como en el Duelo. Solo con la
+  // opcion "Bordes dorados" (F1)
+  const Pic p = Borders() ? Img("borde") : Pic{};
   if (!p) return;
   const float k = 1.33f * a.s, w = 64 * k, h = std::min(p.h * k, a.p1.y - a.p0.y);
   const ImVec4 src(0, 0, 64, h / k);

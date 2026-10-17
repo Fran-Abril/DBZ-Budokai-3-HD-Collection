@@ -17,6 +17,8 @@
 #include "novas_mods.h"
 #include "novedades.h"
 #include "../region.h"
+#include "../ingame/game_style.h"
+#include "../pasarela.h"
 
 #if REX_PLATFORM_WIN32
 #include <windows.h>
@@ -423,7 +425,7 @@ std::string WideToUtf8(const std::wstring& wide) {
 // Abre el dialogo nativo de Windows para elegir un archivo (filtro
 // `filter_ext`, p.ej. "*.zip"). Rellena `out` (UTF-8) si el usuario eligio.
 bool PickFile(std::string& out, const char* filter_desc, const char* filter_ext,
-              const std::string& initial) {
+              const std::string& initial, HWND owner = nullptr) {
   const HRESULT com_init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   IFileOpenDialog* dlg = nullptr;
   bool ok = false;
@@ -454,7 +456,7 @@ bool PickFile(std::string& out, const char* filter_desc, const char* filter_ext,
         }
       }
     }
-    if (SUCCEEDED(dlg->Show(nullptr))) {
+    if (SUCCEEDED(dlg->Show(owner))) {
       IShellItem* res = nullptr;
       if (SUCCEEDED(dlg->GetResult(&res))) {
         PWSTR path = nullptr;
@@ -761,6 +763,20 @@ void LauncherDialog::HandleDroppedFiles() {
         p = q + 1;
       }
     }
+    // DBZ3_TEST_PS2="<juego>,<ruta>;<juego>,<ruta>": registra esas ISO de PS2 sin dialogo (pruebas de la caja de PS2)
+    if (const char* t = std::getenv("DBZ3_TEST_PS2")) {
+      std::string all = t;
+      for (size_t p = 0; p < all.size();) {
+        size_t q = all.find(';', p);
+        if (q == std::string::npos) q = all.size();
+        const std::string one = all.substr(p, q - p);
+        if (one.size() > 2) {
+          const std::string r = dbz3::pasarela::RegistrarIsoPs2(one[0] - '0', std::filesystem::u8path(one.substr(2)));
+          REXLOG_INFO("dbz3: prueba ps2 {} -> '{}'", one, r);
+        }
+        p = q + 1;
+      }
+    }
     if (const char* m = std::getenv("DBZ3_TEST_FIX"))
       REXLOG_INFO("dbz3: arreglar '{}' -> {}", m, dbz3::FixNestedMod(m) ? "ok" : "no");
     return true;
@@ -770,6 +786,17 @@ void LauncherDialog::HandleDroppedFiles() {
   if (test_tab) { tab_request_ = std::atoi(test_tab); test_tab = nullptr; }
   static int test_play = std::getenv("DBZ3_TEST_PLAY") ? 90 : -1;   // pulsa JUGAR tras ~1,5 s
   if (test_play > 0 && --test_play == 0) pad_play_ = true;
+  // DBZ3_TEST_TOUR=<ms> (videos del tutorial): Video, Mods, Nova's Mods y Juego, <ms> en cada una, y despues JUGAR
+  static const int tour_ms = std::getenv("DBZ3_TEST_TOUR") ? std::atoi(std::getenv("DBZ3_TEST_TOUR")) : 0;
+  if (tour_ms > 0) {
+    static const double t0 = ImGui::GetTime();
+    static int paso = -1;
+    static const int kTour[] = {0, 4, 5, 6};
+    const int k = int((ImGui::GetTime() - t0) * 1000.0 / tour_ms);
+    if (k != paso && k < int(std::size(kTour))) tab_request_ = kTour[k];
+    if (k != paso && k == int(std::size(kTour))) pad_play_ = true;
+    paso = k;
+  }
   // DBZ3_TEST_NOVA=<id> (con DBZ3_TEST_TAB=5): pulsa "Instalar" de ese mod de Nova's Mods
   static const char* test_nova = std::getenv("DBZ3_TEST_NOVA");
   if (test_nova && GetNovaState() == NovaState::kReady) {
@@ -890,7 +917,7 @@ void LauncherDialog::PollModsScan() {
     // packs de texturas activos: lo que se ve en JUGAR sigue a la lista
     dbz3::settings::RefreshTexturePacks();
     // F0-12: personajes nuevos sin el kit -> se juega con el montaje que traia el pack (aviso visible)
-    kit_missing_ = !dbz3::settings::IsIsoMode() && ModPipeline::HasCharacterSources() &&
+    kit_missing_ = ModPipeline::HasCharacterSources() &&
                    !ModPipeline::RosterToolAvailable();
   }
   if (!mods_loaded_ && !mods_scan_) {
@@ -975,6 +1002,11 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
                                 ImGui::GetColorU32(ImVec4(0.96f, 0.55f, 0.11f, 0.0f)));
     dl->AddRectFilled(ImVec2(wp.x, wp.y + 86.0f), ImVec2(wp.x + ww, wp.y + 88.0f),
                       ImGui::GetColorU32(kDragonOrange));
+    if (const auto logo = dbz3::ingame::style::Img("hub/logo_512")) {
+      const float h = 70.0f, w = logo.w * h / logo.h;
+      dbz3::ingame::style::DrawPic(dl, logo, ImVec2(wp.x + ww - 24.0f - w, wp.y + 8.0f),
+                                   ImVec2(wp.x + ww - 24.0f, wp.y + 8.0f + h));
+    }
   }
   ImGui::BeginGroup();
   {
@@ -1162,18 +1194,7 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
         ImGui::TextDisabled("(%s %s)", i18n::T("region", "region"), sel_region.c_str());
       }
     }
-    if (iso_mode) {
-      // ISO mode reads the game data straight off the disc; the per-entry AFS
-      // override hooks are wired to host files, so mods need the extracted
-      // folder. Inform the user instead of silently running without them.
-      ImGui::PushStyleColor(ImGuiCol_Text, kWarn);
-      ImGui::TextWrapped(
-          i18n::T("Modo disco: se juega tal cual del ISO. Los mods requieren la "
-                  "carpeta extraida (elige 'Carpeta extraida' como origen).",
-                  "Disc mode: plays straight from the ISO. Mods need the "
-                  "extracted folder (choose 'Extracted folder' as the source)."));
-      ImGui::PopStyleColor();
-    }
+    if (iso_mode) DrawIsoPrepBox();
     if (assets_.redirect_default_xex && !assets_.boot_note.empty()) {
       // The executable was found somewhere other than `<data>/default.xex` (e.g.
       // DBZ3/yae3_xenon.xex on a retail disc dump) and staged automatically.
@@ -1289,6 +1310,7 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 6.0f);
   }
   const bool src_folder = !iso_mode;
+  const float src_y = ImGui::GetCursorPosY();
   if (src_folder) {
     ImGui::PushStyleColor(ImGuiCol_Button, kSrcActive);
   }
@@ -1337,12 +1359,13 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip(
         "%s",
-        i18n::T("Usa la carpeta con los datos ya extraidos (default.xex + us/ + eu/). "
-                "Es la unica opcion que permite mods.",
-                "Use the folder with the already-extracted data (default.xex + us/ + eu/). "
-                "This is the only option that supports mods."));
+        i18n::T("Usa la carpeta con los datos del juego ya extraidos (la que tiene DBZ3, o default.xex y us/). "
+                "Los mods funcionan igual que con la ISO.",
+                "Use the folder with the already-extracted game data (the one with DBZ3, or default.xex and us/). "
+                "Mods work the same as with the ISO."));
   }
   ImGui::SameLine();
+  ImGui::SetCursorPosY(src_y);
   if (!src_folder) {
     ImGui::PushStyleColor(ImGuiCol_Button, kSrcActive);
   }
@@ -1375,10 +1398,10 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip(
         "%s",
-        i18n::T("Juega directamente desde la imagen del disco, sin extraer nada. "
-                "Requiere el .iso de Budokai 3 HD.",
-                "Play directly from the disc image without extracting anything. "
-                "Requires the Budokai 3 HD .iso."));
+        i18n::T("Juega desde la imagen del disco (.iso de Xbox 360 de Budokai 3 HD / HD Collection), sin "
+                "extraerla. Con mods, la primera vez se copian ~0,5 GB de sus datos (una sola vez).",
+                "Play from the disc image (Xbox 360 .iso of Budokai 3 HD / HD Collection) without extracting it. "
+                "With mods, ~0.5 GB of its data is copied the first time (only once)."));
   }
   if (!assets_ready) {
     ImGui::SameLine();
@@ -1426,6 +1449,8 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
   int tab_counter = 0;
   const int tab_request = tab_request_;
   tab_request_ = -1;
+  const char* tab_tip = nullptr;   // lo pone tip() antes de cada pestana: se ve al pasar el raton por ella
+  auto tip = [&](const char* es, const char* en) { tab_tip = i18n::T(es, en); return true; };
   auto begin_tab = [&](const char* label, ImGuiTabItemFlags flags = 0) {
     const int index = tab_counter++;
     if (index == tab_request) flags |= ImGuiTabItemFlags_SetSelected;
@@ -1436,6 +1461,8 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
     ImGui::PushStyleColor(ImGuiCol_TabSelected, ui::kAccentSoft);
     ImGui::PushStyleColor(ImGuiCol_TabSelectedOverline, kDragonOrange);
     const bool open = ImGui::BeginTabItem(label, nullptr, flags);
+    if (tab_tip && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", tab_tip);
+    tab_tip = nullptr;
     ImGui::PopStyleColor(4);
     ImGui::PopStyleVar();
     if (fonts.bold) ImGui::PopFont();
@@ -1452,53 +1479,75 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
   if (tabs_open) {
     const int want_tab = request_tab_;
     request_tab_ = 0;
-    if (begin_tab(tab_label(ICON_VIDEO, i18n::T("Video", "Video"), "tab_video"),
+    if (tip("Pantalla, calidad de imagen, FPS e idioma.",
+                  "Display, image quality, FPS and language.") &&
+        begin_tab(tab_label(ICON_VIDEO, i18n::T("Video", "Video"), "tab_video"),
                   want_tab == 4 ? ImGuiTabItemFlags_SetSelected : 0)) {
       DrawVideoTab();
       ImGui::EndTabItem();
     }
-    if (begin_tab(tab_label(ICON_UPSCALE, i18n::T("Escalado", "Upscaling"), "tab_upscale"))) {
+    if (tip("Nitidez y suavizado de la imagen (FSR, FXAA). Si no sabes, déjalo como está.",
+                  "Image sharpness and smoothing (FSR, FXAA). If unsure, leave it as is.") &&
+        begin_tab(tab_label(ICON_UPSCALE, i18n::T("Escalado", "Upscaling"), "tab_upscale"))) {
       DrawUpscaleTab();
       ImGui::EndTabItem();
     }
-    if (begin_tab(tab_label(ICON_AUDIO, i18n::T("Audio", "Audio"), "tab_audio"))) {
+    if (tip("Volumen general y silencio.",
+                  "Master volume and mute.") &&
+        begin_tab(tab_label(ICON_AUDIO, i18n::T("Audio", "Audio"), "tab_audio"))) {
       DrawAudioTab();
       ImGui::EndTabItem();
     }
-    if (begin_tab(tab_label(ICON_INPUT, i18n::T("Controles", "Input"), "tab_input"))) {
+    if (tip("Mando o teclado: botones y sensibilidad.",
+                  "Controller or keyboard: buttons and sensitivity.") &&
+        begin_tab(tab_label(ICON_INPUT, i18n::T("Controles", "Input"), "tab_input"))) {
       DrawInputTab();
       ImGui::EndTabItem();
     }
-    if (begin_tab(tab_label(ICON_MODS, i18n::T("Mods", "Mods"), "tab_mods"),
+    if (tip("Tus mods instalados: actívalos o desactívalos con la casilla. Para instalar uno, arrastra su .zip a esta ventana.",
+                  "Your installed mods: turn them on or off with the box. To install one, drag its .zip onto this window.") &&
+        begin_tab(tab_label(ICON_MODS, i18n::T("Mods", "Mods"), "tab_mods"),
                             want_tab == 1 ? ImGuiTabItemFlags_SetSelected : 0)) {
       DrawModsTab();
       ImGui::EndTabItem();
     }
-    if (begin_tab(tab_label(ICON_DOWNLOAD, "Nova's Mods", "tab_novas"),
+    if (tip("Mods listos para jugar: un clic los descarga e instala.",
+                  "Ready-to-play mods: one click downloads and installs them.") &&
+        begin_tab(tab_label(ICON_DOWNLOAD, "Nova's Mods", "tab_novas"),
                   want_tab == 3 ? ImGuiTabItemFlags_SetSelected : 0)) {
       DrawNovasModsTab();
       ImGui::EndTabItem();
     }
-    if (begin_tab(tab_label(ICON_NATIVE, i18n::T("Juego", "Game"), "tab_native"))) {
+    if (tip("Funciones del juego: arranque rápido, FPS, partida al 100% y brillo HD.",
+                  "Game features: quick start, FPS, 100% save and HD shine.") &&
+        begin_tab(tab_label(ICON_NATIVE, i18n::T("Juego", "Game"), "tab_native"))) {
       DrawNativeModsTab();
       ImGui::EndTabItem();
     }
-    if (begin_tab(tab_label(ICON_SWAP, i18n::T("Modelos", "Model Swap"), "tab_swap"))) {
+    if (tip("Cambia el modelo de un personaje por el de otro (crea un mod).",
+                  "Swap a character's model for another one's (creates a mod).") &&
+        begin_tab(tab_label(ICON_SWAP, i18n::T("Modelos", "Model Swap"), "tab_swap"))) {
       DrawModelSwapTab();
       ImGui::EndTabItem();
     }
 
-    if (begin_tab(tab_label(ICON_TEXTURES, i18n::T("Texturas", "Textures"), "tab_tex"))) {
+    if (tip("Packs de texturas HD y captura de texturas para editarlas.",
+                  "HD texture packs and texture capture to edit them.") &&
+        begin_tab(tab_label(ICON_TEXTURES, i18n::T("Texturas", "Textures"), "tab_tex"))) {
       DrawTexturesTab();
       ImGui::EndTabItem();
     }
-    if (begin_tab(tab_label(ICON_CHARS, i18n::T("Personajes", "New characters"), "tab_chars"),
+    if (tip("Personajes nuevos importados de otros juegos (necesita el Kit de modding para crearlos).",
+                  "New characters imported from other games (creating them needs the modding kit).") &&
+        begin_tab(tab_label(ICON_CHARS, i18n::T("Personajes", "New characters"), "tab_chars"),
                             want_tab == 2 ? ImGuiTabItemFlags_SetSelected : 0)) {
       DrawNewCharactersTab();
       ImGui::EndTabItem();
     }
     // la ultima pestana: diagnostico para quien lo necesite (el modo Dev se activa aqui)
-    if (begin_tab(tab_label(ICON_DEV, i18n::T("Avanzado", "Advanced"), "tab_dev"))) {
+    if (tip("Diagnóstico y opciones para quien reporta fallos. No hace falta tocarlo.",
+                  "Diagnostics and options for bug reports. You do not need to touch it.") &&
+        begin_tab(tab_label(ICON_DEV, i18n::T("Avanzado", "Advanced"), "tab_dev"))) {
       DrawDevTab();
       ImGui::EndTabItem();
     }
@@ -1682,7 +1731,7 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
   // PLAY is gated on the assets being found: pressing it with no game data
   // would crash before the guest even starts (P1). The banner above offers the
   // folder picker to fix it.
-  ImGui::BeginDisabled(!assets_ready || launching_);
+  ImGui::BeginDisabled(!assets_ready || launching_ || iso_prep_);
   ImGui::PushStyleColor(ImGuiCol_Button, kPlayIdle);
   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kPlayHovered);
   ImGui::PushStyleColor(ImGuiCol_ButtonActive, kPlayActive);
@@ -1696,15 +1745,15 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
   const bool play_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
   ImGui::PopStyleVar();
   if (fonts.h2) ImGui::PopFont();
-  if (active_mods_ > 0 && dbz3::settings::IsIsoMode()) {
-    // Modo disco: los mods solo se sirven desde la carpeta extraida. Aviso junto a JUGAR (el
-    // de la seccion de origen pasaba desapercibido: "dice instalado pero no hace efecto").
-    char warn[192];
-    std::snprintf(warn, sizeof(warn),
-                  i18n::T("! Juegas desde la ISO: tus %d mod(s) activos NO se cargan (usa la carpeta extraida)",
-                          "! Playing from the ISO: your %d active mod(s) will NOT load (use the extracted folder)"),
-                  active_mods_);
-    TextAbovePlay(play_min, 4.0f, kGold, warn);
+  if (!launching_ && !iso_prep_error_.empty() && dbz3::settings::IsIsoMode()) {
+    // ISO + mods: la copia de los .afs fallo (espacio, ISO ilegible): se dice por que y el siguiente JUGAR juega sin mods
+    const std::string warn = std::string("! ") + i18n::T("Mods desde la ISO: ", "Mods from the ISO: ") + iso_prep_error_ +
+                             i18n::T(". JUGAR otra vez = sin mods.", ". PLAY again = without mods.");
+    TextAbovePlay(play_min, 4.0f, kGold, warn.c_str());
+  } else if (!launching_ && dbz3::settings::IsIsoMode() && !dbz3::settings::IsoDataCacheValid()) {
+    TextAbovePlay(play_min, 4.0f, kInfo,
+                  i18n::T("Desde la ISO: la primera vez se preparan sus datos para mods y extras (~0,5 GB, segundos).",
+                          "From the ISO: the first time its data is prepared for mods and extras (~0.5 GB, seconds)."));
   } else if (broken_mods_ > 0) {
     // Encima del boton, sin mover el layout (debajo se cortaba y salia una barra de scroll).
     char warn[128];
@@ -1732,14 +1781,19 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
     ImGui::SetTooltip("%s", i18n::T("Faltan los datos del juego: mira el aviso de arriba.",
                                     "Game data missing: see the notice above."));
   }
-  if (launching_) {
+  if (launching_ || iso_prep_) {
     // Barra de carga sobre JUGAR: roster_build dice que personaje esta montando
     // ("@progreso k/n nombre"); hasta la primera linea, la barra va y viene.
     std::string what;
-    const float frac = mod_pipeline_.Progress(&what);
+    float frac = mod_pipeline_.Progress(&what);
     std::string text = i18n::T("Preparando los personajes nuevos, un momento...",
                                "Preparing the new characters, one moment...");
     if (frac >= 0.0f && !what.empty()) text += "  (" + what + ")";
+    if (iso_prep_) {   // ISO + mods: la copia de los .afs (solo la primera vez)
+      frac = float(iso_prep_->progress.load()) / 1000.0f;
+      text = i18n::T("Preparando la ISO para mods y extras (solo la primera vez)...",
+                     "Preparing the ISO for mods and extras (first time only)...");
+    }
     const ImVec2 bar_min(play_min.x, play_min.y - 10.0f);
     const ImVec2 bar_max(play_min.x + 320.0f, play_min.y - 4.0f);
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1755,7 +1809,7 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
       dl->AddRectFilled(ImVec2(x0, bar_min.y), ImVec2(x1, bar_max.y), ImGui::GetColorU32(kGold), 3.0f);
     }
   }
-  bool launch_now = false;
+  bool launch_now = false, start_jobs = false;
   // Enter juega, salvo mientras se escribe en un campo de texto (buscador, nombre...).
   // Enter / START no juegan con una ventana o un desplegable abiertos (Enter en "Restablecer?" lanzaba el juego)
   const bool popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
@@ -1771,9 +1825,30 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
     dbz3::settings::ApplyRuntimeSettingsToSdk(true);
     dbz3::settings::ApplyWindowSizeToSdk();
     REXLOG_INFO("dbz3: launcher Play pressed, starting game");
-    // Personajes nuevos: regenerar el mod combinado "_roster" si cambio algo
-    // (instantaneo si esta al dia; los mods no se aplican en modo ISO).
-    if (!dbz3::settings::IsIsoMode() && ModPipeline::HasCharacterSources()) {
+    // ISO + mods: antes de todo se copian (una vez) los .afs que pueden llevar mods; el override por entrada necesita
+    // archivos reales y el disco montado los sirve desde esa copia (region.cpp). Si ya fallo una vez, se juega sin mods.
+    // (siempre desde la ISO, no solo con mods: el arte nativo de los modos nuevos tambien lee esos archivos)
+    const bool iso_mods = dbz3::settings::IsIsoMode() && iso_prep_error_.empty();
+    const bool voices = ModPipeline::HasCharacterSources() && ModPipeline::RosterToolAvailable();
+    if (iso_mods && dbz3::settings::IsoDataPending(voices) != 0) {
+      StartIsoPrep(true);
+    } else {
+      start_jobs = true;
+    }
+    iso_prep_error_.clear();
+  }
+  if (iso_prep_ && iso_prep_->done) {
+    if (!iso_prep_->ok) iso_prep_error_ = iso_prep_->error.empty() ? "?" : iso_prep_->error;
+    if (iso_prep_->ok && iso_prep_->then_play) start_jobs = true;
+    if (iso_prep_->then_play) launching_ = false;
+    iso_prep_.reset();
+    mods_loaded_ = false;
+  }
+  if (start_jobs) {
+    // Personajes nuevos: regenerar el mod combinado "_roster" si cambio algo (instantaneo si esta al dia). Desde la
+    // ISO, con la copia de sus .afs (UsDir).
+    const bool data_ok = !dbz3::settings::IsIsoMode() || dbz3::settings::IsoDataCacheValid();
+    if (data_ok && ModPipeline::HasCharacterSources()) {
       if (ModPipeline::RosterToolAvailable()) {
         // en segundo plano: la ventana sigue viva y dice que esta montando (antes se congelaba);
         // si otra tarea sigue en marcha, el montaje arranca cuando acabe (sin congelar la ventana)
@@ -1787,6 +1862,10 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
                     "modding no se reconstruye; para cambiar personajes instala el kit)");
       }
     }
+    // R8: despues, los escenarios nuevos desde los juegos de PS2 del jugador (campos de IW, B1/B2), si esta el Kit
+    stages_pending_ = data_ok && ModPipeline::StagesToolAvailable();
+    roster_ran_ = launching_;
+    if (stages_pending_) launching_ = true;
     if (!launching_) launch_now = true;
   }
   if (roster_queued_ && !mod_pipeline_.IsRunning()) {
@@ -1794,13 +1873,35 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
     mod_pipeline_.Wait();
     mod_pipeline_.BuildRoster();
   }
-  if (launching_ && !roster_queued_ && !mod_pipeline_.IsRunning()) {
+  if (launching_ && stages_running_ && !mod_pipeline_.IsRunning()) {
+    // R8: acabo el paso de escenarios; se juega aunque falle (sin Python, sin ISO...): solo queda en el registro
     mod_pipeline_.Wait();
+    stages_running_ = false;
+    launching_ = false;
+    REXLOG_INFO("dbz3: escenarios de PS2: {}", mod_pipeline_.Output());
+    launch_now = true;
+  }
+  if (launching_ && !stages_running_ && !roster_ran_ && stages_pending_ && !mod_pipeline_.IsRunning()) {
+    stages_pending_ = false;   // sin personajes que montar: directamente los escenarios
+    stages_running_ = true;
+    mod_pipeline_.Wait();
+    mod_pipeline_.BuildStages();
+  }
+  if (launching_ && roster_ran_ && !roster_queued_ && !mod_pipeline_.IsRunning()) {
+    mod_pipeline_.Wait();
+    roster_ran_ = false;
     REXLOG_INFO("dbz3: personajes nuevos: {}", mod_pipeline_.Output());
     launching_ = false;
     // A4: exit 0 no basta: el _roster publicado tiene que estar completo
     launch_now = mod_pipeline_.State() == ModPipeline::JobState::kOk && ModPipeline::RosterArtifactsOk();
-    if (!launch_now) {
+    if (launch_now && stages_pending_) {   // R8: tras los personajes, los escenarios (luego se juega)
+      stages_pending_ = false;
+      stages_running_ = true;
+      launching_ = true;
+      launch_now = false;
+      mod_pipeline_.BuildStages();
+    }
+    if (!launch_now && !stages_running_) {
       repair_report_ = i18n::T("No se pudieron preparar los personajes nuevos. Puedes jugar con los de la última "
                                "vez (botón de abajo) o desactivar el personaje que acabas de añadir en la "
                                "pestaña Mods y volver a pulsar JUGAR.",
@@ -2926,6 +3027,24 @@ constexpr FeatureText kFeatureTexts[] = {
      "en el online.",
      "When each fight starts, 10 s of cinematic camera over the stage and the fighters; A skips it. Not used "
      "online.", false},
+    // combate.cpp (DBZ3/Combate): mismos textos que el menu F1 (quick_settings.cpp), asi fr/de/it salen del mismo sitio
+    {"dbz3_combate_aviso", "Aviso de golpe", "Hit warning",
+     "Un aro bajo tu barra de vida cuando un golpe del rival va a llegar: es el momento de pulsar la guardia "
+     "para el contraataque. Solo se ve: no cambia el combate.",
+     "A ring under your health bar when a rival hit is about to land: the moment to press guard for the "
+     "counter. Display only: the fight does not change.", false},
+    {"dbz3_combate_reglas_v0", "Reglas competitivas v0", "Competitive rules v0",
+     "AVISO: cambia el dano de 2 golpes de Goku (patada 50 a 70, adelante + punetazo 35 a 50). Apagado es el "
+     "juego original. No se usa en el online.",
+     "WARNING: changes the damage of 2 Goku hits (kick 50 to 70, forward + punch 35 to 50). Off is the "
+     "original game. Not used online.", false},
+    {"dbz3_combate_definitiva_directa", "Definitiva directa", "Direct ultimate",
+     "La definitiva sin entrar en el modo hiper: su misma entrada, pagando una vez el ki de su capsula. No se "
+     "usa en el online.",
+     "The ultimate without entering hyper mode: same input, paying its capsule's ki once. Not used online.", false},
+    {"dbz3_combate_sonda", "Sonda del laboratorio", "Lab probe",
+     "Guarda cada cuadro y cada golpe del combate en logs/combate_*.csv para medir los golpes (frame data).",
+     "Saves every frame and hit of the fight to logs/combate_*.csv to measure moves (frame data).", false},
 };
 
 // Categorias que ya tienen su pestana (Video, Audio...): sus cvars no se repiten en Juego.
@@ -3051,6 +3170,61 @@ bool FeatureRow(const Feature& f) {
 
 }  // namespace
 
+// Contenido que sale de las copias de PS2 del jugador (Budokai 1, Budokai 2, Infinite World): estado y un boton para
+// elegir cada ISO (pasarela::RegistrarIsoPs2 guarda su ruta en ps2_games; no se copia nada).
+void LauncherDialog::DrawPs2Box() {
+  namespace Pa = dbz3::pasarela;
+  ui::SectionTitle(i18n::T("Contenido de tus juegos de PS2", "Content from your PS2 games"));
+  ui::Hint(i18n::T("Algunos modos nuevos usan tu copia de otros juegos de Dragon Ball Z de PlayStation 2. Pulsa «Elegir "
+                   "ISO» y busca el archivo .iso de ese juego: no se copia ni se cambia nada, solo se recuerda dónde está.",
+                   "Some new modes use your copy of other Dragon Ball Z PlayStation 2 games. Press 'Pick ISO' and find "
+                   "that game's .iso file: nothing is copied or changed, it only remembers where it is."));
+  struct Juego {
+    const char* nombre;
+    const char* es;
+    const char* en;
+  };
+  static const Juego kJuegos[3] = {
+      {"Dragon Ball Z Budokai (PS2)", "Leyenda de Mr. Satán y saga de Namek", "Mr. Satan's legend and the Namek saga"},
+      {"Dragon Ball Z Budokai 2 (PS2)", "Campaña de Budokai 2 (tablero) y Nave de Babidi",
+       "Budokai 2 campaign (board) and Babidi's ship"},
+      {"Dragon Ball Z Infinite World (PS2)", "Campaña de Infinite World, sus minijuegos y animaciones",
+       "Infinite World campaign, its minigames and animations"},
+  };
+  static double leido = -10;
+  static std::string ruta[3];
+  if (ImGui::GetTime() - leido > 2.0) {   // mirar ps2_games no cuesta, pero no en cada fotograma
+    leido = ImGui::GetTime();
+    for (int i = 0; i < 3; ++i) ruta[i] = rex::path_to_utf8(Pa::IsoPs2(i).filename());
+  }
+  for (int i = 0; i < 3; ++i) {
+    ImGui::PushID(i);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(kGold, "%s", kJuegos[i].nombre);
+    ImGui::SameLine(330);
+    if (ruta[i].empty()) {
+      ImGui::TextColored(kDragonOrangeDim, "%s %s", ICON_WARN, i18n::T("Falta", "Missing"));
+    } else {   // el nombre del archivo va en la linea de debajo (uno largo pisaba el boton)
+      ImGui::TextColored(kOk, "%s %s", ICON_OK, i18n::T("Lista", "Ready"));
+    }
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x + ImGui::GetCursorPosX() - 170);
+    if (ImGui::Button((std::string(ICON_DISC " ") + i18n::T("Elegir ISO", "Pick ISO")).c_str(), ImVec2(170, 0))) {
+      const std::string r = Pa::ElegirIsoPs2(i);
+      ps2_msg_ = r == "-" ? std::string() : r.empty() ? std::string(i18n::T("¡Listo! Ya puedes jugarlo.", "Done! You can play it now.")) : r;
+      leido = -10;
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", i18n::T("Busca el archivo .iso de ese juego de PS2 (tu copia). No se copia nada.",
+                                      "Find that PS2 game's .iso file (your copy). Nothing is copied."));
+    }
+    ImGui::TextDisabled("   %s%s%s", i18n::T(kJuegos[i].es, kJuegos[i].en), ruta[i].empty() ? "" : "  ·  ",
+                        ruta[i].c_str());
+    ImGui::PopID();
+  }
+  if (!ps2_msg_.empty()) ImGui::TextColored(kInfo, "%s", ps2_msg_.c_str());
+  ImGui::Spacing();
+}
+
 void LauncherDialog::DrawNativeModsTab() {
   // Guardados: se buscan al abrir la pestana y tras cada accion (antes, en cada frame: el recorrido de
   // user_data costaba ~1 ms por frame y crece con cada copia de seguridad).
@@ -3066,6 +3240,7 @@ void LauncherDialog::DrawNativeModsTab() {
 
   ImGui::BeginChild("##game_left", ImVec2(col_w, -kFooterHeight), ImGuiChildFlags_AlwaysUseWindowPadding);
   TestScroll();
+  DrawPs2Box();   // lo primero: sin estas ISO, varios modos nuevos salen en gris
   ui::SectionTitle(i18n::T("Modos de juego nuevos", "New game modes"));
   ui::Hint(i18n::T("Vienen activados. Si uno no te interesa, quitalo: su entrada desaparece de los menus del juego.",
                    "They come enabled. If you don't want one, turn it off: its entry disappears from the game menus."));
@@ -3149,6 +3324,9 @@ void LauncherDialog::DrawNativeModsTab() {
         ImGui::OpenPopup("###confirm_save100");
       }
       ImGui::EndDisabled();
+      if (!avail)   // issue #20: el boton en gris sin explicar por que
+        ui::Hint(i18n::T("Falta la carpeta mods_nativos\\partida_100 junto a dbz3.exe: vuelve a instalar la version.",
+                         "The mods_nativos\\partida_100 folder next to dbz3.exe is missing: reinstall the release."));
       if (ConfirmModal((std::string(i18n::T("Partida", "Save")) + "###confirm_save100").c_str(),
                        i18n::T("Tu partida se sustituira por esta. Antes se hace una copia de seguridad "
                                "(la recuperas con 'Restaurar mi partida'). Continuar?",
@@ -3215,6 +3393,53 @@ void LauncherDialog::DrawNativeModsTab() {
   ImGui::EndChild();
 }
 
+void LauncherDialog::StartIsoPrep(bool then_play) {
+  if (iso_prep_) return;
+  const bool voices = ModPipeline::HasCharacterSources() && ModPipeline::RosterToolAvailable();
+  iso_prep_ = std::make_shared<IsoPrep>();
+  iso_prep_->then_play = then_play;
+  iso_prep_error_.clear();
+  std::thread([p = iso_prep_, voices] {
+    p->ok = dbz3::settings::PrepareIsoData(voices, &p->progress, &p->error);
+    p->done = true;
+  }).detach();
+  if (then_play) launching_ = true;
+}
+
+// ISO + mods: estado de la copia de sus .afs y el boton para hacerla ya (JUGAR tambien la hace sola).
+void LauncherDialog::DrawIsoPrepBox() {
+  ImGui::PushTextWrapPos(0.0f);
+  if (iso_prep_) {
+    ImGui::TextColored(kInfo, "%s %s %d%%", ICON_DOWNLOAD,
+                       i18n::T("Preparando la ISO para los mods...", "Preparing the ISO for mods..."),
+                       iso_prep_->progress.load() / 10);
+    ImGui::ProgressBar(float(iso_prep_->progress.load()) / 1000.0f, ImVec2(-1.0f, 6.0f), "");
+  } else if (dbz3::settings::IsoDataCacheValid()) {
+    ImGui::TextColored(kOk, "%s %s", ICON_OK, i18n::T(
+        "Juegas desde la ISO y tus mods funcionan (sus datos ya estan preparados).",
+        "You play from the ISO and your mods work (their data is ready)."));
+  } else {
+    ImGui::TextColored(kGold, "%s %s", ICON_WARN, i18n::T(
+        "Juegas desde la ISO: para los mods y los extras se copia una vez parte de sus datos (~0,5 GB; con "
+        "personajes nuevos, ~2 GB). JUGAR lo hace solo la primera vez, o pulsa el boton.",
+        "You play from the ISO: for mods and extras part of its data is copied once (~0.5 GB; with new "
+        "characters, ~2 GB). PLAY does it by itself the first time, or press the button."));
+    if (ImGui::Button((std::string(ICON_DOWNLOAD " ") +
+                       i18n::T("Preparar la ISO para mods", "Prepare the ISO for mods")).c_str())) {
+      StartIsoPrep(false);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", i18n::T(
+          "Copia los archivos del juego que cambian los mods a user_data/dbz3/iso_datos. La ISO no se toca.",
+          "Copies the game files that mods change to user_data/dbz3/iso_datos. The ISO is not touched."));
+    }
+  }
+  if (!iso_prep_error_.empty()) {
+    ImGui::TextColored(kGold, "%s %s%s", ICON_WARN, i18n::T("No se pudo: ", "It failed: "), iso_prep_error_.c_str());
+  }
+  ImGui::PopTextWrapPos();
+}
+
 void LauncherDialog::DrawNovasModsTab() {
   ImGui::BeginChild("##novas_mods", ImVec2(0, -kFooterHeight), ImGuiChildFlags_AlwaysUseWindowPadding);
   StartNovaCatalog();
@@ -3264,20 +3489,50 @@ void LauncherDialog::DrawNovasModsTab() {
       if (ImGui::Button(i18n::T("Reintentar", "Retry"))) RefreshNovaCatalog();
       break;
     case NovaState::kReady: {
-      ImGui::InputTextWithHint("##novas_filter", i18n::T("Filtrar catalogo...", "Filter catalog..."),
+      // filtro por tipo (botones) y buscador en la misma fila
+      static const char* const kTipo[4] = {"", "personaje", "campana", "texturas"};
+      const char* const kChip[4] = {i18n::T("Todos", "All"), i18n::T("Personajes", "Characters"),
+                                    i18n::T("Historias", "Stories"), i18n::T("Texturas", "Textures")};
+      for (int i = 0; i < 4; ++i) {
+        if (i) ImGui::SameLine();
+        const bool on = novas_tipo_ == i;
+        if (on) ImGui::PushStyleColor(ImGuiCol_Button, ui::kAccentDim);
+        if (ImGui::Button(kChip[i])) novas_tipo_ = i;
+        if (on) ImGui::PopStyleColor();
+      }
+      ImGui::SameLine();
+      ImGui::SetNextItemWidth(-1.0f);
+      ImGui::InputTextWithHint("##novas_filter", i18n::T("Buscar por nombre o autor...", "Search by name or author..."),
                                novas_search_, sizeof(novas_search_));
+      ImGui::Spacing();
       int shown = 0;
       for (const NovaMod& m : NovaCatalog()) {
+        if (novas_tipo_ > 0 && m.tipo != kTipo[novas_tipo_]) continue;
         if (!IContains(m.name + " " + m.id + " " + m.tipo + " " + m.description + " " + m.autor, novas_search_)) continue;
         ++shown;
         ImGui::PushID(m.id.c_str());
-        ImGui::TextColored(kGold, "%s", m.name.c_str());
-        ImGui::SameLine();
         const char* kind = m.tipo == "personaje" ? i18n::T("Personaje", "Character")
                            : m.tipo == "campana" ? i18n::T("Historia", "Story")
                            : m.tipo == "texturas" ? i18n::T("Pack de texturas", "Texture pack") : "Mod";
-        ImGui::TextDisabled("[%s]  v%s  %.1f MB", kind, m.version.c_str(), double(m.size) / (1024.0 * 1024.0));
+        const ImVec4 kind_col = m.tipo == "personaje" ? ui::kBlue : m.tipo == "campana" ? kGold
+                                : m.tipo == "texturas" ? ImVec4(0.70f, 0.45f, 0.95f, 1.0f) : kTextDim;
+        // tarjeta: a la izquierda el mod; a la derecha su estado y el boton
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::kCard);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
+        ImGui::BeginChild("##card", ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
+        const float bw = 200.0f, x_btn = ImGui::GetWindowContentRegionMax().x - bw;
+        ImGui::BeginGroup();
+        {
+          ui::FontScope f(ui::GetFonts().bold);
+          ImGui::TextColored(kGold, "%s", m.name.c_str());
+        }
+        ImGui::SameLine();
+        ui::Pill(nullptr, kind, kind_col);
+        ImGui::SameLine();
+        ImGui::TextDisabled("v%s  ·  %.1f MB", m.version.c_str(), double(m.size) / (1024.0 * 1024.0));
+        ImGui::PushTextWrapPos(x_btn - 16.0f);
         ImGui::TextWrapped("%s", m.description.c_str());
+        ImGui::PopTextWrapPos();
         if (!m.autor.empty()) {
           // credito clicable: cada enlace del catalogo abre las redes del autor en el navegador
           ImGui::TextDisabled("%s %s", i18n::T("Autor:", "Author:"), m.autor.c_str());
@@ -3294,24 +3549,44 @@ void LauncherDialog::DrawNovasModsTab() {
             ImGui::PopID();
           }
         }
+        ImGui::EndGroup();
+        const ImVec2 card_top = ImGui::GetItemRectMin();
         const std::string have = NovaInstalledVersion(m.id);
+        const bool update = !have.empty() && (have == "?" || IsVersionNewer(m.version, have));   // nunca bajar de version
+        ImGui::SetCursorScreenPos(ImVec2(ImGui::GetWindowPos().x + x_btn, card_top.y));
+        ImGui::BeginGroup();
+        if (have.empty()) ui::Pill(nullptr, i18n::T("No instalado", "Not installed"), kTextDim);
+        else if (update) ui::Pill(ICON_UPDATE, i18n::T("Actualización", "Update available"), kGold);
+        else ui::Pill(ICON_OK, i18n::T("Instalado", "Installed"), kOk);
         if (NovaBusy(m.id)) {
           ImGui::BeginDisabled();
-          ImGui::Button(i18n::T("Descargando...", "Downloading..."));
+          ImGui::Button(i18n::T("Descargando...", "Downloading..."), ImVec2(bw, 40));
           ImGui::EndDisabled();
-          ImGui::SameLine();
+          ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + bw);
           ImGui::TextColored(kInfo, "%s", status.c_str());   // "Descargando X... 42%"
+          ImGui::PopTextWrapPos();
         } else if (have.empty()) {
-          if (ImGui::Button((std::string(ICON_DOWNLOAD " ") + i18n::T("Instalar", "Install")).c_str())) InstallNovaMod(m);
-        } else if (have == "?" || IsVersionNewer(m.version, have)) {   // nunca ofrecer bajar de version
-          if (ImGui::Button((std::string(ICON_UPDATE " ") + i18n::T("Actualizar", "Update")).c_str())) InstallNovaMod(m);
-        } else {
-          ImGui::AlignTextToFramePadding();
-          ImGui::TextColored(kOk, "%s %s", ICON_OK, i18n::T("Instalado", "Installed"));
-          ImGui::SameLine();
-          if (ImGui::SmallButton(i18n::T("Ver en Mods", "See in Mods"))) request_tab_ = 1;
+          ImGui::PushStyleColor(ImGuiCol_Button, ui::kAccentDim);
+          if (ImGui::Button((std::string(ICON_DOWNLOAD " ") + i18n::T("Instalar", "Install")).c_str(), ImVec2(bw, 40)))
+            InstallNovaMod(m);
+          ImGui::PopStyleColor();
+          if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", i18n::T("Lo descarga y lo deja activado. Se usa al pulsar JUGAR.",
+                                            "Downloads it and turns it on. It is used when you press PLAY."));
+        } else if (update) {
+          if (ImGui::Button((std::string(ICON_UPDATE " ") + i18n::T("Actualizar", "Update")).c_str(), ImVec2(bw, 40)))
+            InstallNovaMod(m);
+          if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", i18n::T("Baja la versión nueva. La anterior se guarda en mods_respaldo.",
+                                            "Downloads the new version. The old one is kept in mods_respaldo."));
+        } else if (ImGui::Button(i18n::T("Ver en Mods", "See in Mods"), ImVec2(bw, 40))) {
+          request_tab_ = 1;
         }
-        ImGui::Separator();
+        ImGui::EndGroup();
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
         ImGui::PopID();
       }
       if (!shown) ImGui::TextDisabled("%s", i18n::T("Sin resultados.", "No results."));
@@ -3334,20 +3609,10 @@ void LauncherDialog::DrawModsTab() {
       "To install one, drag its .zip onto this window, press 'Install mod (.zip)...' or download it from "
       "Nova's Mods. Click a mod's name to see its card."));
 
-  // ISO mode: the per-entry AFS override hooks resolve to host files on the
-  // extracted folder, so mods are NOT applied when playing straight from a
-  // .iso. Warn prominently instead of silently ignoring every mod.
+  // ISO: los mods necesitan la copia de sus .afs (DrawIsoPrepBox; JUGAR tambien la hace sola la primera vez)
   if (dbz3::settings::IsIsoMode()) {
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Text, kGold);
-    ImGui::TextWrapped(i18n::T(
-        "Aviso: estas en modo disco (ISO). Los mods NO se aplican al jugar "
-        "directamente del .iso. Para usarlos, elige 'Carpeta extraida' como "
-        "origen de los datos (en el selector de origen).",
-        "Warning: you are in disc mode (ISO). Mods are NOT applied when playing "
-        "straight from the .iso. To use them, pick 'Extracted folder' as the "
-        "data source (in the source selector)."));
-    ImGui::PopStyleColor();
+    DrawIsoPrepBox();
   }
 
   // Texturas faciles: capturar las texturas del juego, prepararlas como PNG con el nombre que
@@ -3791,6 +4056,11 @@ void LauncherDialog::DrawModsTab() {
           if (c.name == mod.name) c.enabled = current;   // se ve ya; la lista nueva llega en segundo plano
         mods_loaded_ = false; broken_mods_ = -1;
       }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", mod.enabled ? i18n::T("Activado: se usa al pulsar JUGAR. Quita la marca para apagarlo.",
+                                                      "On: used when you press PLAY. Untick to turn it off.")
+                                            : i18n::T("Apagado: no se usa. Marca la casilla para activarlo.",
+                                                      "Off: not used. Tick the box to turn it on."));
 
       ImGui::TableSetColumnIndex(1);
       const std::string& title =
@@ -3844,10 +4114,9 @@ ImGui::TextDisabled(i18n::T("%d archivo%s", "%d file%s"), mod.file_count,
 
       ImGui::TableSetColumnIndex(2);
       DrawBadge(ModTypeLabelText(mod.type), ModTypeColorVec(mod.type));
-      if (mod.enabled) {
-        ImGui::SameLine();
-        ImGui::TextColored(kOk, "ON");
-      }
+      ImGui::SameLine();
+      if (mod.enabled) ImGui::TextColored(kOk, "%s", i18n::T("ACTIVO", "ON"));
+      else ImGui::TextDisabled("%s", i18n::T("APAGADO", "OFF"));
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(i18n::T("%s\n%s\nAutor: %s\nVersion: %s\nTipo: %s\nOrigen: %s\nDestino: %s",
                                   "%s\n%s\nAuthor: %s\nVersion: %s\nType: %s\nSource: %s\nTarget: %s"),
@@ -3973,17 +4242,7 @@ void LauncherDialog::DrawModelSwapTab() {
       "model. A mod is created and turned on by itself; you can remove it in the Mods tab."));
 
   const bool iso = dbz3::settings::IsIsoMode();
-  if (iso) {
-    ImGui::PushStyleColor(ImGuiCol_Text, kGold);
-    ImGui::TextWrapped(i18n::T(
-        "Estas en modo disco (ISO): el mod generado NO se aplicara mientras "
-        "juegues directamente del .iso. Elige 'Carpeta extraida' como origen "
-        "de datos para poder usarlo.",
-        "You are in disc mode (ISO): the generated mod will NOT apply while you "
-        "play straight from the .iso. Pick 'Extracted folder' as the data "
-        "source to use it."));
-    ImGui::PopStyleColor();
-  }
+  if (iso) DrawIsoPrepBox();   // desde la ISO, el cambio de modelo lee la copia de sus .afs (UsDir)
 
   // Lazy-load the B3 catalog once (first draw).
   if (!catalog_load_attempted_) {
@@ -4340,6 +4599,10 @@ void LiveBanner(const char* name) {
 }  // namespace
 
 void SetPreviewDrawer(rex::ui::ImmediateDrawer* drawer) { g_preview_drawer = drawer; }
+bool PickFileDialog(std::string& out, const char* filter_desc, const char* filter_ext) {
+  return PickFile(out, filter_desc, filter_ext, std::string(), GetForegroundWindow());   // encima del juego
+}
+std::string PathUtf8(const std::filesystem::path& p) { return rex::path_to_utf8(p); }
 rex::ui::ImmediateDrawer* PreviewDrawer() { return g_preview_drawer; }
 
 
@@ -4687,7 +4950,8 @@ void LauncherDialog::DrawCharacterEditor(CharacterSource& cs, const std::map<std
     const int got = it == slots.end() ? -1 : it->second;
     char cur[96];
     if (cs.req_id < 0) {
-      std::snprintf(cur, sizeof(cur), i18n::T("Automatica (%d)", "Automatic (%d)"), got);
+      if (got < 0) std::snprintf(cur, sizeof(cur), "%s", i18n::T("Automatica (primera libre)", "Automatic (first free)"));
+      else std::snprintf(cur, sizeof(cur), i18n::T("Automatica (%d)", "Automatic (%d)"), got);
     } else {
       std::snprintf(cur, sizeof(cur), "%d", cs.req_id);
     }
@@ -5412,11 +5676,7 @@ void LauncherDialog::DrawNewCharactersTab() {
     // v1.4.2.1: la causa mas comun de "no salen los personajes": jugar desde el ISO.
     if (dbz3::settings::IsIsoMode()) {
       ImGui::Dummy(ImVec2(0, 4));
-      ImGui::TextColored(ui::kError, "%s  %s", ICON_WARN, i18n::T(
-          "Estas jugando desde el ISO: asi los mods y los personajes nuevos NO se cargan. Extrae el "
-          "ISO a una carpeta y eligela en Inicio > 'Carpeta extraida'.",
-          "You are playing from the ISO: mods and new characters are NOT loaded that way. Extract "
-          "the ISO to a folder and pick it in Home > 'Extracted folder'."));
+      DrawIsoPrepBox();
     }
     ImGui::PopTextWrapPos();
     ImGui::EndChild();
@@ -5440,10 +5700,7 @@ void LauncherDialog::DrawNewCharactersTab() {
       "3) crea uno nuevo abajo. Todo se aplica solo al pulsar JUGAR.",
       "Steps: 1) check the free slots, 2) enable or pick a character to edit it, 3) create "
       "a new one below. Everything applies automatically on PLAY."));
-  if (dbz3::settings::IsIsoMode()) {
-    ImGui::TextColored(kGold, "%s", i18n::T("Modo disco (ISO): los mods no se aplican.",
-                                            "Disc mode (ISO): mods do not apply."));
-  }
+  if (dbz3::settings::IsIsoMode()) DrawIsoPrepBox();
   if (!rex::cvar::Query<bool>("dbz3_afs_append")) {
     ImGui::PushStyleColor(ImGuiCol_Text, kGold);
     ImGui::TextWrapped("%s", i18n::T(

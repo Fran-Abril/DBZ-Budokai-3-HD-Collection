@@ -503,14 +503,15 @@ def _qmat(q, t):
     return M
 
 
-def attach_rigid(a, extra, tex_off, bone_suffix="_HEAD"):
+def attach_rigid(a, extra, tex_off, bone_suffix="_HEAD", head=None):
     """Pega las partes de otro #AMO0 (`extra`, en el espacio local del hueso *_HEAD del cuerpo, como
     las pelucas de Budokai 2: huesos X<P>_S0n_WIG / X<P>_L00_S0n_FACE con bind identidad) como partes
     rigidas del grupo de ese hueso en el AMG 0 del cuerpo. Sus texturas van detras de las del cuerpo
     (tex_off = n del #AMT del cuerpo)."""
     m = a.amgs[0]
     names = names_list(m.b[m.a + m.names_rel:m.a + m.names_rel + 32 * m.nb])
-    head = next((i for i, n in enumerate(names) if n.endswith(bone_suffix) and not n.startswith("X")), None)
+    if head is None:   # head: hueso fijo (campos de IW: la raiz, con bind identidad; tools/campos_iw.py)
+        head = next((i for i, n in enumerate(names) if n.endswith(bone_suffix) and not n.startswith("X")), None)
     if head is None:
         raise ConvError("el cuerpo no tiene hueso %s" % bone_suffix)
     w = PS2AMO(extra)

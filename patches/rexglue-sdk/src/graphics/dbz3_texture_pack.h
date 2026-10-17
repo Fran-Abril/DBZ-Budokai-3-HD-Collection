@@ -193,4 +193,15 @@ bool Dbz3PackSwapsRedBlue(xenos::TextureFormat format);
 // pack (el recurso host tiene el tamano de `cached`, asi que no vale otro).
 const Dbz3TexturePackEntry* Dbz3PackRevalidate(const Dbz3TexturePackEntry* cached, uint64_t hash);
 
+// Tiras doradas de los lados de los menus del juego: textura "borde" de data_usi (128x1024, la misma en
+// 2033/2039/2043/2049/2055/2062) y la greca dorada del marco 16:9 (64x1024). Con "Bordes dorados" apagado
+// (F1 > Imagen, cvar dbz3_ui_side_borders del launcher, leida por nombre; apagado de serie) se suben
+// transparentes por el camino del pack, haya pack o no.
+bool Dbz3SideBordersHidden();
+// Tamano de alguna de esas tiras (sin pack HD solo se hashean estas texturas).
+bool Dbz3MaybeHiddenSize(uint32_t width, uint32_t height);
+// Entrada virtual (imagen transparente) si `hash` es una tira y estan ocultas; si no, nullptr.
+// Decoded/TryDecoded la devuelven ya hecha.
+const Dbz3TexturePackEntry* Dbz3HiddenEntry(uint64_t hash);
+
 }  // namespace rex::graphics

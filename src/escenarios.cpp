@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -39,12 +40,18 @@ struct Alta {
   std::string mod, nombre, titulo;   // nombre: el del registro (<= 15); titulo: el del rotulo
   uint32_t entrada = 0, id_se = 45, menu = 0;   // menu: #AZT con la bola, la vista y el rotulo (selector)
   int tema = 16;
+  bool niebla = false;   // R8: niebla propia (campos de IW: la del #MCF), "RRGGBBAA,inicio,fin" en stage.toml
+  uint32_t niebla_color = 0;
+  float niebla_ini = 0, niebla_fin = 0;
 };
 rex::memory::Memory* g_mem = nullptr;
 std::vector<Alta> g_altas;
 int g_activa = -1;               // alta puesta en el registro anfitrion (-1 = ninguna)
 uint8_t g_orig[kRec];            // registro original del anfitrion
 uint32_t g_orig_tema = 0;
+constexpr dbz3::GA kNieblas = 0x823232A0;   // entradas de niebla de 20 B (color, 2 floats, inicio, fin): clima.cpp
+uint32_t g_niebla = 0;                       // entrada de niebla prestada mientras el alta esta puesta (0 = ninguna)
+uint8_t g_orig_niebla[20];
 
 std::string Limpia(std::string s) {
   const auto h = s.find('#');
@@ -68,6 +75,8 @@ void Restaurar(uint8_t* base) {
   if (g_activa < 0) return;
   std::memcpy(base + kRecs + kAnfitrion * kRec, g_orig, kRec);
   REX_STORE_U32(kTemas + 4 * kAnfitrion, g_orig_tema);
+  if (g_niebla) std::memcpy(base + g_niebla, g_orig_niebla, sizeof(g_orig_niebla));
+  g_niebla = 0;
   g_activa = -1;
 }
 
@@ -79,11 +88,24 @@ void Activar(uint8_t* base, int v) {
   std::memcpy(g_orig, base + rec, kRec);
   g_orig_tema = REX_LOAD_U32(kTemas + 4 * kAnfitrion);
   const uint32_t tema = REX_LOAD_U32(kTemas + 4 * uint32_t(a.tema));
+  const uint32_t ni = REX_LOAD_U32(rec + 0x1C + 4);   // entrada de niebla del anfitrion (grupo 0)
   std::memset(base + rec, 0, kRec);                 // sin grupos de objetos (como R&R BASE)
   std::strncpy(reinterpret_cast<char*>(base + rec), a.nombre.c_str(), 15);
   REX_STORE_U32(rec + 0x10, a.entrada);
   REX_STORE_U32(rec + 0x14, a.id_se);
   REX_STORE_U32(kTemas + 4 * kAnfitrion, tema);
+  if (a.niebla && ni < 64) {   // R8: la del alta en la entrada del anfitrion (se devuelve en Restaurar)
+    g_niebla = kNieblas + ni * 20;
+    std::memcpy(g_orig_niebla, base + g_niebla, sizeof(g_orig_niebla));
+    uint32_t ini, fin;
+    std::memcpy(&ini, &a.niebla_ini, 4);
+    std::memcpy(&fin, &a.niebla_fin, 4);
+    REX_STORE_U32(g_niebla, a.niebla_color);
+    REX_STORE_U32(g_niebla + 12, ini);
+    REX_STORE_U32(g_niebla + 16, fin);
+    REX_STORE_U32(rec + 0x1C + 4, ni);   // variantes 0 y 1
+    REX_STORE_U32(rec + 0x3C + 4, ni);
+  }
   g_activa = v;
   REXLOG_INFO("dbz3 escenarios: alta {} '{}' (mod {}) en el registro {}: entrada {}, id_se {}, tema {}", v,
               a.nombre, a.mod, kAnfitrion, a.entrada, a.id_se, a.tema);
@@ -103,6 +125,13 @@ int Traducir(uint8_t* base, int i) {
 }  // namespace
 
 int Total() { return kSerie + int(g_altas.size()); }
+
+int CampoIW(int campo) {   // altas de mod center hd/campos_iw.py: su carpeta de mod es "Campo IW <campo>"
+  const std::string mod = "Campo IW " + std::to_string(campo);
+  for (size_t i = 0; i < g_altas.size(); ++i)
+    if (g_altas[i].mod == mod) return kSerie + int(i);
+  return -1;
+}
 
 // Nombres oficiales: los rotulos del selector (data_<idioma>.afs 2043, textura 0, una fila por casilla),
 // copiados a texto. Fila de cada registro: las variantes (ISLAND B, TOWN B, NAMEC B, KAIOU B y EARTH, que
@@ -167,6 +196,8 @@ void CargarDeMods(rex::memory::Memory* memory) {
       else if (k == "id_se") a->id_se = uint32_t(std::strtoul(v.c_str(), nullptr, 10));
       else if (k == "tema") a->tema = std::atoi(v.c_str());
       else if (k == "menu") a->menu = uint32_t(std::strtoul(v.c_str(), nullptr, 10));
+      else if (k == "niebla")
+        a->niebla = std::sscanf(v.c_str(), "%x,%f,%f", &a->niebla_color, &a->niebla_ini, &a->niebla_fin) == 3;
     }
   }
   std::erase_if(g_altas, [](const Alta& a) {

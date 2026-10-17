@@ -38,6 +38,13 @@ class D3D12UIDrawContext final : public UIDrawContext {
   UINT64 submission_index_current() const { return submission_index_current_; }
   UINT64 submission_index_completed() const { return submission_index_completed_; }
 
+  // dbz3 (R15): scene depth of the painted guest output (R32_FLOAT, in kDbz3TemporalState) and
+  // the guest output rectangle in render target pixels (x, y, width, height), for the
+  // depth-tested immediate draws. Null when there is none.
+  ID3D12Resource* dbz3_depth = nullptr;
+  float dbz3_depth_rect[4] = {};
+  bool dbz3_depth_inverted = false;
+
  private:
   Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> command_list_;
   UINT64 submission_index_current_;

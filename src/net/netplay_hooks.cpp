@@ -7,6 +7,9 @@
 //   intercambia el tick con el rival y se escribe el del anfitrion; usuario 1: el del invitado
 //   (siempre "conectado"). Evidencias: docs/08_online/ONLINE.md.
 #include <rex/hook.h>
+#include <rex/logging.h>
+
+#include <atomic>
 
 #include "generated/dbz3_init.h"
 #include "../eu_map.h"
@@ -15,6 +18,7 @@
 #include "../ingame/menu_pilot.h"
 #include "../ingame/online_panel.h"
 #include "../ingame/tagteam_panel.h"
+#include "../iw_minijuegos.h"
 
 namespace dbz3::tag {
 bool OnPad(PPCContext& ctx, uint8_t* base, uint32_t user, uint16_t buttons, uint8_t lt);   // tagteam.cpp
@@ -92,6 +96,21 @@ void TagPad(PPCContext& ctx, uint8_t* base, uint32_t user, uint32_t out) {
 }
 }  // namespace
 
+// Mando virtual de las cinematicas (src/cinematica.cpp, frente R3): mientras un usuario tiene botones (>= 0), lee
+// estos de XInput, conectado y sin palancas, en vez de su mando (el juego los traduce como los de verdad: Y+B = carga
+// de ki, como la pose del relevo del Tag Team). Cualquier hilo; < 0 lo devuelve a su mando.
+namespace {
+std::atomic<int32_t> g_pad_cine[4] = {-1, -1, -1, -1};
+}
+namespace dbz3::cinematica {
+void Tick(PPCContext& ctx, uint8_t* base);   // src/cinematica.cpp: animaciones de la escena (con contexto)
+}
+namespace dbz3::net {
+void InyectarPad(uint32_t usuario, int32_t botones) {
+  if (usuario < 4) g_pad_cine[usuario] = botones;
+}
+}  // namespace dbz3::net
+
 DBZ3_HOOK(sub_8221C178, dbz3eu_sub_8221A940) {
   auto& s = dbz3::net::Session::Get();
   const uint32_t user = ctx.r3.u32;
@@ -110,12 +129,40 @@ DBZ3_HOOK(sub_8221C178, dbz3eu_sub_8221A940) {
     ctx.r3.u64 = 0;   // ERROR_SUCCESS: conectado
     return;
   }
+  if (const int32_t v = user < 4 ? g_pad_cine[user].load() : -1; v >= 0 && out && !s.active()) {
+    static int32_t visto[4] = {-1, -1, -1, -1};
+    if (visto[user] != v) REXLOG_INFO("dbz3 net: mando virtual {} (cinematica): botones {:04X}", user, uint32_t(v));
+    visto[user] = v;
+    dbz3::cinematica::Tick(ctx, base);
+    static uint32_t packet = 0;
+    REX_STORE_U32(out + 0, ++packet);
+    REX_STORE_U16(out + 4, uint16_t(v));
+    REX_STORE_U16(out + 6, 0);
+    REX_STORE_U32(out + 8, 0);
+    REX_STORE_U32(out + 12, 0);
+    ctx.r3.u64 = 0;
+    return;
+  }
   if (!s.active() || user > 1 || !out) {
     orig(ctx, base);
     if (user == 1) dbz3::ingame::NotePad2(ctx.r3.u32 == 0);
     if (user <= 1 && out && ctx.r3.u32 == 0) {
       const uint64_t r3 = ctx.r3.u64;
       if (user == 0) {
+        // Minijuegos de IW (frente P4): en la HD la palanca derecha lanza tecnicas (Kamehameha, Masenko; el teclado de
+        // pruebas la lleva en las flechas): mientras dure el minijuego no le llega al juego y se la queda la camara
+        // (iwmini::PalancaDerecha). La cruceta, igual: se quita y, con la palanca izquierda suelta, pasa a ella.
+        if (dbz3::iwmini::Activo()) {
+          dbz3::iwmini::PalancaDerecha(int16_t(REX_LOAD_U16(out + 12)));
+          REX_STORE_U32(out + 12, 0);
+        }
+        if (const uint16_t b = REX_LOAD_U16(out + 4); (b & 0x000F) && dbz3::iwmini::Activo()) {
+          if (REX_LOAD_U16(out + 8) == 0 && REX_LOAD_U16(out + 10) == 0) {
+            REX_STORE_U16(out + 8, uint16_t(int16_t(b & 0x0008 ? 32767 : b & 0x0004 ? -32767 : 0)));
+            REX_STORE_U16(out + 10, uint16_t(int16_t(b & 0x0001 ? 32767 : b & 0x0002 ? -32767 : 0)));
+          }
+          REX_STORE_U16(out + 4, uint16_t(b & ~0x000F));
+        }
         dbz3::ingame::OnlineTick(base, REX_LOAD_U16(out + 4));   // X en los menus
         // la palanca izquierda arriba/abajo cuenta como la cruceta (el teclado usa la palanca)
         constexpr uint16_t kUpDown = 0x0003;

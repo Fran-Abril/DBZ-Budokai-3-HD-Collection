@@ -4,6 +4,8 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <mutex>
 #include <thread>
 
 #ifdef _WIN32
@@ -20,6 +22,22 @@ namespace {
 // Base32 de Crockford: sin I, L, O ni U para que no se confundan al dictarlo
 constexpr char kAlpha[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 constexpr uint32_t kCookie = 0x2112A442;
+
+// UPnP: abrir y cerrar van de uno en uno y se cuentan las sesiones que usan cada puerto. El cierre de una
+// sesion vieja corre en un hilo suelto y podia llegar DESPUES de la apertura de la nueva (CREAR enseguida tras
+// salir) y quitar el puerto recien abierto: ahora solo se quita cuando se va la ultima sesion que lo abrio.
+std::mutex g_upnp_mu;
+std::map<uint16_t, int> g_upnp_users;
+
+// true si `port` se queda sin sesiones (con g_upnp_mu): solo entonces se quita del router. Un puerto que no
+// consta (el cierre de salida, UpnpCloseMapped) se quita siempre.
+bool UpnpRelease(uint16_t port) {
+  const auto it = g_upnp_users.find(port);
+  if (it == g_upnp_users.end()) return true;
+  if (--it->second > 0) return false;
+  g_upnp_users.erase(it);
+  return true;
+}
 }  // namespace
 
 std::string EncodeRoom(uint32_t ip, uint16_t port) {
@@ -57,6 +75,7 @@ bool DecodeRoom(const std::string& code, uint32_t* ip, uint16_t* port) {
 
 #ifdef _WIN32
 std::string UpnpOpen(uint16_t port, const std::string& local_ip) {
+  std::lock_guard<std::mutex> serial(g_upnp_mu);
   std::string ext;
   if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) return ext;
   IUPnPNAT* nat = nullptr;
@@ -69,12 +88,14 @@ std::string UpnpOpen(uint16_t port, const std::string& local_ip) {
     BSTR desc = SysAllocString(L"DBZ3 HD online");
     IStaticPortMapping* m = nullptr;
     if (SUCCEEDED(maps->Add(port, udp, port, client, VARIANT_TRUE, desc, &m)) && m) {
+      ++g_upnp_users[port];
       UpnpCloseAtExit(port);   // abierto: se cierra al salir aunque luego falle leer la IP publica
       BSTR e = nullptr;
       if (SUCCEEDED(m->get_ExternalIPAddress(&e)) && e) {
         for (const wchar_t* p = e; *p; ++p) ext += char(*p);
         SysFreeString(e);
       }
+      if (ext.empty()) UpnpRelease(port);   // sin IP el llamador no guarda el puerto ni lo cerrara: no cuenta como sesion
       m->Release();
     }
     SysFreeString(udp);
@@ -88,6 +109,8 @@ std::string UpnpOpen(uint16_t port, const std::string& local_ip) {
 }
 
 void UpnpClose(uint16_t port) {
+  std::lock_guard<std::mutex> serial(g_upnp_mu);
+  if (!UpnpRelease(port)) return;   // otra sesion sigue usando ese puerto
   if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) return;
   IUPnPNAT* nat = nullptr;
   IStaticPortMappingCollection* maps = nullptr;
@@ -114,7 +137,12 @@ std::atomic<uint16_t> g_mapped{0};
 void UpnpCloseMapped() {
   // en un hilo propio: el de la ventana ya tiene COM en modo STA y CoInitializeEx(MTA) fallaba sin
   // cerrar nada (el puerto se quedaba abierto en el router, 2026-10-14)
-  if (const uint16_t p = g_mapped.exchange(0)) std::thread(UpnpClose, p).join();
+  if (const uint16_t p = g_mapped.exchange(0)) {
+    std::thread([p] {
+      { std::lock_guard<std::mutex> serial(g_upnp_mu); g_upnp_users.erase(p); }   // al salir se quita aunque quede cuenta
+      UpnpClose(p);
+    }).join();
+  }
 }
 
 void UpnpCloseAtExit(uint16_t port) {
@@ -159,6 +187,12 @@ bool StunMapped(const uint8_t* p, int n, uint32_t* ip, uint16_t* port) {
 }
 
 bool RoomSelfTest() {
+  {   // cuenta de sesiones por puerto UPnP: dos usan el puerto, solo la ultima en irse lo quita
+    std::lock_guard<std::mutex> serial(g_upnp_mu);
+    g_upnp_users[1] = 2;
+    const bool first = UpnpRelease(1), second = UpnpRelease(1), none = g_upnp_users.count(1) == 0;
+    if (first || !second || !none || !UpnpRelease(1)) return false;
+  }
   uint32_t ip = 0, back = 0;
   uint16_t port = 0;
   inet_pton(AF_INET, "83.45.201.7", &ip);

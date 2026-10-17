@@ -34,6 +34,7 @@
 #include "eu_map.h"
 #include "roster_ext.h"
 #include "tagteam.h"
+#include "iw_minijuegos.h"
 #include "tagteam_round.h"
 #include "form_selection_state.h"
 #include "ingame/tagteam_panel.h"
@@ -57,6 +58,7 @@ DBZ3_EXTERN_EU(dbz3eu_sub_82113970);
 DBZ3_EXTERN_EU(dbz3eu_sub_82112360);
 DBZ3_EXTERN_EU(dbz3eu_sub_82115430);
 
+namespace dbz3::fusion { void Tick(PPCContext& ctx, uint8_t* base); }
 namespace dbz3::tag {
 // TAG_F3_RECIPE_V1
 bool ReadMemberCapsules(uint8_t*, int, int, std::array<uint16_t, 8>&);
@@ -148,6 +150,7 @@ struct Team {
   uint32_t tele_at = 0;            // tick en que empezo a aparecer el que entra (0 = nada)
   bool tele_fx = false;            // su estela y su sonido ya salieron
   bool veiled = false;             // X+3261 puesto por nosotros (se quita si el combate acaba a mitad)
+  bool fused = false;              // fusion (Fuse, fusion.cpp): equipo de 2 sin vuelta atras ni fichas del Tag Team
 };
 
 std::mutex g_mu;
@@ -595,6 +598,18 @@ bool RoundNodesReady(uint8_t* base, uint32_t x, const Team& t) {
   return true;
 }
 
+// Traje del hueco `slot` del registro `rec` como lo deja sub_82113870 (el juego, al fijar el ID): 0 si el modelo de
+// esa forma (ID en +214) no tiene ese traje (char96 +4), salvo el SSJ4 (ID 91) con el 4. Sin esto el que entra
+// cargaba su modelo con el traje del que sale: Goku traje 7 -> Freezer (3 trajes) leia un registro fuera de su
+// lista y el juego se cerraba (feedback 1.4.6, logs/dbz3_1034.log: r28 = 0x8234A470, cadenas de fisica 0x54).
+uint8_t SuitFor(uint8_t* base, uint32_t rec, uint32_t slot, uint8_t suit) {
+  const uint32_t e = rec + 214 + 20 * slot;
+  const int mid = int16_t(REX_LOAD_U16(e));
+  if (REX_LOAD_U8(e + 4) == 8 || mid < 0 || mid >= 105) return 0;
+  if (mid == 91 && suit == 4) return suit;
+  return int8_t(suit) < int8_t(REX_LOAD_U8(kChar96 + 96u * uint32_t(mid) + 4)) ? suit : 0;
+}
+
 void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   if (k < 0 || k >= int(t.ids.size()) || k == t.active || t.phase != Phase::kIdle ||
       t.down[size_t(k)]) return;
@@ -653,14 +668,14 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
   if (t.spare) {
     std::memcpy(base + t.rec + 4 * kSpare, base + src + 4 * f, 4);
     std::memcpy(base + t.rec + 212 + 20 * kSpare, base + src + 212 + 20 * f, 20);
-    REX_STORE_U8(x + 7436 + kSpare, REX_LOAD_U8(x + 7436));
+    REX_STORE_U8(x + 7436 + kSpare, SuitFor(base, t.rec, kSpare, REX_LOAD_U8(x + 7436)));
   }
   const uint32_t keep[] = {REX_LOAD_U32(x + kRec372), REX_LOAD_U32(x + kId), REX_LOAD_U32(x + kCam),
                            REX_LOAD_U32(x + kLang), REX_LOAD_U32(x + 7928)};
   const uint8_t suit6 = REX_LOAD_U8(x + 7436 + kSpare), suit7 = REX_LOAD_U8(x + 7436 + kLoad);
   if (t.round_owned) REX_STORE_U8(x + 7436 + kSpare, uint8_t(t.round_suit));
   const uint16_t sel20 = REX_LOAD_U16(sel + 20), sel22 = REX_LOAD_U16(sel + 22);
-  REX_STORE_U8(x + 7436 + kLoad, REX_LOAD_U8(x + 7436));      // mismo traje
+  REX_STORE_U8(x + 7436 + kLoad, SuitFor(base, t.rec, kLoad, REX_LOAD_U8(x + 7436)));   // mismo traje (si lo tiene)
   if (t.round_owned) REX_STORE_U8(x + 7436 + kLoad, uint8_t(t.round_suit));
   REX_STORE_U32(x + kRec372, t.rec);
   REX_STORE_U32(x + kId, id);
@@ -759,6 +774,7 @@ void StartSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t, int k) {
 void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   const int k = t.target;
   const bool ko = t.down[size_t(t.active)];   // entra por un KO (el que sale esta en el suelo)
+  if (t.fused && !ko) t.hp[size_t(k)] = LoadF(base, x + kHp);   // fusion: la vida de ahora
   if (const int side = SideOf(base, x); side >= 0) g_keep[size_t(side)] = 0;
   // teletransporte: el que sale se va con la estela y el sonido del juego (con sus huesos aun colocados) y en
   // este mismo tick el que entra empieza a aparecer en su sitio (TeleportIn, abajo)
@@ -818,9 +834,14 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
   // el que entra no hereda el "caido" del que salio (X+6248 lo pone la accion 25; X+8189 es el control)
   REX_STORE_U32(x + 6248, 0);
   REX_STORE_U8(x + 8189, 0);
+  const float ki = LoadF(base, x + 6100);
   g_in_swap = true;
   TAG_CALL(sub_82109638, dbz3eu_sub_82109738, x, 0);           // reinicio del luchador
   g_in_swap = false;
+  if (t.fused) {   // fusion: el reinicio devolvia el ki del principio (ya gastado en fusion.cpp)
+    REXLOG_INFO("dbz3 fusion: ki {:.0f} (el reinicio lo dejaba en {:.0f})", ki, LoadF(base, x + 6100));
+    StoreF(base, x + 6100, ki);
+  }
   TAG_CALL(sub_8210E690, dbz3eu_sub_8210E790, x, 0);
   TAG_CALL(sub_82115270, dbz3eu_sub_82115370, x, 0);           // el cuerpo pasa al modelo nuevo
   // su forma de vuelta al hueco de esa forma, ya pasado el reinicio (con el modelo puesto antes, el
@@ -916,6 +937,7 @@ void FinishSwap(PPCContext& ctx, uint8_t* base, uint32_t x, Team& t) {
     t.visited[size_t(k)] = true;
     t.restore_ticket.Begin(t.generation, int(id), int(spare), g_frame.load());
   }
+  if (t.fused) t.down[size_t(t.active)] = true;   // fusionado: no vuelve (sin SELECT de vuelta; su KO es el de verdad)
   t.active = k;
   t.phase = Phase::kIdle;
   t.retries = 0;
@@ -1104,6 +1126,7 @@ void Tick(PPCContext& ctx, uint8_t* base) {
                   b ? REX_LOAD_U16(b + 3244) : 0, base[dbz3::GuestAddr(0x824BA110, 0x824BA100)], zone);
     }
   }
+  dbz3::fusion::Tick(ctx, base);   // fusion (fusion.cpp): pide Fuse antes de que el bucle de abajo la lleve
   const bool over = Over(base);
   std::lock_guard<std::mutex> lock(g_mu);
   for (int p = 0; p < 2; ++p) {
@@ -1421,7 +1444,7 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     }
     HudSide& h = g_hud[size_t(p)];
     const float mx = std::max(LoadF(base, x + kHpMax), 1.0f);
-    h.n = int(t.ids.size());
+    h.n = t.fused ? 0 : int(t.ids.size());   // la fusion no lleva fichas del Tag Team
     h.active = t.active;
     h.switching = t.phase != Phase::kIdle;
     h.refused = t.refused_at && now - t.refused_at < kRefusedShow;
@@ -1438,6 +1461,30 @@ bool InBattle() { return g_in_battle.load(); }
 
 void SetComSide(int side, bool com) {
   if (side == 0 || side == 1) g_com[size_t(side)] = com;
+}
+
+// Fusion (fusion.cpp): el luchador del lado `side` pasa a `id` con la carga del relevo (ficheros del juego,
+// misma vida). El que se fusiona queda fuera para siempre (FinishSwap lo da por caido). false = ahora no se
+// puede (sin pelea, el lado ya lleva equipo o el luchador no esta libre).
+bool Fuse(PPCContext& ctx, uint8_t* base, int side, int id) {
+  if (side < 0 || side > 1 || !g_in_battle.load()) return false;
+  const uint32_t x = Fighter(base, side);
+  std::lock_guard<std::mutex> lock(g_mu);
+  Team& t = g_team[size_t(side)];
+  if (!x || t.ids.size() >= 2 || !Fighting(base) || Over(base) || !Free(base, x)) return false;
+  const float hp = LoadF(base, x + kHp);
+  t.ids = {int(REX_LOAD_U32(x + kId)), id};
+  t.round_owned = false;
+  t.fused = true;
+  t.active = 0;
+  t.tech_owner = 0;
+  t.down = {};
+  t.hp[0] = t.hp[1] = hp;
+  StartSwap(ctx, base, x, t, 1);
+  if (t.phase == Phase::kLoading) return true;
+  t.ids.clear();
+  t.fused = false;
+  return false;
 }
 
 HudSide Hud(int player) {
@@ -1502,7 +1549,7 @@ bool OnPad(PPCContext& ctx, uint8_t* base, uint32_t user, uint16_t buttons, uint
   const uint32_t x = Fighter(base, int(user));
   std::lock_guard<std::mutex> lock(g_mu);
   Team* t = x ? TeamOf(base, x) : nullptr;
-  if (!t) return false;
+  if (!t || t->fused) return false;
   if (pressed && !Over(base) && !PreFight(base)) {
     const uint32_t now = g_frame.load();
     const int k = Pick(*t, (buttons & kLb) || lt > 64);
@@ -1740,6 +1787,7 @@ DBZ3_HOOK_EU(sub_82103908) {
     REXLOG_INFO("dbz3 actprobe: X={:08X} accion={} antes={} vida={:.0f}", x, ctx.r4.u32,
                 REX_LOAD_U16(x + 3244), dbz3::tag::LoadF(base, x + dbz3::tag::kHp));
   }
+  if (dbz3::iwmini::AnularAndar(base, ctx.r3.u32, ctx.r4.u32)) return;   // andar libre de IW: sigue en reposo (accion 0)
   orig(ctx, base);
 }
 

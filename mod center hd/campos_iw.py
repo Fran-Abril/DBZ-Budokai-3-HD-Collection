@@ -1,0 +1,422 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+r"""campos_iw.py - Campos de los minijuegos de Infinite World (PS2) -> escenario NUEVO de Budokai 3 HD.
+
+Frente R8 (2026-10-16). Los campos a pie de IW (modulo MSNMW: DATA_CMN 903, 897, 884, 900, 906, 909) no son escenarios
+de combate: cada uno es un #AMB [#MCF niebla/cielo, (#AMO, #AMT) x N] con el cielo, las nubes, el terreno y extras
+(la nave de Raditz en el 903), y su colision #WCF va en la entrada siguiente (904...). El juego de B3 solo sabe cargar
+un bin de escenario (#AMB[#ZDD, #CAD, #CAS, #SPX, registro]).
+
+Montaje: se parte del escenario de combate de IW `base` (DATA_CMN de IW 48..72 = el #MDD de B3 PS2 44..68 byte a byte)
+y todo lo que se dibuja va en su objeto 0 (el juego no dibuja objetos nuevos de un alta): su sub-malla con colision se
+queda con las partes ocultas (truco FFFFFF00 FFFF0000; la consulta de suelo necesita su modelo preparado) y las demas
+pintan el terreno, que lleva pegados el cielo y las nubes (attach de amo2awo a su hueso raiz; texturas detras en el
+mismo banco): el juego solo pinta tantas sub-mallas como tiene el escenario base. Camaras y script = los del base.
+Colision = la caja del base (+-361 en Llanuras, suelo plano y paredes) estirada en x/z hasta el borde del terreno
+(escala por campo en CAMPOS): se corre por todo el campo sin subir mesetas (ponytail: la colision real del #WCF va
+aparte). Conversor de B1/B2 (tools/escenarios_convertir.py: mdd_a_zdd); se instala como mod (casilla nueva, no
+sustituye nada). Todo sale de la copia del jugador (IW en ps2_games/ y su us/data_cmn.afs): nada se reparte.
+
+Uso:
+  python tools\campos_iw.py mod 903 --mods <juego>\mods          # crea mods\Campo IW 903
+  python tools\campos_iw.py info 903                              # piezas del campo
+"""
+import argparse
+import struct
+import sys
+from pathlib import Path
+
+RAIZ = Path(__file__).resolve().parent.parent
+sys.path[:0] = [str(Path(__file__).resolve().parent), str(RAIZ / "awo_tools")]   # mod center hd (Kit) y awo_tools
+
+import escenarios_convertir as EC  # noqa: E402
+
+# campo -> (titulo, escenario base de IW (= B3 HD -4), registro de B3 del tema, piezas (hijo #AMO, hijo #AMT), escala de
+# la caja de colision del base (+-361 en Llanuras) en x/z para que sus paredes lleguen al borde del terreno)
+# Piezas: 1/2 y 3/4 cielo y nubes, 5/6 terreno (el terreno va primero: objeto 0). La nave (903 7/8) no: la pinta
+# iw_minijuegos.cpp como meta. Base = Llanuras (IW 58 = B3 54, registro 5); tema 16 (generico): con el tema 5 el juego
+# se cierra al empezar el combate (lr 0x820BF918), porque el alta no lleva los grupos de objetos del registro 5.
+# Cierres resueltos y pruebas: docs/14_frentes/RONDA4_PULIDO.md, seccion R8.
+CAMPOS = {
+    903: ("Llanura de Raditz (IW)", 58, 16, ((5, 6), (1, 2), (3, 4)), 4.2),     # terreno x/z +-1500 (suelo plano: bajo las mesetas se pasa por debajo a cualquier escala)
+    897: ("Planeta del Kaio (IW)", 58, 16, ((5, 6), (1, 2), (3, 4)), 2.5),      # +-900
+    884: ("Camino de la Serpiente (IW)", 58, 16, ((5, 6), (1, 2), (3, 4)), 10.4),  # x +-660, z -3640..3743
+    900: ("Namek que explota (IW)", 58, 16, ((5, 6), (1, 2), (3, 4)), 4.2),
+    906: ("Llanura de Piccolo (IW)", 58, 16, ((5, 6), (1, 2), (3, 4)), 4.2),
+    909: ("Roquedal (IW)", 58, 16, ((5, 6), (1, 2), (3, 4)), 4.2),
+    # campos de vuelo (FLIGHT, frente R12): sin #WCF ni #AMC propios (camaras de Llanuras); el mundo da la vuelta
+    # (24000 / 16000) y se vuela a altura fija 400: la caja llega al borde del terreno. Las piezas 7/8 (881: un
+    # objeto animado; 883: la casa de Guru) no van: las pone el minijuego donde toca.
+    881: ("Tierra en vuelo (IW)", 52, 16, ((5, 6), (1, 2), (3, 4)), 46.0),   # x/z +-12000; base con 4 sub-mallas
+    #      libres (IW 52 = B3 48, caja de colision +-268 x +-254): el terreno va partido en 2 (PARTES)
+    883: ("Namek en vuelo (IW)", 52, 16, ((5, 6), (1, 2), (3, 4)), 30.7),    # x/z +-8000 (caja de IW 52)
+}
+# data_cmn.afs del juego (B2 5000+, B1 5020+); menu = entrada + 100. Fijas: un campo nuevo no mueve las demas.
+# El juego busca el alta por su carpeta de mod ("Campo IW <campo>": dbz3::escenarios::CampoIW).
+ENTRADAS = {884: 5060, 897: 5061, 900: 5062, 903: 5063, 906: 5064, 909: 5065, 881: 5066, 883: 5067}
+
+
+def le(b, o):
+    return struct.unpack_from("<I", b, o)[0]
+
+
+def afs_iw():
+    import importar  # noqa: PLC0415 (mod center hd: IW en carpeta o ISO, cualquier region)
+    p = importar.source_path("iw")
+    if not p:
+        raise SystemExit("no encuentro Infinite World en ps2_games/")
+    return importar.iw_afs(p)
+
+
+def hijos(b):
+    return [b[o:o + s] for o, s, _, _ in EC.hijos_amb(b, "<")]
+
+
+def poner_niebla(carpeta, mcf):
+    """Niebla del #MCF del campo (+0x1C color 0x00BBGGRR; +0x28/+0x2C inicio y fin) -> `niebla = "RRGGBBAA,ini,fin"`
+    en su stage.toml (src/escenarios.cpp la pone en la entrada de niebla del registro anfitrion)."""
+    c = le(mcf, 0x1C)
+    ini, fin = struct.unpack_from("<2f", mcf, 0x28)
+    linea = 'niebla = "%02X%02X%02XFF,%.0f,%.0f"     # niebla del #MCF del campo de IW' % (
+        c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF, ini, fin)
+    t = carpeta / "stage.toml"
+    t.write_text(t.read_text(encoding="utf-8") + linea + "\n", encoding="utf-8")
+
+
+HIDE = bytes.fromhex("FFFFFF00FFFF0000")   # vtype/vflags de parte oculta (truco de modders; amo2awo la omite)
+
+
+def tiene_colision(amo):
+    """El #AMO lleva bloque de colision colgado de la lista de algun hueso (4a palabra)."""
+    nb, bones, _namg, _tbl, nlist = (le(amo, 0x10 + 4 * j) for j in range(5))
+    for i in range(nb):
+        lp = le(amo, bones + 0x20 * i + 4)
+        if lp and any(le(amo, lp + 16 * k + 12) not in (0, 0xFFFFFFFF) for k in range(nlist)):
+            return True
+    return False
+
+
+def ocultar_partes(out, o, tam, quedan=0):
+    """Oculta las partes dibujables del #AMO en out[o:o+tam] (huesos y colision siguen). quedan: deja las N mas
+    pequenas (si el juego no admite un modelo sin partes)."""
+    import amo2awo  # noqa: PLC0415
+    partes = [p for g in amo2awo.PS2AMO(bytes(out[o:o + tam])).amgs for p in g.all_parts]
+    for p in sorted(partes, key=lambda p: p.size)[quedan:]:
+        out[o + p.off:o + p.off + 8] = HIDE
+    return len(partes)
+
+
+
+
+def escalar_colision(out, mo, k):
+    """Colision de un #AMO PS2 (en out[mo:]) estirada x k en horizontal (x, z): vertices y esferas de los nodos.
+    Las normales no cambian: en los escenarios de B3 solo hay paredes verticales y suelos planos (comprobado en
+    Llanuras: ny 0 o 1); triangulo = [normal xyz, 1][?, i1, i2, i3] (indices a los vertices del nodo)."""
+    a = bytes(out[mo:])
+    nb, bones, _namg, _tbl, nlist = (le(a, 0x10 + 4 * j) for j in range(5))
+    for i in range(nb):
+        lp = le(a, bones + 0x20 * i + 4)
+        for q in range(nlist if lp else 0):
+            g3 = le(a, lp + 16 * q + 12)
+            if g3 in (0, 0xFFFFFFFF):
+                continue
+            p = le(a, g3 + 0x48)
+            while p:
+                cx, cy, cz, cw, r, r2 = struct.unpack_from("<6f", a, p + 16)   # esfera del nodo y radio^2
+                struct.pack_into("<6f", out, mo + p + 16, cx * k, cy, cz * k, cw, r * k, r2 * k * k)
+                va = le(a, p + 4)
+                for v in range(le(a, va + 12)):
+                    x, y, z = struct.unpack_from("<3f", a, va + 16 + 16 * v)
+                    struct.pack_into("<3f", out, mo + va + 16 + 16 * v, x * k, y, z * k)
+                p = le(a, p)
+
+
+def escalar_st50(out, mdd, s, k, vistos):
+    """Arbol st50 del objeto (0x50 B por nodo: +0 centro xyz, +0x10 radio; hijos +0x34..+0x44) x k en horizontal."""
+    if not s or s in vistos:
+        return
+    vistos.add(s)
+    cx, cy, cz, cw, r = struct.unpack_from("<5f", mdd, s)
+    struct.pack_into("<5f", out, s, cx * k, cy, cz * k, cw, r * k)
+    for c in (0x34, 0x38, 0x3C, 0x40, 0x44):
+        escalar_st50(out, mdd, le(mdd, s + c), k, vistos)
+
+
+# Terrenos demasiado grandes para un solo #AWG (indices de 16 bits en la HD: 881 Tierra, ~104000 ventanas) se
+# parten en N modelos con el truco de las partes ocultas; necesitan un escenario base con N sub-mallas libres.
+PARTES = {881: 2}
+# Campos sin #AMC propio (los de vuelo no tienen la entrada #WCF + #AMC): {campo: entrada de IW de la que tomar el
+# #AMC}. Vacio: los de vuelo usan las del escenario base IW 52 (B3 48), que dan planos de tierra, costa y mar; las de
+# Llanuras daban planos de solo cielo y las prestadas de 903/900 metian la camara bajo el agua o en una meseta.
+CAMARAS = {}
+
+
+def partir(amo, n):
+    """n copias del #AMO, cada una con 1/n de sus partes visibles (por numero de vertices; las demas ocultas)."""
+    if n <= 1:
+        return [amo]
+    import amo2awo  # noqa: PLC0415
+    partes = [p for g in amo2awo.PS2AMO(bytes(amo)).amgs for p in g.all_parts]
+    total, acum, trozo = sum(len(p.verts) for p in partes) or 1, 0, []
+    for p in partes:
+        trozo.append(min(n - 1, acum * n // total))
+        acum += len(p.verts)
+    out = []
+    for i in range(n):
+        b = bytearray(amo)
+        for p, t in zip(partes, trozo):
+            if t != i:
+                b[p.off:p.off + 8] = HIDE
+        out.append(bytes(b))
+    return out
+
+
+def mdd_con_campo(mdd, terreno, amt, quedan=0, k=1.0, camaras=None):
+    """#MDD PS2 del escenario base que pinta el campo, todo en su objeto 0 (el juego no dibujaba objetos nuevos: el
+    alta no lleva grupos de objetos en el registro). Sus sub-mallas con colision se quedan (la consulta de suelo
+    sub_820CB0A0 necesita su modelo preparado, y el juego solo prepara los de una sub-malla) con las partes ocultas;
+    las demas pintan el terreno (mismo numero e indices: el script del escenario las pide por indice). La colision
+    del base se estira x k en horizontal. camaras: #AMC del campo (pistas de la presentacion, en sus coordenadas) en
+    lugar del de Llanuras. Devuelve (mdd nuevo, [(off, tam)] de los bloques anadidos)."""
+    out = bytearray(mdd)
+    bloques = []
+    tamanos = dict(EC.bloques_mdd(mdd))
+
+    def poner(datos):
+        out.extend(bytes(EC.align(len(out), 64) - len(out)))
+        o = len(out)
+        out.extend(datos)
+        bloques.append((o, len(datos)))
+        return o
+    terrenos = terreno if isinstance(terreno, list) else [terreno]   # trozos del terreno (PARTES)
+    p_ters, p_amt = [poner(t) for t in terrenos], poner(amt)
+    ob0 = le(mdd, le(mdd, 0x20))
+    if camaras and le(mdd, ob0 + 0xD4):            # primera camara del objeto 0 = la que pide el script (#SPX)
+        struct.pack_into("<I", out, le(mdd, ob0 + 0xD8), poner(camaras))
+    out.extend(bytes(EC.align(len(out), 64) - len(out)))
+    lista0 = [le(mdd, le(mdd, ob0 + 0xA8) + 4 * q) for q in range(le(mdd, ob0 + 0x90))]
+
+    def struct_(b):
+        out.extend(bytes(EC.align(len(out), 16) - len(out)))
+        o = len(out)
+        out.extend(b)
+        return o
+
+    def submalla(p_amo):
+        sm = bytearray(mdd[lista0[0]:lista0[0] + 0x20])
+        struct.pack_into("<5I", sm, 0, 0, 0, p_amo, 0, 0)        # sin animaciones
+        return struct_(sm)
+    subs, libres, mo_col = [], [], None
+    for s in lista0:
+        mo = le(mdd, s + 8)
+        if mdd[mo:mo + 4] == b"#AMO" and tiene_colision(mdd[mo:mo + tamanos[mo]]):
+            ocultar_partes(out, mo, tamanos[mo], quedan)
+            escalar_colision(out, mo, k)
+            subs.append(s)                                        # la de siempre (sus animaciones incluidas)
+            mo_col = mo_col or mo
+        else:
+            libres.append(len(subs))
+            subs.append(None)
+    if not libres:                                                # todas con colision: el terreno detras
+        libres.append(len(subs))
+        subs.append(None)
+    if len(p_ters) > len(libres):
+        raise ValueError("el escenario base tiene %d sub-mallas libres para %d trozos" % (len(libres), len(p_ters)))
+    # trozos del terreno; las que sobran pintan el modelo de colision (partes ocultas: nada), cada una con su PROPIA
+    # sub-malla: la misma dos veces en la lista se reubica dos veces (cierre al cargar, lr 0x82080148)
+    for i, q in enumerate(libres):
+        subs[q] = submalla(p_ters[i] if i < len(p_ters) else (mo_col or p_ters[0]))
+    vistos = set()
+    for c in (0xBC, 0xC0, 0xC4, 0xC8, 0xCC, 0xD0):
+        escalar_st50(out, mdd, le(mdd, ob0 + c), k, vistos)
+    struct.pack_into("<I", out, ob0 + 0xA4, p_amt)
+    struct.pack_into("<I", out, ob0 + 0x90, len(subs))
+    struct.pack_into("<I", out, ob0 + 0xA8, struct_(struct.pack("<%dI" % len(subs), *subs)))
+    return bytes(out), bloques
+
+
+def bin_campo(afs, campo, solo_terreno=False, quedan=0):
+    """Bin HD del campo. El cielo y las nubes se pegan AL MODELO DEL TERRENO como partes rigidas de su hueso raiz
+    (bind identidad), con el 'attach' de amo2awo (como las pelucas de B2) y sus texturas detras en el mismo banco:
+    como sub-mallas propias no se dibujaban (el juego solo pinta las sub-mallas que tiene el escenario base, 2 en
+    Llanuras; RE de sub_820BF558: tabla de 32 B por sub-malla)."""
+    import amo2awo  # noqa: PLC0415 (awo_tools, en el path desde escenarios_convertir)
+    import amt_ps2  # noqa: PLC0415
+    _titulo, base, _tema, piezas, k = CAMPOS[campo]
+    piezas = piezas[:1] if solo_terreno else piezas
+    f = hijos(afs.entry(campo))
+    b = hijos(afs.entry(base))
+    (a0, t0), resto = piezas[0], piezas[1:]
+    adjuntos, desde = [], le(f[t0], 0x10)         # banco comun: terreno, luego cada extra (indices n, n+1...)
+    for a, t in resto:
+        adjuntos.append((f[a], desde))
+        desde += le(f[t], 0x10)
+    # camaras de la presentacion: el #AMC del propio campo (DATA_CMN campo+1, junto al #WCF): 3 pistas de 300
+    # cuadros como las de los escenarios de combate (mismo formato), apuntando a lo que se ve en ese campo
+    cam = next((h for h in hijos(afs.entry(CAMARAS.get(campo, campo + 1))) if h[:4] == b"#AMC"), None)
+    terrenos = partir(f[a0], PARTES.get(campo, 1))
+    mdd, blq = mdd_con_campo(b[0], terrenos if len(terrenos) > 1 else terrenos[0], f[t0], quedan, k, cam)
+    viejo, conv, conv_amo, pegar = EC.bloques_mdd, EC.ps2hd.convert_block, amo2awo.convert_amo, amo2awo.attach_rigid
+
+    def bloques(m):                       # los anadidos con su tamano exacto (detras van structs del grafo)
+        return viejo(b[0]) + blq if m is mdd else viejo(m)
+
+    def convertir(d):                     # el #AMT del terreno lleva detras las texturas del cielo y las nubes
+        return amt_ps2.to_azt(d, extra=tuple(f[t] for _, t in resto)) if d == f[t0] else conv(d)
+
+    def convertir_amo(d, report=None, attach=()):
+        return conv_amo(d, report, adjuntos if d == terrenos[0] else attach)
+    EC.bloques_mdd, EC.ps2hd.convert_block = bloques, convertir
+    amo2awo.convert_amo = convertir_amo
+    amo2awo.attach_rigid = lambda a, e, t: pegar(a, e, t, head=0)      # hueso 0 = raiz del campo
+    try:
+        zdd = EC.mdd_a_zdd(mdd, pistas_min=3)
+    finally:
+        EC.bloques_mdd, EC.ps2hd.convert_block = viejo, conv
+        amo2awo.convert_amo, amo2awo.attach_rigid = conv_amo, pegar
+    nat = EC.hd_nativo(base - 4)          # mismo escenario en la HD del jugador: script, efectos y camaras
+    k = [nat[o:o + s] for o, s, _, _ in EC.hijos_amb(nat, ">")]
+    return EC.amb_hd([(zdd, 0xFFFFFFFF), (k[1], 0xFFFFFFFF), (k[2], 0xFFFFFFFF), (k[3], 8), (k[4], 0xFFFFFFFF)])
+
+
+def cmd_info(a):
+    afs = afs_iw()
+    for c in a.campos or sorted(CAMPOS):
+        e = afs.entry(c)
+        print(c, CAMPOS.get(c, ("?",))[0], [(k, h[:4].decode("latin1"), len(h)) for k, h in enumerate(hijos(e)) if h])
+
+
+def cmd_mod(a):
+    afs = afs_iw()
+    for c in a.campos:
+        titulo, base, tema, _, _k = CAMPOS[c]
+        datos = Path(a.bin).read_bytes() if a.bin and Path(a.bin).exists() else bin_campo(afs, c, a.solo_terreno, a.quedan)
+        if a.bin and not Path(a.bin).exists():
+            Path(a.bin).write_bytes(datos)
+        entrada = ENTRADAS[c]
+        viejo = EC._modelos_escenario     # la foto del selector, sin el suelo del base (partes ocultas: vacio)
+        EC._modelos_escenario = lambda z: [m for m in viejo(z) if len(m.pos)]
+        try:
+            carpeta = EC.instalar(datos, a.mods or (RAIZ / "mods"), "Campo IW %d" % c, entrada, "Infinite World",
+                                  id_se=base - 4 + 1, tema=tema, foto=a.foto, rotulo_txt=titulo)
+        finally:
+            EC._modelos_escenario = viejo
+        poner_niebla(carpeta, hijos(afs.entry(c))[0])
+        print("campo %d '%s' -> %s (entradas %d y %d, %d B)" % (c, titulo, carpeta, entrada, entrada + 100, len(datos)))
+
+
+# ---------------------------------------------------------------------------------------------------------
+# auto: lo llama el launcher al pulsar Jugar (ModPipeline::BuildStages) con las carpetas del jugador. Crea en su
+# carpeta mods los escenarios que faltan o cuya ISO cambio (sello en origen.txt) a partir de SUS juegos de PS2:
+# los 6 campos de IW y los escenarios de B1/B2 probados en el juego. Nada del juego viaja en el Kit; un fallo no
+# para nada (sale 0 y lo dice en el registro: el launcher juega igual).
+# ---------------------------------------------------------------------------------------------------------
+VERSION = 9   # subir si cambia el resultado del conversor: se rehacen en el equipo del jugador
+B12 = (("b2", 2, "Templo de Kami", "Templo de Kami"),          # (juego, grupo, carpeta, rotulo): docs/14_frentes/
+       ("b2", 7, "Montanas nevadas", "Montañas nevadas"),       # escenarios.md (los otros grupos, sin probar o
+       ("b1", 3, "Paramo al atardecer", "Páramo al atardecer"))  # con cierres conocidos)
+
+
+def _sello(ruta):
+    st = Path(ruta).stat()
+    return "%s|%d|%d|v%d" % (Path(ruta).name, st.st_size, int(st.st_mtime), VERSION)
+
+
+def _al_dia(carpeta, sello):
+    try:
+        return (carpeta / "stage.toml").is_file() and (carpeta / "origen.txt").read_text(encoding="utf-8") == sello
+    except OSError:
+        return False
+
+
+def _carpetas(us, ps2):
+    EC.US, EC.PS2 = Path(us), Path(ps2)
+    import importar  # noqa: PLC0415
+    importar.PS2 = str(ps2)
+
+
+def _tarea(t):
+    """Un escenario (en un proceso aparte). t = (tipo, clave, mods, us, ps2, sello)."""
+    tipo, clave, mods, us, ps2, sello = t
+    _carpetas(us, ps2)
+    viejo = EC._modelos_escenario     # foto del selector sin el suelo del base (partes ocultas: vacio)
+    EC._modelos_escenario = lambda z: [m for m in viejo(z) if len(m.pos)]
+    try:
+        if tipo == "iw":
+            titulo, base, tema, _, _k = CAMPOS[clave]
+            afs = afs_iw()
+            datos = bin_campo(afs, clave)
+            carpeta = EC.instalar(datos, mods, "Campo IW %d" % clave, ENTRADAS[clave],
+                                  "Infinite World", id_se=base - 4 + 1, tema=tema, rotulo_txt=titulo)
+            poner_niebla(carpeta, hijos(afs.entry(clave))[0])
+        else:
+            juego, grupo, nombre, rot = next(x for x in B12 if x[:2] == clave)
+            datos = EC.escenario_b2(EC.IsoB2(None, juego), grupo)
+            carpeta = EC.instalar(datos, mods, nombre, EC.ENTRADA_BASE + (20 if juego == "b1" else 0) + grupo,
+                                  EC.JUEGOS[juego][0], id_se=45, tema=16, rotulo_txt=rot)
+        (carpeta / "origen.txt").write_text(sello, encoding="utf-8")
+        return "creado %s (%d B)" % (carpeta.name, len(datos))
+    finally:
+        EC._modelos_escenario = viejo
+
+
+def cmd_auto(a):
+    from concurrent.futures import ProcessPoolExecutor  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    _carpetas(a.us, a.ps2)
+    mods = Path(a.mods)
+    tareas = []
+    import importar  # noqa: PLC0415
+    iw = importar.source_path("iw")
+    if iw:
+        usr = Path(iw) / "USR" / "DATA_CMN.AFS"
+        sello = _sello(iw if Path(iw).is_file() else (usr if usr.exists() else iw))
+        for c in sorted(CAMPOS):
+            if not _al_dia(mods / ("Campo IW %d" % c), sello):
+                tareas.append(("iw", c, str(mods), a.us, a.ps2, sello))
+    else:
+        print("escenarios: sin Infinite World en %s (campos de IW: nada que hacer)" % a.ps2)
+    for juego, grupo, nombre, _ in B12:
+        ruta = EC.iso.find_game(juego, root=str(EC.PS2))
+        if not ruta:
+            print("escenarios: sin %s en %s" % (EC.JUEGOS[juego][0], a.ps2))
+            continue
+        if not _al_dia(mods / nombre, _sello(ruta)):
+            tareas.append(("b12", (juego, grupo), str(mods), a.us, a.ps2, _sello(ruta)))
+    if not tareas:
+        print("escenarios: al dia")
+        return 0
+    with ProcessPoolExecutor(max_workers=max(1, min(6, (os.cpu_count() or 2) // 2))) as ex:
+        for t, fut in [(t, ex.submit(_tarea, t)) for t in tareas]:
+            try:
+                print("escenarios: %s" % fut.result())
+            except Exception as e:  # noqa: BLE001 (un escenario que falla no para los demas ni el juego)
+                print("escenarios: fallo %s %s: %s" % (t[0], t[1], e))
+    return 0
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp = p.add_subparsers(dest="cmd", required=True)
+    s = sp.add_parser("info")
+    s.add_argument("campos", nargs="*", type=int)
+    s.set_defaults(fn=cmd_info)
+    s = sp.add_parser("mod")
+    s.add_argument("campos", nargs="+", type=int, choices=sorted(CAMPOS))
+    s.add_argument("--mods", help="carpeta mods del juego (por defecto ./mods)")
+    s.add_argument("--bin", help="bin sin comprimir: si existe se usa, si no se guarda (un solo campo)")
+    s.add_argument("--solo-terreno", action="store_true", help="sin cielo ni nubes (solo el objeto 0)")
+    s.add_argument("--quedan", type=int, default=0, help="partes del suelo del base que se siguen dibujando")
+    s.add_argument("--foto", help="imagen para la casilla del selector (si no, foto sin GPU del escenario)")
+    s.set_defaults(fn=cmd_mod)
+    s = sp.add_parser("auto", help="los que falten en la carpeta mods del jugador (launcher, al pulsar Jugar)")
+    s.add_argument("--mods", required=True)
+    s.add_argument("--us", required=True, help="carpeta con data_cmn.afs de la HD")
+    s.add_argument("--ps2", required=True, help="carpeta ps2_games")
+    s.set_defaults(fn=cmd_auto)
+    a = p.parse_args()
+    return a.fn(a) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

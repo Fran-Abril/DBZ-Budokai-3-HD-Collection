@@ -36,6 +36,7 @@
 
 namespace dbz3::ingame {
 bool OnSelectPicked(int player, int id);   // ingame/tagteam_panel.cpp
+void AvisarEleccion(int player, int id);   // ingame/tagteam_panel.cpp (aviso a otros modos: Fighter's Road, R1)
 void OnCapsuleChoice(int player, bool chosen, int option, const uint16_t* custom);
 bool TagTeamMode();
 }
@@ -542,6 +543,9 @@ DBZ3_HOOK(sub_8217CC68, dbz3eu_sub_8217CC20) {
     } else {
       g_confirmed |= uint8_t(1u << k);
     }
+  }
+  if (tst && GuestPtr(tst) && REX_LOAD_U32(tobj + 28) != handler && REX_LOAD_U8(tst + 7) < 2) {   // aviso (R1)
+    dbz3::ingame::AvisarEleccion(REX_LOAD_U8(tst + 7), REX_LOAD_U8(kPicked + REX_LOAD_U8(tst + 7)));
   }
   if (tst && GuestPtr(tst) && REX_LOAD_U32(tobj + 28) != handler && dbz3::ingame::TagTeamMode()) {
     const uint8_t k = REX_LOAD_U8(tst + 7);

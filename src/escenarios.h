@@ -28,6 +28,10 @@ constexpr int kSerie = 17;   // registros de serie (0..16)
 void CargarDeMods(rex::memory::Memory* memory);
 // Registros disponibles: 17 de serie + altas de mods.
 int Total();
+// Registro del alta del campo de Infinite World `campo` (DATA_CMN de IW: 881, 883, 884, 897, 900, 903, 906, 909...)
+// que crea mod center hd/campos_iw.py en la copia del jugador (carpeta "Campo IW <campo>"), o -1 si no esta
+// instalado (frente R8).
+int CampoIW(int campo);
 // Nombre para pantallas propias (HUB, retos), en el idioma del juego (id de idioma de Xbox, como
 // dbz3_language: 1 ingles, 2 japones, 3 aleman, 4 frances, 5 espanol, 6 italiano; otro = ingles), en UTF-8:
 // los de serie son los oficiales del selector (rotulos de data_<idioma>.afs 2043); las altas dan su `titulo`

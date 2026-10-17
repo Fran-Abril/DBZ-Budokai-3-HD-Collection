@@ -74,6 +74,9 @@ class ModPipeline {
   // extra args (adjustments, --guardar to persist them, --solo icono|retrato).
   void PreviewCharacter(const std::string& mod, const std::vector<std::string>& extra);
   void BuildRoster(bool force = false);
+  // Escenarios nuevos desde los juegos de PS2 del jugador (campos de IW y escenarios de B1/B2): los que falten o
+  // cuya ISO cambio, en mods/ (mod center hd/campos_iw.py auto). Se genera en su equipo: nada del juego viaja.
+  void BuildStages();
   // Capsules (skills) of a source mod: roster_build.py capsulas (--anadir NOMBRE TIPO
   // [FORMA] | --quitar N | --renombrar N NOMBRE | --subir N); edits personaje.toml.
   void EditCapsules(const std::string& mod, const std::vector<std::string>& extra);
@@ -97,6 +100,7 @@ class ModPipeline {
   // The modding kit (mod center hd/ with the importer) is next to the game.
   // roster_build.py presente (kit de modding instalado).
   static bool RosterToolAvailable();
+  static bool StagesToolAvailable();
   static bool ToolsInstalled();
   // Blocks until the current async run (if any) finishes.
   void Wait();

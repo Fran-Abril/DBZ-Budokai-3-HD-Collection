@@ -853,6 +853,12 @@ void D3D12TextureCache::BeginSubmission(uint64_t new_submission_index) {
       pack_state_changed = true;
     }
   }
+  // DBZ3: "Bordes dorados" (F1) en vivo: la tira de los menus se rehace igual.
+  static bool borders_hidden_seen = Dbz3SideBordersHidden();
+  if (const bool hidden = Dbz3SideBordersHidden(); hidden != borders_hidden_seen) {
+    borders_hidden_seen = hidden;
+    pack_state_changed = true;
+  }
   if (pack_state_changed) {
     pack_factor_cache_.clear();
     pack_entry_cache_.clear();
@@ -2711,10 +2717,12 @@ uint32_t D3D12TextureCache::GetTexturePackFactor(const TextureKey& key) const {
   uint32_t factor = 0;
   const Dbz3TexturePackEntry* entry = nullptr;
   do {
-    if (!Dbz3TexturePackIndex::Get().active()) {
+    // Sin pack HD solo se mira la tira dorada de los menus (si esta oculta, ver Dbz3HiddenEntry).
+    const bool packs = Dbz3TexturePackIndex::Get().active() && Dbz3TexturePacksOn();
+    if (!packs && !Dbz3SideBordersHidden()) {
       break;
     }
-    if (!Dbz3TexturePacksOn()) {
+    if (!packs && !Dbz3MaybeHiddenSize(key.GetWidth(), key.GetHeight())) {
       break;
     }
     // Mismas restricciones estructurales que el upscale: solo 2D simples y con
@@ -2752,6 +2760,14 @@ uint32_t D3D12TextureCache::GetTexturePackFactor(const TextureKey& key) const {
       break;
     }
     const uint64_t hash = XXH3_64bits(linear.data(), linear.size());
+    entry = Dbz3HiddenEntry(hash);
+    if (entry != nullptr) {
+      factor = 1;  // transparente, ya en RAM: sin guardia de VRAM ni reparto por submission
+      break;
+    }
+    if (!packs) {
+      break;
+    }
     entry = Dbz3TexturePackIndex::Get().Find(hash);
     if (entry == nullptr) {
       break;

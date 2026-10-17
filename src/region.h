@@ -28,6 +28,10 @@ bool ApplyRegionMount();
 // runtime relocation).
 std::filesystem::path EffectiveGameRoot();
 
+// Carpeta con los archivos reales del juego (us/, eu/) para leerlos desde el host (arte nativo, nombres, montaje de
+// personajes): la del juego o, jugando desde la ISO, la copia de sus .afs (settings::IsoDataCacheDir) si esta al dia.
+std::filesystem::path HostDataRoot();
+
 // Sets the effective game data root (called from OnConfigurePaths).
 void SetEffectiveGameRoot(const std::filesystem::path& root);
 

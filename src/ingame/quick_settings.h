@@ -16,4 +16,9 @@ void ConfigureQuickMenu(rex::ui::QuickMenuConfig& menu, std::function<void()> op
 // Rebuilds the texts if the language changed since (the launcher sets it before Play).
 void RefreshQuickMenuLanguage(rex::ui::QuickMenuConfig& menu, std::function<void()> open_full_settings);
 
+// Tutoriales de los modos (tutorial.cpp, frente F3): "Volver a ver tutoriales" mueve <datos>/ayudas.toml a
+// <datos>/respaldo/ (nunca se borra) y sube la generacion, que hace releer lo visto. Cualquier hilo.
+void ReiniciarAyudas();
+int AyudasGeneracion();
+
 }  // namespace dbz3::ingame

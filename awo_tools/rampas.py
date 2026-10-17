@@ -229,7 +229,10 @@ def es_b1(b, mats):
     rampa, 0x1B4 / 0x1B4 sin ella)."""
     sin = [mo for mo, _, r in mats if r == 0xFFFFFFFF and _be(b, mo + 0x38) & 0xFF == 0xBD
            and not _be(b, mo + 0x3C) & 0x2800]
-    return bool(mats) and len(sin) == len(mats)
+    # los de Goku, Krilin, Vegeta... traen ademas 1-4 materiales 0x190/0x199 (ojos): con exigir TODOS 0x1BD se
+    # quedaban blancos 40 de los 68 modelos de B1 (auditoria10/A); basta con que ninguno tenga rampa y la mitad sea 0x1BD
+    libres = [mo for mo, _, r in mats if r == 0xFFFFFFFF]
+    return bool(mats) and len(libres) == len(mats) and 2 * len(sin) >= len(mats)
 
 
 def desde_b1(hd):
@@ -270,7 +273,7 @@ def desde_b1(hd):
             continue
         nueva[t] = _anadir(b, z, tex[t], data, None)
     for mo, base, _ in mats:
-        if base in nueva:
+        if base in nueva and _be(b, mo + 0x38) & 0xFF == 0xBD:   # los 0x190/0x199 (ojos) se quedan como estan
             struct.pack_into(">I", b, mo + 0x34, nueva[base])
             struct.pack_into(">I", b, mo + 0x38, (_be(b, mo + 0x38) & ~0xFF) | 0xB5)
             struct.pack_into(">I", b, mo + 0x3C, _be(b, mo + 0x3C) | 0x2800)

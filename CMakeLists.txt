@@ -35,6 +35,7 @@ set(DBZ3_SOURCES
     src/ingame/menu_pilot.cpp
     src/ingame/online_panel.cpp
     src/ingame/tagteam_panel.cpp
+    src/ingame/tutorial.cpp
     src/net/netplay.cpp
     src/net/room.cpp
     src/net/netplay_hooks.cpp
@@ -53,9 +54,23 @@ set(DBZ3_SOURCES
     src/ingame/hub_panel.cpp
     src/modos.cpp
     src/rpg.cpp
+    src/heroe.cpp
+    src/fusion.cpp
+    src/pasarela_iw.cpp
+    src/pasarela_b2.cpp
+    src/pasarela_nave.cpp
+    src/iw_minijuegos.cpp
+    src/cinematica.cpp
     src/ports_guard.cpp
     src/combate.cpp
     src/transformaciones.cpp
+    src/video_sfd.cpp
+    src/anim_iw.cpp
+    src/suelo_iw.cpp
+    src/ps2_modelo.cpp
+    src/iw_mini_botones.cpp
+    src/iw_mini_vuelo.cpp
+    src/iw_mini_disparo.cpp
 )
 
 # Codegen output directory. Default is the US/NA build (generated/); a second
@@ -92,8 +107,15 @@ if(DBZ3_GENERATED_DIR STREQUAL "generated_eu" AND NOT DBZ3_DUAL_REGION)
     list(REMOVE_ITEM DBZ3_SOURCES src/roster_trace.cpp)
     list(REMOVE_ITEM DBZ3_SOURCES src/combate.cpp)
     list(REMOVE_ITEM DBZ3_SOURCES src/transformaciones.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/video_sfd.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/anim_iw.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/suelo_iw.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/ps2_modelo.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/iw_mini_botones.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/iw_mini_vuelo.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/iw_mini_disparo.cpp)
     list(REMOVE_ITEM DBZ3_SOURCES src/roster_ext.cpp src/select_ext.cpp src/stage_ext.cpp)
-    list(REMOVE_ITEM DBZ3_SOURCES src/net/netplay_hooks.cpp src/tagteam.cpp src/tagteam_slots.cpp src/campaigns.cpp src/hub.cpp src/escenarios.cpp src/clima.cpp src/cine.cpp src/gigantes.cpp src/pasarela.cpp src/pasarela_b1.cpp src/pasarela_misiones.cpp src/hub_menu.cpp src/ingame/hub_panel.cpp src/modos.cpp src/rpg.cpp)
+    list(REMOVE_ITEM DBZ3_SOURCES src/net/netplay_hooks.cpp src/tagteam.cpp src/tagteam_slots.cpp src/campaigns.cpp src/hub.cpp src/escenarios.cpp src/clima.cpp src/cine.cpp src/gigantes.cpp src/pasarela.cpp src/pasarela_b1.cpp src/pasarela_misiones.cpp src/hub_menu.cpp src/ingame/hub_panel.cpp src/ingame/tutorial.cpp src/modos.cpp src/rpg.cpp src/heroe.cpp src/fusion.cpp src/pasarela_iw.cpp src/pasarela_b2.cpp src/pasarela_nave.cpp src/iw_minijuegos.cpp src/cinematica.cpp)
 endif()
 
 # src/escenarios_sel_gen.inc sale del codigo generado (US) y no va al repo publico: si falta, se crea aqui
@@ -161,6 +183,9 @@ endif()
 # REXGLUE_BUILD_CONFIG define, runtime DLL staging (rexruntime, TracyClient),
 # and copies the xenos GPU plugin next to the executable.
 rexglue_configure_target(dbz3 GPU_PLUGINS xenos)
+
+# Videos SFD de IW (frente R7): MPEG-2 del FFmpeg del SDK, objetivo estatico propio solo en el exe
+include(src/video_sfd.cmake)
 
 # SDL game controller mappings (community GameControllerDB, zlib). The runtime's
 # `hid_mappings_file` cvar defaults to "gamecontrollerdb.txt" and loads it from

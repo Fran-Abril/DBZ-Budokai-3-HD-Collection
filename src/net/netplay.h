@@ -160,6 +160,7 @@ class Session {
   bool Recv(std::vector<uint8_t>& pkt);
   void Handle(const std::vector<uint8_t>& pkt, bool from_peer);
   void SendHello(uint8_t type);
+  void StartModScan();                   // huella de los mods propios en su hilo (my_build_ != "" = lista)
   void SendInputs();
   void Drain();                          // hilo del juego: lee todo lo que haya llegado (sin esperar)
   void FlushRtt();                       // la muestra de ping de la tanda leida pasa a la ventana

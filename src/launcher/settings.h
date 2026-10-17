@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -153,6 +154,18 @@ std::string IsoXexSourcePath();
 // changes. Returns true when cache_dir/default.xex is present and valid.
 bool EnsureIsoXexCache(const std::filesystem::path& iso,
                        const std::filesystem::path& cache_dir);
+
+// ISO + mods: the per-entry AFS override needs a real file, so the containers mods can touch (every .afs but the
+// adx_* voices, plus any file an active mod names) are copied ONCE to IsoDataCacheDir() with the extracted layout
+// (<region>/<file>); the disc device serves them from there (~0.8 GB). Everything else still streams from the ISO.
+std::filesystem::path IsoDataCacheDir();
+// True when the cache was completed from the CURRENT ISO (identity stamp).
+bool IsoDataCacheValid();
+// Bytes still to copy for the current ISO, region and active mods (0 = up to date, -1 = the ISO cannot be read).
+// `voices`: also the adx_* voice archives (~1.3 GB; the new-character build reads their tables).
+long long IsoDataPending(bool voices);
+// Copy what is missing. `progress` (0..1000) is optional. On failure returns false and fills `error`.
+bool PrepareIsoData(bool voices, std::atomic<int>* progress, std::string* error);
 
 // XEX entrypoint compatibility status. Each core is a recompilation of ONE
 // executable: the US/NA core only boots the US xex (yae3_xenon.xex), and the

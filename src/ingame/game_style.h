@@ -36,13 +36,17 @@ void DrawPic(ImDrawList* dl, const Pic& p, ImVec2 p0, ImVec2 p1, ImVec4 src = Im
 
 void Frame(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float s);                 // marco de las listas
 void Highlight(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float t);             // franja de la fila elegida
-void MenuText(ImDrawList* dl, ImVec2 center, float size, const char* text, bool selected, bool disabled);
+// max_w > 0: la letra se reduce hasta que el texto quepa en ese ancho (px de pantalla).
+void MenuText(ImDrawList* dl, ImVec2 center, float size, const char* text, bool selected, bool disabled,
+              float max_w = 0);
 // Cinta del titulo arriba a la izquierda, como la del Duelo; `title` = imagen del titulo
 // (ingame_ui) o, sin ella, `text` con la fuente.
 void Banner(ImDrawList* dl, const Area& a, const char* text, const char* title = nullptr);
 // Bocadillo; tail_x = donde sale el pico (0..1 del ancho, hacia arriba) o < 0 sin pico.
 void Speech(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float s, const char* text, float tail_x = 0.75f);
-// Fondo del area 4:3: dibujo del juego `image` (ingame_ui) o degradado.
+// Opcion "Bordes dorados" (dbz3_ui_side_borders): con ella, tiras y fondos 4:3 como el juego.
+bool Borders();
+// Fondo: dibujo del juego `image` (ingame_ui) o degradado. Sin bordes o con una imagen ancha, a toda la ventana.
 void Backdrop(ImDrawList* dl, const Area& a, const char* image = nullptr);
 // Anfitrion que habla (como los Kaio del Duelo): esquina de arriba en (x, y) px de 1200x900, al
 // tamano del juego; lo que sale del area se corta. Despues va Sides (los tapa, como en el juego).
@@ -56,6 +60,33 @@ float Glyph(ImDrawList* dl, const char* button, ImVec2 pos, float h);
 void HelpLine(ImDrawList* dl, ImVec2 center, float h, const std::vector<std::pair<const char*, const char*>>& items);
 // Flechas izquierda/derecha del juego a los lados de p0..p1 (selector de formato).
 void Arrows(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float h, float t);
+
+// Esquema comun de las pantallas de modo (retos del HUB, tienda, ranking, final...), en px del area 1200x900, como
+// el Duelo del juego: cinta del titulo arriba a la izquierda (Banner), anfitrion abajo a la izquierda en (kHostX,
+// kHostY) con la cara hasta x ~330, el contenido en la columna kX0..kX1 entre kTop y kBottom (no le tapa la cara),
+// el bocadillo abajo a su derecha con el pico hacia el (Bubble) y la ayuda de botones abajo centrada (Help).
+// Entre dos marcos, kGap (el marco del juego sobresale 17 px). Letras: kRow en las listas, kHead en la cabecera
+// de un marco, kSmall en las tablas. La esquina de arriba a la derecha (kCorner*) queda para la caja de Zenie o
+// el selector de pagina.
+namespace mode {
+constexpr float kHostX = -68, kHostY = 319;   // el Kaio del Duelo (437 px de alto a 1.33) pegado abajo
+constexpr float kX0 = 390, kX1 = 1090, kCx = (kX0 + kX1) * 0.5f, kTop = 172, kBottom = 600, kGap = 46;
+constexpr float kRow = 30, kHead = 34, kSmall = 26;
+constexpr float kCornerX0 = 650, kCornerY0 = 40, kCornerY1 = 120;
+// Dentro de un marco (Frame p0..p1): el filo de dentro de su linea queda kLine dentro (medido a 1600x900); las filas
+// empiezan kPad dentro por arriba y por abajo (como el Duelo: la franja no pisa la linea) y el texto cabe en
+// (x1 - x0) - 2 * kText.
+constexpr float kLine = 18, kPad = 22, kText = 34;
+// HUD de los modos en combate: un solo bloque centrado en x 600 ABAJO (pedido del usuario: lejos del reloj y del
+// contador nativo de rivales, que van arriba). El marcador del modo (kHudY, alto kHudH) pegado al borde de abajo y
+// sus lineas de reglas (como mucho 2: "¡Aguanta!"/modificadores y las de rpg::Hud) encima, cada kHudLine desde
+// kHudInfoY.
+constexpr float kHudH = 58, kHudLine = 28, kHudY = 900 - kHudH - 36, kHudInfoY = kHudY - 16 - 2 * kHudLine;
+// Franja de la fila elegida dentro del marco x0..x1 (px del area): sin pisar su linea, como la del juego.
+void Stripe(ImDrawList* dl, const Area& a, float x0, float y0, float x1, float y1, float t);
+void Bubble(ImDrawList* dl, const Area& a, const char* text);
+void Help(ImDrawList* dl, const Area& a, const std::vector<std::pair<const char*, const char*>>& items);
+}  // namespace mode
 
 // Tira de un equipo sobre la rueda del select (Tenkaichi 3): `slots` casillas numeradas, las
 // elegidas con la cara y el nombre. mirror = lado derecho (jugador 2). active = eligiendo.

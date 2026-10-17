@@ -30,7 +30,10 @@ namespace dbz3::launcher {
 // The app hands the launcher its immediate drawer so it can show image previews
 // (new-character icon / name banner / portraits). Null = previews disabled.
 void SetPreviewDrawer(rex::ui::ImmediateDrawer* drawer);
-rex::ui::ImmediateDrawer* PreviewDrawer();   // para texturas propias (caras del Tag Team)
+rex::ui::ImmediateDrawer* PreviewDrawer();
+// Dialogo de Windows para elegir un archivo (tambien desde el juego). `out` en UTF-8; false si se cancela.
+bool PickFileDialog(std::string& out, const char* filter_desc, const char* filter_ext);
+std::string PathUtf8(const std::filesystem::path& p);   // para texturas propias (caras del Tag Team)
 // Runs a function on the UI thread after the current paint (the app's
 // CallInUIThreadDeferred). The launcher reads the controllers through it:
 // reading them may pump window events, which must not happen mid-paint.
@@ -135,6 +138,22 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   char tex_mod_buf_[128] = {};
   char tex_dir_buf_[512] = {};  // carpeta de texturas (default = mods/<mod>/textures)
   // "Texturas faciles" (pestana Mods): conversion de capturas a PNG en curso y cuantas hay.
+  // ISO + mods: copia de los .afs antes de jugar (settings::PrepareIsoData), en segundo plano. El hilo se queda
+  // con su copia del estado (si se cierra el launcher, termina solo).
+  struct IsoPrep {
+    std::atomic<int> progress{0};
+    std::atomic<bool> done{false};
+    bool ok = false;
+    bool then_play = false;   // pedida con JUGAR: al acabar, se juega
+    std::string error;
+  };
+  void StartIsoPrep(bool then_play);
+  void DrawPs2Box();
+  std::string ps2_msg_;   // resultado de la ultima ISO de PS2 elegida
+  int novas_tipo_ = 0;    // Nova's Mods: 0 todos, 1 personajes, 2 historias, 3 texturas
+  void DrawIsoPrepBox();
+  std::shared_ptr<IsoPrep> iso_prep_;
+  std::string iso_prep_error_;   // la ultima copia fallo: aviso junto a JUGAR; el siguiente JUGAR juega sin mods
   int active_mods_ = 0;         // mods activos (aviso de modo ISO junto a JUGAR)
   int broken_mods_ = -1;        // mods activos con problemas (-1 = sin contar)
   bool tex_easy_job_ = false;
@@ -225,6 +244,9 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   bool pad_play_ = false;          // START pressed
   bool launching_ = false;         // JUGAR pulsado: montando los personajes nuevos
   bool roster_queued_ = false;     // el montaje espera a que acabe otra tarea (instalar un zip)
+  bool roster_ran_ = false;        // JUGAR con personajes que montar (su resultado decide si se juega)
+  bool stages_pending_ = false;    // R8: falta el paso de escenarios de PS2 (ModPipeline::BuildStages)
+  bool stages_running_ = false;    // R8: paso de escenarios en marcha (se juega al acabar, salga como salga)
   bool in_game_ = false;
   bool input_blocked_ = false;
 

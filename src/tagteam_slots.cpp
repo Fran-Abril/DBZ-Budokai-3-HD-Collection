@@ -13,6 +13,7 @@
 
 #include "generated/dbz3_init.h"
 #include "eu_map.h"
+#include "modos.h"
 #include "roster_ext.h"
 #include "form_selection_state.h"
 #include <cstring>
@@ -139,7 +140,9 @@ void BeforeBattleSetup(uint8_t* base, uint32_t sel) {
   }
   // equipos solo en el modo Tag Team o en una partida online: si quedo alguno de antes (online
   // cerrado a medias, salida por otro camino) no se cuela en Practica ni en un combate normal
-  if (!dbz3::ingame::TagTeamMode() && dbz3::net::Session::Get().link() == dbz3::net::Link::kIdle) {
+  // (la Mision 100 de rpg.cpp pone los suyos para sus misiones de equipo: EquiposMision)
+  if (!dbz3::ingame::TagTeamMode() && dbz3::net::Session::Get().link() == dbz3::net::Link::kIdle &&
+      !dbz3::rpg::EquiposMision()) {
     ClearDynamicTeams();
     // combate normal (Duelo, HUB, retos, demo): el ultimo equipo de TAG TEAM deja de ser "el mio" para el online
     // (antes no se olvidaba nunca: bugs.md P5). De TAG TEAM directo al online se sigue llevando.

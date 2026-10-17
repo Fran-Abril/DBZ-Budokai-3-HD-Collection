@@ -20,6 +20,7 @@ emulator. Native Linux builds use Vulkan and SDL3.
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-0078D6?style=flat-square)](https://github.com/novapowers0/DBZ-Budokai-3-HD-Collection/releases/latest)
 [![License](https://img.shields.io/github/license/novapowers0/DBZ-Budokai-3-HD-Collection?style=flat-square)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/novapowers0/DBZ-Budokai-3-HD-Collection?style=flat-square&color=yellow)](https://github.com/novapowers0/DBZ-Budokai-3-HD-Collection)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20me-FF5E5B?style=flat-square&logo=ko-fi&logoColor=white)](https://ko-fi.com/novapowers)
 [![Built with](https://img.shields.io/badge/built%20with-ReXGlue-8A2BE2?style=flat-square)](https://github.com/rexglue/rexglue-sdk)
 
 | | |
@@ -28,7 +29,7 @@ emulator. Native Linux builds use Vulkan and SDL3.
 | Platform | Windows / Linux |
 | Engine | Xbox 360 (ReXGlue SDK) |
 | Genre | 3D fighting |
-| Version | v1.4.5.2 |
+| Version | v1.5.0 |
 
 Copyright (c) 2026 **NovaPowers**. Released under the MIT License (see `LICENSE`).
 
@@ -37,6 +38,21 @@ Copyright (c) 2026 **NovaPowers**. Released under the MIT License (see `LICENSE`
 [Mods and new characters](#mods-and-new-characters)
 
 ---
+
+## What's new in 1.5.0
+
+> Release video: trailer, what's new and install tutorial (ES/EN) on NovaPowers' YouTube channel.
+
+- **Dragon HUB:** rank plates (KYU 5 to MASTER), new backgrounds and hosts, fighters flying to the camera, a save icon, and **BETA / EXPERIMENTAL** labels on everything still under construction.
+- **Tag Team (beta):** teleport relays, also between computer fighters (COM vs COM).
+- **Mods from the ISO:** mods now work when you play straight from the `.iso` (prepared in a few seconds the first time).
+- **Your PS2 games with one button:** "Pick ISO" for Budokai 1, Budokai 2 and Infinite World (launcher > Game, or press A inside the campaign). The game is recognised by its content and nothing is copied.
+- **Renewed launcher** (hover help, Nova's Mods as cards, mods ON/OFF) and **renewed F1 menu**.
+- **New modes:** Mission 100, Hero mode (beta, swap fighting style between fights with LB/RB), Mr. Satan legend (beta, Budokai 3 models).
+- **Infinite World and Budokai 2 campaigns + Babidi's Ship (EXPERIMENTAL):** playable for testing; still work in progress.
+- **Single transformation capsule** and EU version.
+- **Everything translated** into Spanish, English, French, German and Italian (Nova's Mods descriptions too).
+- Credits: **🇮🇹⚠ 𝐒𝐏𝐈𝐃𝐄𝐑 ⚠🇮🇹** for the Infinite World decompilation.
 
 ## What's new in 1.4.5.2
 
@@ -158,14 +174,14 @@ From the [**Releases**](../../releases/latest) page:
 
 | File | What it is |
 |---|---|
-| `DBZ-Budokai-3-HD-Collection-v1.4.3.1.zip` | **The game for Windows** (required). |
-| `DBZ-Budokai-3-HD-Collection-v1.4.3.1-linux-amd64.tar.gz` | The game for Linux (Vulkan). |
+| `DBZ-Budokai-3-HD-Collection-v1.5.0.zip` | **The game for Windows** (required). |
+| `DBZ-Budokai-3-HD-Collection-v1.5.0-linux-amd64.tar.gz` | The game for Linux (Vulkan). |
 | [`DBZ3HD-1.4.3-Personajes.zip`](https://drive.google.com/file/d/1jDRwzd_idmeIxwAMN4q4bC89JKFiGXX7/view?usp=sharing) | Optional: the 7 new characters (**Google Drive**, updated in 1.4.3; WIP). |
-| `DBZ3HD-1.4.3.1-Kit-Modding.zip` | Optional: tools to create and import characters. |
+| `DBZ3HD-1.5.0-Kit-Modding.zip` | Optional: tools to create and import characters. |
 
 ### Windows
 
-1. **Extract** `DBZ-Budokai-3-HD-Collection-v1.4.3.1.zip` into a folder, for
+1. **Extract** `DBZ-Budokai-3-HD-Collection-v1.5.0.zip` into a folder, for
    example `C:\Games\DBZ3\`.
 2. **Add the data from your copy of the game**, in one of two ways:
    - **Easiest — the ISO**: drop the game's `.iso` next to `dbz3.exe`. Nothing
@@ -276,7 +292,7 @@ and yells of their Budokai 1 version, and Zarbon, Dodoria and Android 19 their u
 To remove one, untick it under **New characters → Installed**. Your saves are
 never touched.
 
-### Modding kit (`DBZ3HD-1.4.3.1-Kit-Modding.zip`)
+### Modding kit (`DBZ3HD-1.5.0-Kit-Modding.zip`)
 
 The tools behind the launcher's modding tabs: create and **import characters**
 (Budokai 1, Budokai 2, Infinite World and community models), custom capsules,
@@ -471,8 +487,20 @@ assembled by `tools/make_release.ps1` and the modpacks by
 
 ---
 
+## Support the project
+
+<p align="center"><a href="https://ko-fi.com/novapowers"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi"></a></p>
+
+If you enjoy my open-source contributions to reverse engineering, static recompilation, and classic software preservation tools, please consider supporting my work. Every coffee helps me dedicate more time to writing and optimizing code for the community. Thank you!
+
+The game and all of its content stay free; supporting is completely optional.
+
+---
+
 ## Credits
 
+- **🇮🇹⚠ 𝐒𝐏𝐈𝐃𝐄𝐑 ⚠🇮🇹** — decompilation of *Dragon Ball Z: Infinite World*, the base we used to port the Infinite World
+  campaign (map, missions, minigames and animations).
 - **@ArielPVB**: Guldo, Jeice, Burter, Zarbon (base and monster form), Dodoria
   and Android 19 models in the character pack.
 - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) — static recompilation

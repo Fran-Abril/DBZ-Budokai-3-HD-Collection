@@ -51,6 +51,15 @@ constexpr Piece kPieces[] = {
     {"anfitrion_tagteam_b", 2055, 0x44657FFB8C1D8B3Full, true},   // Kaio del Duelo
     {"anfitrion_online", 2055, 0x107B679B010365CDull, true},      // Kaio del Norte
     {"icono", 2045, 0x7E84F2B3B86A667Dull, true},                 // bola de 1 estrella: icono de la ventana
+    // Skill Shop (tiendas de los retos, rpg.cpp)
+    {"capsulas", 2064, 0x109EBFC124CBEB25ull, false},      // botellas roja, verde, amarilla y gris (31x83, cada 36 px)
+    {"caja_zenie", 2053, 0xE607F676540C0AF1ull, false},    // caja del dinero con monedas (1,3-323,105)
+    {"letras_zenie", 2053, 0xC1F09CA7DC159B3Cull, false},  // rotulo ZENIE (2,6-152,55)
+    {"cifras_zenie", 2053, 0xF5EAAD6A69134362ull, false},  // cifras naranjas 0-9 y coma (1024x256, y 10-127)
+    // marcador del combate (data_usi 0, 256x256): cifras 0-9 blancas con perfil (0-4 en y 4-34, 5-9 en y 40-70),
+    // caras del contador de rivales, "/" (124,76-139,94), "V" y "%"; el juego las tine (el "2/2", naranja). Frente R6
+    {"cifras_hud", 0, 0x38CE22710151CFA1ull, false},
+    {"vs_torneo", 2047, 0xEEC9E52D040DC990ull, false},     // "VS" naranja del Torneo Mundial (0,4-236,103). R6
 };
 // Cara del marcador: ID -> entrada de data_cmn (#AZT hud_face; textura 0 = forma normal).
 constexpr std::pair<int, int> kFaces[] = {
@@ -282,7 +291,7 @@ void Extract(std::filesystem::path dir) {
 }  // namespace
 
 void Prefetch() {
-  const std::filesystem::path root = dbz3::EffectiveGameRoot();
+  const std::filesystem::path root = dbz3::HostDataRoot();
   if (root.empty() || g_started.exchange(true)) return;
   // B24: la carpeta de la region montada (dbz3_region) gana aunque exista la otra
   std::thread([dir = root / (dbz3::settings::Region() == "eu" ? "eu" : "us")]() {

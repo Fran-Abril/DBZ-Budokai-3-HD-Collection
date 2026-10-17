@@ -201,11 +201,28 @@ def afs_idioma(img, lang):
 
 
 # ------------------------------------------------------------------ ordenes
+def niveles_ia(img):
+    """Nivel de IA de B1 por dificultad (Novato, Experto, Avanzado) y retador: entrada 0x176 ('#CPU') del AFS de datos;
+    en +0x48/+0x4C/+0x50 hay tres desplazamientos a 11 bytes (la rutina 0x26C400 de B1, caso 3, lee uno por dificultad
+    y retador). Son indices de las 35 fichas de IA del mismo fichero (1..12). None si el fichero no es ese."""
+    path = afs_idioma(img, "en")
+    if not path:
+        return None
+    d = Afs(img, path).entry(0x176)
+    if d[:4] != b"#CPU":
+        return None
+    return [list(d[o:o + N_COMBATES]) for o in struct.unpack_from("<3I", d, 0x48)]
+
+
 def info(iso_path):
     img = isomod.Iso(iso_path)
     elf = leer_elf(img)
     p, cs = combates(elf)
     print("ISO %s, ELF %s, tabla en 0x%X" % (os.path.basename(iso_path), img.boot_elf(), p))
+    niv = niveles_ia(img)
+    if niv:
+        for k, n in enumerate(niv):
+            print("  nivel de IA %-8s %s" % (("Novato", "Experto", "Avanzado")[k], n))
     for k, c in enumerate(cs):
         print("  %2d %-11s -> B3 %2d  forma %d  x%d  vida %s/%d  ki %d  escenario %d %s  tiempo %d" % (
             k + 1, c["nombre"], c["rival"], c["forma"], c["cantidad"],
@@ -289,6 +306,8 @@ def prueba():
     if iso_path:
         cs = info(iso_path)
         assert len(cs) == N_COMBATES and cs[0]["rival_b1"] == 8 and cs[10]["rival_b1"] == 20, cs
+        niv = niveles_ia(isomod.Iso(iso_path))
+        assert niv is None or niv[0] == [2, 1, 2, 3, 4, 5, 6, 2, 4, 5, 6] and niv[2][10] == 12, niv
         print("prueba con la ISO OK")
     else:
         print("(sin ISO de Budokai 1 en ps2_games: solo la prueba sintetica)")

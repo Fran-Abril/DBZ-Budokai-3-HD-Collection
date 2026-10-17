@@ -4711,7 +4711,8 @@ bool D3D12RenderTargetCache::Dbz3GetBoundDepthDsv(D3D12_CPU_DESCRIPTOR_HANDLE& d
 
 bool D3D12RenderTargetCache::Dbz3BeginReadLastDepth(ID3D12Resource*& resource_out,
                                                     D3D12_CPU_DESCRIPTOR_HANDLE& srv_out,
-                                                    uint32_t& width_out, uint32_t& height_out) {
+                                                    uint32_t& width_out, uint32_t& height_out,
+                                                    bool allow_msaa) {
   if (GetPath() != Path::kHostRenderTargets) {
     return false;
   }
@@ -4725,7 +4726,7 @@ bool D3D12RenderTargetCache::Dbz3BeginReadLastDepth(ID3D12Resource*& resource_ou
     return false;
   }
   D3D12_RESOURCE_DESC desc = resource->GetDesc();
-  if (desc.SampleDesc.Count != 1) {
+  if (desc.SampleDesc.Count != 1 && !allow_msaa) {
     return false;
   }
   command_processor_.PushTransitionBarrier(

@@ -1000,6 +1000,8 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
   GuestOutputPaintConfig guest_output_paint_config;
   Microsoft::WRL::ComPtr<ID3D12Resource> guest_output_resource;
   Dbz3TemporalInputs paint_temporal;
+  ID3D12Resource* dbz3_ui_depth = nullptr;   // R15: kept alive by paint_temporal
+  float dbz3_ui_depth_rect[4] = {};
   {
     uint32_t guest_output_mailbox_index;
     std::unique_lock<std::mutex> guest_output_consumer_lock(ConsumeGuestOutput(
@@ -1033,6 +1035,17 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
           break;
         }
       }
+    }
+
+    // dbz3 (R15): the scene depth of this guest output and where it lands, for the
+    // depth-tested UI draws.
+    if (guest_output_flow.effect_count && paint_temporal.valid && paint_temporal.depth) {
+      const auto& size = guest_output_flow.effect_output_sizes[guest_output_flow.effect_count - 1];
+      dbz3_ui_depth = paint_temporal.depth.Get();
+      dbz3_ui_depth_rect[0] = float(guest_output_flow.output_x);
+      dbz3_ui_depth_rect[1] = float(guest_output_flow.output_y);
+      dbz3_ui_depth_rect[2] = float(size.first);
+      dbz3_ui_depth_rect[3] = float(size.second);
     }
 
     if (guest_output_flow.effect_count) {
@@ -1555,6 +1568,9 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
                                        paint_context_.swap_chain_height, command_list,
                                        ui_submission_tracker_.GetCurrentSubmission(),
                                        ui_submission_tracker_.GetCompletedSubmission());
+    ui_draw_context.dbz3_depth = dbz3_ui_depth;
+    std::memcpy(ui_draw_context.dbz3_depth_rect, dbz3_ui_depth_rect, sizeof(dbz3_ui_depth_rect));
+    ui_draw_context.dbz3_depth_inverted = paint_temporal.depth_inverted;
     ExecuteUIDrawersFromUIThread(ui_draw_context);
   }
 

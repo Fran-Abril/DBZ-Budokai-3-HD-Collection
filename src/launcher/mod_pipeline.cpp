@@ -60,6 +60,10 @@ std::filesystem::path RosterScript() {
   return ProjectRoot() / "mod center hd" / "roster_build.py";
 }
 
+std::filesystem::path StagesScript() {
+  return ProjectRoot() / "mod center hd" / "campos_iw.py";
+}
+
 std::filesystem::path ImporterScript() {
   return ProjectRoot() / "mod center hd" / "importar.py";
 }
@@ -704,7 +708,7 @@ std::string ModPipeline::UsDir() const {
   // automatico: la carpeta de datos que monta el juego (la elegida en el launcher y su region).
   // Antes no se pasaba --us y roster_build buscaba junto al exe: con los datos del juego en otra
   // carpeta el montaje de personajes fallaba siempre.
-  const std::filesystem::path root = dbz3::EffectiveGameRoot();
+  const std::filesystem::path root = dbz3::HostDataRoot();   // desde la ISO: la copia de sus .afs
   if (root.empty()) return {};
   const std::filesystem::path dir = root / (dbz3::settings::Region() == "eu" ? "eu" : "us");
   std::error_code ec;
@@ -793,6 +797,26 @@ void ModPipeline::BuildRoster(bool force) {
   }
   if (force) args.push_back("--force");
   RunAsync(RosterScript(), args);
+}
+
+bool ModPipeline::StagesToolAvailable() {
+  std::error_code ec;
+  return std::filesystem::exists(StagesScript(), ec);
+}
+
+void ModPipeline::BuildStages() {
+  // ps2_games como el juego (pasarela_b1.cpp BuscarIsoB1): DBZ3_PS2_GAMES (pruebas) o la carpeta de los ajustes
+  const char* env = std::getenv("DBZ3_PS2_GAMES");
+  const std::filesystem::path ps2 =
+      env && *env ? std::filesystem::path(env) : dbz3::settings::UserSettingsPath().parent_path() / "ps2_games";
+  const std::string us = UsDir();
+  std::error_code ec;
+  if (us.empty() || !std::filesystem::is_directory(ps2, ec)) {   // sin datos del juego o sin ps2_games: nada
+    AppendOutput("escenarios: sin datos del juego o sin carpeta ps2_games; no se crea ninguno\n");
+    REXLOG_INFO("dbz3: escenarios de PS2: omitido (us '{}', ps2_games '{}')", us, rex::path_to_utf8(ps2));
+    return;
+  }
+  RunAsync(StagesScript(), {"auto", "--mods", ModsOutDir().string(), "--us", us, "--ps2", rex::path_to_utf8(ps2)});
 }
 
 void ModPipeline::Wait() {

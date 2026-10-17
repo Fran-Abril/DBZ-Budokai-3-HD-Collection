@@ -22,6 +22,8 @@ En personaje.toml (fuente):
     voces = "iw:JANENBA"     # las de un personaje de Infinite World (nombre interno o ID)
     voces = "sb2:GHF"        # las de un personaje de Shin Budokai (sb1/sb2 + codigo; sb_voces.py)
     voces = "b3:9"           # las de un personaje de Budokai 3 (su ID)
+    voces = "wav:voces"      # frases propias: <mod>/voces/NN*.wav (NN = situacion 0-49, p. ej. 07_victoria.wav);
+                             # las que falten, las del donante
     voces = "donante"        # las del donante (por defecto)
     voces = "ninguna"        # sin voz
 """
@@ -268,7 +270,57 @@ class VoiceWriter:
         return n
 
 
-def resolve(spec, writer, iw=None, log=print, donor=None):
+def leer_wav(path):
+    """WAV PCM de 8/16/24/32 bits (mono o estereo, cualquier frecuencia) -> int16 mono a 24 kHz (los ADX de B3)."""
+    import wave  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+    import gritos  # noqa: PLC0415
+    import sb_voces  # noqa: PLC0415
+    with wave.open(path, "rb") as w:
+        sw, ch, rate = w.getsampwidth(), w.getnchannels(), w.getframerate()
+        raw = w.readframes(w.getnframes())
+    if sw == 1:
+        x = (np.frombuffer(raw, np.uint8).astype(np.float64) - 128) * 256
+    elif sw == 2:
+        x = np.frombuffer(raw, "<i2").astype(np.float64)
+    elif sw == 3:
+        b = np.frombuffer(raw, np.uint8).reshape(-1, 3).astype(np.int32)
+        v = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)
+        x = np.where(v & 0x800000, v - 0x1000000, v).astype(np.float64) / 256
+    elif sw == 4:
+        x = np.frombuffer(raw, "<i4").astype(np.float64) / 65536
+    else:
+        raise ValueError("%s: %d bytes por muestra" % (path, sw))
+    x = np.clip(np.round(x.reshape(-1, ch).mean(axis=1)), -32768, 32767).astype(np.int16)
+    return gritos.resample(x, rate, sb_voces.ADX_RATE)
+
+
+def wav_block(folder, writer, donor=None, log=print):
+    """Bloque de 50 con las frases de `folder` (NN*.wav: NN = situacion) y el resto las del donante (o mudas)."""
+    import re  # noqa: PLC0415
+    import sb_voces  # noqa: PLC0415
+    base = b3_block(donor) if donor is not None else None
+    block = list(base) if base else [-1] * SLOTS
+    propias = 0
+    for f in sorted(os.listdir(folder)):
+        m = re.match(r"(\d+)", f)
+        if not f.lower().endswith(".wav") or not m or int(m.group(1)) >= SLOTS:
+            if f.lower().endswith(".wav"):
+                log("   aviso: %s no empieza por un numero de frase (0-%d): no se usa" % (f, SLOTS - 1))
+            continue
+        try:
+            adx = sb_voces.adx_encode(leer_wav(os.path.join(folder, f)))
+        except Exception as e:  # noqa: BLE001
+            log("   aviso: %s no se puede leer (%s): no se usa" % (f, e))
+            continue
+        block[int(m.group(1))] = writer.add(adx, adx)
+        propias += 1
+    if not propias:
+        raise ValueError("sin frases .wav (NN_nombre.wav) en %s" % folder)
+    return block, propias
+
+
+def resolve(spec, writer, iw=None, log=print, donor=None, base=None):
     """voces de personaje.toml -> (lineas de roster.toml, nota). `donor` (ID) solo hace falta
     para las de Shin Budokai: las situaciones sin frase propia se quedan con las suyas."""
     spec = (spec or "donante").strip() if isinstance(spec, str) else spec
@@ -284,6 +336,11 @@ def resolve(spec, writer, iw=None, log=print, donor=None):
     game = game.strip().lower()
     if game == "b3":
         return ["voces_de = %d" % int(who)], "voces de Budokai 3 (ID %s)" % who
+    if game == "wav":   # `base`: la carpeta del mod (roster_build)
+        folder = who.strip() if os.path.isabs(who.strip()) else os.path.join(base or os.getcwd(), who.strip())
+        block, propias = wav_block(folder, writer, donor, log)
+        return (["voces = [%s]" % ", ".join(map(str, block))],
+                "voces propias de WAV: %d frases (el resto, del donante)" % propias)
     if game == "iw":
         iw = iw or IwVoices()
         src = iw.slots(who)
@@ -305,11 +362,47 @@ def resolve(spec, writer, iw=None, log=print, donor=None):
         own = sum(1 for _, u in used if "donante" not in u and "sin voz" not in u)
         return (["voces = [%s]" % ", ".join(map(str, block))],
                 "voces de Shin Budokai (%s): %d frases propias, %d del donante" % (who, own, len(used) - own))
-    raise ValueError("voces desconocidas: %r (iw:NOMBRE, b3:ID, sb2:COD, donante, ninguna)" % spec)
+    raise ValueError("voces desconocidas: %r (iw:NOMBRE, b3:ID, sb2:COD, wav:CARPETA, donante, ninguna)" % spec)
+
+
+def prueba_wav():
+    """python voces.py --prueba-wav: dos frases de 16 y 24 bits -> ADX que se decodifica a lo mismo."""
+    import tempfile  # noqa: PLC0415
+    import wave  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+    import gritos  # noqa: PLC0415
+    d = tempfile.mkdtemp(prefix="voces_wav_")
+    t = np.arange(16000) / 16000.0
+    tono = (np.sin(2 * np.pi * 440 * t) * 8000).astype(np.int16)
+    with wave.open(os.path.join(d, "07_victoria.wav"), "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(16000), w.writeframes(tono.tobytes())
+    v24 = (tono.astype(np.int32) << 8).astype("<i4").tobytes()
+    with wave.open(os.path.join(d, "12.wav"), "wb") as w:
+        w.setnchannels(1), w.setsampwidth(3), w.setframerate(16000)
+        w.writeframes(b"".join(v24[i:i + 3] for i in range(0, len(v24), 4)))
+    open(os.path.join(d, "notas.wav"), "wb").close()   # sin numero: aviso y fuera
+
+    class Escritor:
+        datos = []
+
+        def add(self, usa, jpn):
+            self.datos.append(usa)
+            return 9000 + len(self.datos) - 1
+    e = Escritor()
+    lines, note = resolve("wav:" + d, e, donor=None)
+    block = eval(lines[0].split("=", 1)[1])
+    assert block[7] == 9000 and block[12] == 9001 and block.count(-1) == SLOTS - 2, block
+    for data in e.datos:
+        y, _ = gritos.adx_decode(data)
+        assert abs(len(y) - 24000) < 64 and np.abs(y.astype(np.float64)).max() > 4000
+    print("prueba OK:", note)
 
 
 if __name__ == "__main__":
     import sys
+    if "--prueba-wav" in sys.argv:
+        prueba_wav()
+        sys.exit(0)
     iw = IwVoices(sys.argv[1] if len(sys.argv) > 1 else None)
     print("tabla en 0x%X, %d IDs; %d nombres" % (iw.ptr_off, iw.n, len(iw.names)))
     for nm, cid in sorted(iw.names.items(), key=lambda x: x[1]):

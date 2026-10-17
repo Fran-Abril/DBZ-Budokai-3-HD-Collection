@@ -720,7 +720,7 @@ std::string LangOf(const std::string& afs) {
 }  // namespace
 
 bool PrepareNamesMod(const std::vector<std::pair<int, uint32_t>>& banks, const std::string& roster_stamp) {
-  const fs::path root = dbz3::EffectiveGameRoot();
+  const fs::path root = dbz3::HostDataRoot();
   if (root.empty() || banks.empty()) return false;
   std::error_code ec;
   fs::path dir = root / (dbz3::settings::Region() == "eu" ? "eu" : "us");

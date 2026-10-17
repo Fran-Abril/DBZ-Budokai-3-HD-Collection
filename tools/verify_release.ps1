@@ -28,10 +28,13 @@ $errors = @()
 # amd_fidelityfx_dx12.dll no cambia desde 2026-08-28.
 # v1.4.5 = 11145216 / 6537216. v1.4.5.1 = indice de packs que se rehace al cambiar la lista.
 # v1.4.5.2 = 11145216 / 6540288. 2026-10-15 ronda 2: SSAO opcional dbz3_relight (frente grafico) = 6589440. v1.4.6 = 11145216 / 6589440.
-$canonVersion = "1.4.6"
+# 2026-10-15 ronda 3 (frente C): tiras doradas nativas ocultables (dbz3_ui_side_borders) = 6594048.
+# 2026-10-17: menu F1 nuevo (quick_menu.cpp) y volcado de audio dbz3_audio_dump (sdl_audio_driver.cpp) = 11172864 / 6596608.
+# 2026-10-16 ronda 4 (frente R15): modelos de la interfaz con el z-buffer del juego (dbz3_ui_depth) = 11158528 / 6596608.
+$canonVersion = "1.5.0"
 $canonSizes = @{
-    "rexruntime.dll"          = 11145216
-    "rexgpu-xenos.dll"        = 6589440
+    "rexruntime.dll"          = 11172864
+    "rexgpu-xenos.dll"        = 6596608
     "amd_fidelityfx_dx12.dll" = 5413888
 }
 

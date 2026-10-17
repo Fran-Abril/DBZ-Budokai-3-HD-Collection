@@ -53,5 +53,10 @@ int StartForm(int side);
 // La elegida ahora (sin gastarla) y si cambio desde la ultima vez (la vista previa se rehace).
 int ChosenForm(int side);
 bool TakeFormDirty(int side);
+// Para otros modos (frente R1): piloto del menu principal al Duelo (fila 0 = 1P VS COM) y su rueda; aviso del personaje
+// confirmado en la rueda por el lado `jugador` (select_ext.cpp lo da tambien fuera del Tag Team; nullptr lo quita).
+void PilotarAlDuelo(int fila);
+void RegistrarEleccion(void (*aviso)(int jugador, int id));
+void AvisarEleccion(int jugador, int id);
 
 }  // namespace dbz3::ingame

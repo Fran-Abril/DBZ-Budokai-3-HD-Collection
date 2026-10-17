@@ -36,8 +36,10 @@
 #include "ingame/menu_pilot.h"
 #include "ingame/online_panel.h"
 #include "ingame/tagteam_panel.h"
+#include "ingame/tutorial.h"
 #include "launcher/i18n.h"
 #include "launcher/launcher_state.h"
+#include "pasarela.h"
 
 REXCVAR_DEFINE_BOOL(dbz3_hub_enabled, true, "DBZ3/Mods", "HUB row in the main menu (Tag Team, Online, quick battle...)");
 REXCVAR_DECLARE(bool, dbz3_tag_team_enabled);   // online_panel.cpp
@@ -123,25 +125,27 @@ const Texts kHelps[kEntries] = {
      "Le rang de chaque combattant (avec médaille) et tes meilleurs records dans les défis.",
      "Der Rang jedes Kämpfers (mit Medaille) und deine besten Rekorde in den Herausforderungen.",
      "Il grado di ogni lottatore (con medaglia) e i tuoi migliori record nelle sfide."},
-    {"Datos de tu último combate: daño, golpes y combo más largo de cada luchador.",
-     "Data from your last battle: damage, hits and longest combo of each fighter.",
-     "Les données de ton dernier combat : dégâts, coups et plus long combo de chaque combattant.",
-     "Daten deines letzten Kampfes: Schaden, Treffer und längste Kombo jedes Kämpfers.",
-     "I dati del tuo ultimo scontro: danni, colpi e combo più lunga di ogni lottatore."},
+    {"Practica contra un muñeco (quieto o en guardia) y mira los datos de tu último golpe.",
+     "Practice against a dummy (standing or guarding) and check your last hit's data.",
+     "Entraîne-toi contre un mannequin (immobile ou en garde) et regarde les données de ton dernier coup.",
+     "Übe gegen eine Puppe (stehend oder blockend) und sieh dir die Daten deines letzten Treffers an.",
+     "Allenati contro un manichino (fermo o in guardia) e guarda i dati del tuo ultimo colpo."},
     {"Explora los escenarios y elige dónde luchar.", "Browse the stages and pick where to fight.",
      "Parcours les arènes et choisis où combattre.", "Sieh dir die Arenen an und wähle, wo du kämpfst.",
      "Esplora le arene e scegli dove combattere."},
-    {"Trae luchadores de Budokai 1, Budokai 2 e Infinite World.",
-     "Bring fighters over from Budokai 1, Budokai 2 and Infinite World.",
-     "Fais venir des combattants de Budokai 1, Budokai 2 et Infinite World.",
-     "Hol dir Kämpfer aus Budokai 1, Budokai 2 und Infinite World.",
-     "Porta lottatori da Budokai 1, Budokai 2 e Infinite World."},
+    {"Historias y misiones de Budokai 2 e Infinite World. Algunas necesitan tu copia del juego: elige su ISO en la campaña (botón A) o en el lanzador (pestaña Juego).",
+     "Stories and missions from Budokai 2 and Infinite World. Some need your copy of the game: pick its ISO in the campaign (A button) or in the launcher (Game tab).",
+     "Histoires et missions de Budokai 2 et Infinite World. Certaines demandent ta copie du jeu : choisis son ISO dans la campagne (bouton A) ou dans le lanceur (onglet Jeu).",
+     "Geschichten und Missionen aus Budokai 2 und Infinite World. Manche brauchen deine Spielkopie: wähle ihre ISO in der Kampagne (A-Taste) oder im Launcher (Reiter Spiel).",
+     "Storie e missioni di Budokai 2 e Infinite World. Alcune richiedono la tua copia del gioco: scegli la sua ISO nella campagna (tasto A) o nel launcher (scheda Gioco)."},
     {"Pruebas cortas para jugar entre combate y combate.", "Short challenges to play between fights.",
      "Des épreuves courtes à jouer entre deux combats.", "Kurze Aufgaben für zwischen den Kämpfen.",
      "Prove brevi da giocare tra uno scontro e l'altro."},
-    {"La historia del campeón del mundo, a su manera.", "The world champion's story, his way.",
-     "L'histoire du champion du monde, à sa façon.", "Die Geschichte des Weltmeisters, auf seine Art.",
-     "La storia del campione del mondo, a modo suo."}};
+    {"La historia de Mr. Satán en los Juegos de Cell: 11 retadores. Necesita tu copia de Budokai 1.",
+     "Mr. Satan's story at the Cell Games: 11 challengers. Needs your Budokai 1 copy.",
+     "L'histoire d'Hercule aux Jeux de Cell : 11 adversaires. Nécessite ta copie de Budokai 1.",
+     "Mr. Satans Geschichte bei den Cell-Spielen: 11 Herausforderer. Braucht deine Kopie von Budokai 1.",
+     "La storia di Mr. Satan ai Giochi di Cell: 11 sfidanti. Serve la tua copia di Budokai 1."}};
 
 struct Mode {
   std::atomic<void (*)()> open{nullptr};
@@ -367,7 +371,13 @@ int Stage(std::mt19937& rng) {
 // A en una entrada del HUB. true = deja una pulsacion para el menu del juego (no borrar el mando).
 bool Launch(PPCContext& ctx, uint8_t* base, uint32_t obj, uint32_t pad) {
   const int e = g.cursor;
-  if (!EntryReady(e)) return false;   // por llegar (otro frente): el bocadillo ya lo dice
+  if (!EntryReady(e)) {   // por llegar (otro frente) o falta algo del jugador: el bocadillo ya lo dice
+    // sin la ISO de PS2 que pide (Leyenda: Budokai 1; minijuegos: Infinite World): A abre el dialogo para elegirla
+    const std::string k = EntryKey(e);
+    const int juego = k == "satan" ? 0 : k == "minijuegos" ? 2 : -1;
+    if (juego >= 0 && dbz3::pasarela::IsoPs2(juego).empty()) dbz3::pasarela::ElegirIsoPs2EnSegundoPlano(juego);
+    return false;
+  }
   auto away = [](bool same_menu) {   // el HUB vuelve cuando el modo acabe
     g.open = false;
     g.back = true;
@@ -438,6 +448,7 @@ void Move(int step, int page_step) {
 
 // Mando del menu con la fila o la pantalla HUB: true = el HUB se lo queda (el menu no lo ve).
 bool Input(PPCContext& ctx, uint8_t* base, uint32_t obj, uint32_t pad) {
+  if (g.open && dbz3::ingame::tutorial::Abierto()) return true;   // F3: tutorial encima del HUB (el lo lee)
   const uint16_t pressed = REX_LOAD_U16(pad + 14), rep = REX_LOAD_U16(pad + 18) | REX_LOAD_U16(pad + 114);
   const int rows = REX_LOAD_U8(obj + 151), row = REX_LOAD_U8(obj + 150);
   if (g.test && (pressed || rep)) REXLOG_INFO("dbz3 hub: prueba: botones {:04X} (repeticion {:04X})", pressed, rep);
@@ -777,6 +788,21 @@ DBZ3_HOOK_EU(sub_8218B998) {
   using namespace dbz3::hub;
   if (Enabled() && (g.focus || g.open)) return;
   orig(ctx, base);
+}
+
+// Entrada del menu principal (tarea; +48 el menu): al acabar de entrar pone el saludo de Goku (voz 0x20000|4329 en
+// +164) y pasa al estado activo (3). Si se vuelve de un modo lanzado desde el HUB (que se reabre ahora), se calla
+// esa voz en el mismo cuadro: el saludo queda solo para el arranque y la vuelta normal (feedback 1.4.6, punto 3).
+DBZ3_HOOK_EU(sub_8218C8E0) {
+  using namespace dbz3::hub;
+  const uint32_t obj = ctx.r3.u32 ? REX_LOAD_U32(ctx.r3.u32 + 48) : 0;
+  const bool antes = obj && REX_LOAD_U16(obj + 148) == 3;
+  PPCContext c = ctx;
+  orig(ctx, base);
+  if (Enabled() && obj && !antes && REX_LOAD_U16(obj + 148) == 3 && g.back && g.armed && REX_LOAD_U32(obj + 164)) {
+    Call(c, base, DBZ3_CALL_EU(sub_82081A48), REX_LOAD_U32(obj + 164));
+    REXLOG_INFO("dbz3 hub: vuelta al HUB sin el saludo del menu principal");
+  }
 }
 
 // Texto del bocadillo de un menu: el del menu principal es del HUB mientras lo usa (el juego pone el

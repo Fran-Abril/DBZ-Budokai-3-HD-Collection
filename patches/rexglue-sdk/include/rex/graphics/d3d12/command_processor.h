@@ -642,6 +642,11 @@ class D3D12CommandProcessor : public CommandProcessor {
   void Dbz3TemporalEndFrame(uint32_t frontbuffer_width_unscaled);
   // dbz3_depth_copy_cs, with the resolve-downscale root signature.
   Microsoft::WRL::ComPtr<ID3D12PipelineState> dbz3_depth_copy_pipeline_;
+  // R15: the same for a multisampled depth render target (sample 0), only for the UI depth.
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> dbz3_depth_copy_ms_pipeline_;
+  // R15: the game paints depth-tested UI (cvar dbz3_ui_depth): the scene depth is copied and
+  // handed to the presenter on every swap even without a temporal upscaler.
+  bool dbz3_ui_depth_ = false;
   Microsoft::WRL::ComPtr<ID3D12Resource> dbz3_depth_;        // R32_FLOAT, output size
   Microsoft::WRL::ComPtr<ID3D12Resource> dbz3_zero_motion_;  // R16G16_FLOAT, zeroed
   // Motion replay: right after a scene draw that writes depth, the same draw

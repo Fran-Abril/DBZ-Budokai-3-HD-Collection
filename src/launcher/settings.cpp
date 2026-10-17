@@ -12,6 +12,7 @@
 #include <toml++/toml.hpp>
 
 #include <filesystem>
+#include <set>
 #include <utility>
 #include <string>
 #include <vector>
@@ -371,6 +372,12 @@ REXCVAR_DEFINE_STRING(dbz3_texture_packs, "", "DBZ3/Dev",
 // The GPU plugin reads it by name every frame.
 REXCVAR_DEFINE_BOOL(dbz3_texture_packs_on, true, "DBZ3/Video",
                     "Use the installed HD texture packs (off = original textures)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
+// Tiras doradas de los lados en los menus (las del juego y las de nuestras pantallas). Apagado: fondos a toda
+// la ventana, sin tiras.
+REXCVAR_DEFINE_BOOL(dbz3_ui_side_borders, false, "DBZ3/Video",
+                    "Golden side borders on menus (off = full-width backgrounds)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(dbz3_gpu_backend, DBZ3_DEFAULT_GPU_BACKEND, "DBZ3/Video",
@@ -1605,6 +1612,180 @@ bool EnsureIsoXexCache(const std::filesystem::path& iso,
     (void)bootable;
   }
   return std::filesystem::is_regular_file(xex_dst, ec);
+}
+
+// --- ISO + mods: copia de los .afs (ver settings.h) ---------------------------------------------------------------
+std::filesystem::path IsoDataCacheDir() { return UserDataRoot() / "iso_datos"; }
+
+namespace {
+
+std::string Lower(std::string s) {
+  for (char& c : s) c = char(std::tolower(uint8_t(c)));
+  return s;
+}
+
+// Identidad de la ISO actual (ruta + tamano + fecha), como el sello del xex.
+std::string IsoIdentity() {
+  std::error_code ec;
+  const std::filesystem::path iso = std::filesystem::u8path(IsoPath());
+  if (!std::filesystem::is_regular_file(iso, ec)) return {};
+  const auto size = std::filesystem::file_size(iso, ec);
+  const auto mtime =
+      static_cast<long long>(std::filesystem::last_write_time(iso, ec).time_since_epoch().count());
+  return rex::path_to_utf8(std::filesystem::absolute(iso, ec)) + "\n" + std::to_string(size) + "\n" +
+         std::to_string(mtime) + "\n";
+}
+
+// Archivos que nombran los mods activos: mods/<mod>/<x> y mods/<mod>/us|eu/<x> (mismas reglas que el runtime:
+// fuera "<mod>.disabled", el marcador ".disabled" y lo que empieza por '.').
+std::set<std::string> ModTouchedNames() {
+  std::set<std::string> out;
+  std::error_code ec;
+  const std::filesystem::path root = rex::filesystem::GetExecutableFolder() / "mods";
+  for (auto it = std::filesystem::directory_iterator(root, ec); !ec && it != std::filesystem::directory_iterator();
+       it.increment(ec)) {
+    const std::string mod = Lower(rex::path_to_utf8(it->path().filename()));
+    std::error_code fec;
+    if (!it->is_directory(fec) || mod.empty() || mod[0] == '.' ||
+        (mod.size() > 9 && mod.compare(mod.size() - 9, 9, ".disabled") == 0) ||
+        std::filesystem::exists(it->path() / ".disabled", fec)) {
+      continue;
+    }
+    for (const std::filesystem::path& dir : {it->path(), it->path() / "us", it->path() / "eu"}) {
+      for (auto f = std::filesystem::directory_iterator(dir, fec); !fec && f != std::filesystem::directory_iterator();
+           f.increment(fec)) {
+        out.insert(Lower(rex::path_to_utf8(f->path().filename())));
+      }
+    }
+  }
+  return out;
+}
+
+struct IsoCopy {
+  rex::filesystem::Entry* entry;
+  std::filesystem::path rel;   // dentro de IsoDataCacheDir(): <region>/<archivo> o <archivo>
+};
+
+// Lo que se copia: los .afs (menos las voces adx_*, 650 MB cada una, salvo `voices`: el montaje de personajes nuevos
+// lee sus tablas) y lo que nombre un mod activo, de la raiz de Budokai 3 (DBZ3\ en el disco original) y de la carpeta de la region elegida.
+void IsoCopyList(rex::filesystem::DiscImageDevice& dev, std::vector<IsoCopy>& out, bool voices) {
+  rex::filesystem::Entry* root = dev.ResolvePath("");
+  if (!root) return;
+  if (auto* d = root->GetChild("DBZ3"); d && (d->GetChild("us") || d->GetChild("eu"))) root = d;
+  const std::string region = Region() == "eu" ? "eu" : "us";
+  const std::set<std::string> names = ModTouchedNames();
+  auto pick = [&](rex::filesystem::Entry* dir, const std::filesystem::path& rel) {
+    for (const auto& c : dir->children()) {
+      if (c->attributes() & rex::filesystem::kFileAttributeDirectory) continue;
+      const std::string n = Lower(c->name());
+      const bool afs = n.size() > 4 && n.compare(n.size() - 4, 4, ".afs") == 0 && (voices || n.rfind("adx_", 0) != 0);
+      if (afs || names.count(n)) out.push_back({c.get(), rel / std::filesystem::u8path(c->name())});
+    }
+  };
+  pick(root, {});
+  if (auto* r = root->GetChild(region)) pick(r, region);
+}
+
+}  // namespace
+
+bool IsoDataCacheValid() {
+  const std::string id = IsoIdentity();
+  if (id.empty()) return false;
+  std::ifstream in(IsoDataCacheDir() / "iso.stamp", std::ios::binary);
+  const std::string have((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  return have == id;
+}
+
+long long IsoDataPending(bool voices) {
+  rex::filesystem::DiscImageDevice dev("\\Device\\IsoDatos", std::filesystem::u8path(IsoPath()));
+  if (!dev.Initialize()) return -1;
+  std::vector<IsoCopy> list;
+  IsoCopyList(dev, list, voices);
+  const bool valid = IsoDataCacheValid();
+  long long pending = 0;
+  std::error_code ec;
+  for (const IsoCopy& c : list) {
+    const auto p = IsoDataCacheDir() / c.rel;
+    if (!valid || !std::filesystem::is_regular_file(p, ec) || std::filesystem::file_size(p, ec) != c.entry->size()) {
+      pending += (long long)c.entry->size();
+    }
+  }
+  return pending;
+}
+
+bool PrepareIsoData(bool voices, std::atomic<int>* progress, std::string* error) {
+  auto fail = [&](std::string msg) {
+    REXLOG_WARN("dbz3: ISO + mods: {}", msg);
+    if (error) *error = std::move(msg);
+    return false;
+  };
+  const std::filesystem::path iso = std::filesystem::u8path(IsoPath());
+  rex::filesystem::DiscImageDevice dev("\\Device\\IsoDatos", iso);
+  if (!dev.Initialize()) return fail(i18n::T("no se pudo leer la ISO", "the ISO could not be read"));
+  std::vector<IsoCopy> list;
+  IsoCopyList(dev, list, voices);
+  if (list.empty()) return fail(i18n::T("la ISO no tiene los datos de Budokai 3", "the ISO has no Budokai 3 data"));
+  const std::filesystem::path dir = IsoDataCacheDir();
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  const bool valid = IsoDataCacheValid();
+  std::vector<const IsoCopy*> todo;
+  unsigned long long total = 0, done = 0;
+  for (const IsoCopy& c : list) {
+    const auto p = dir / c.rel;
+    if (!valid || !std::filesystem::is_regular_file(p, ec) || std::filesystem::file_size(p, ec) != c.entry->size()) {
+      todo.push_back(&c);
+      total += c.entry->size();
+    }
+  }
+  if (todo.empty()) return true;
+  const auto space = std::filesystem::space(dir, ec);
+  if (!ec && space.available < total + (64ull << 20)) {
+    char buf[200];
+    std::snprintf(buf, sizeof(buf), i18n::T("falta espacio: hacen falta %.1f GB libres en el disco del juego",
+                                            "not enough space: %.1f GB free are needed on the game's drive"),
+                  double(total) / (1024.0 * 1024.0 * 1024.0));
+    return fail(buf);
+  }
+  // mientras se copia, el sello no vale (otra ISO a medias no puede pasar por la de antes)
+  { std::ofstream(dir / "iso.stamp", std::ios::binary | std::ios::trunc); }
+  REXLOG_INFO("dbz3: ISO + mods: copiando {} archivos ({} MB) a {}", todo.size(), total >> 20, rex::path_to_utf8(dir));
+  std::vector<uint8_t> buf(8u << 20);
+  for (const IsoCopy* c : todo) {
+    const auto dst = dir / c->rel;
+    auto part = dst;
+    part += ".part";
+    std::filesystem::create_directories(dst.parent_path(), ec);
+    rex::filesystem::File* file = nullptr;
+    if (XFAILED(c->entry->Open(rex::filesystem::FileAccess::kGenericRead, &file)) || !file) {
+      return fail(std::string(i18n::T("no se pudo abrir ", "could not open ")) + rex::path_to_utf8(c->rel));
+    }
+    std::ofstream out(part, std::ios::binary | std::ios::trunc);
+    bool ok = bool(out);
+    for (size_t off = 0, size = c->entry->size(); ok && off < size;) {
+      size_t got = 0;
+      const size_t n = std::min(buf.size(), size - off);
+      ok = XSUCCEEDED(file->ReadSync({buf.data(), n}, off, &got)) && got == n;
+      if (ok) out.write(reinterpret_cast<const char*>(buf.data()), std::streamsize(n));
+      ok = ok && out.good();
+      off += n;
+      done += n;
+      if (progress && total) progress->store(int(done * 1000 / total));
+    }
+    delete file;
+    out.close();
+    if (!ok || !out.good()) {
+      std::filesystem::remove(part, ec);
+      return fail(std::string(i18n::T("no se pudo copiar ", "could not copy ")) + rex::path_to_utf8(c->rel) +
+                  i18n::T(" (revisa el espacio libre)", " (check the free space)"));
+    }
+    std::filesystem::rename(part, dst, ec);   // reemplaza la copia vieja de esta misma cache
+    if (ec) return fail(std::string(i18n::T("no se pudo guardar ", "could not save ")) + rex::path_to_utf8(c->rel));
+  }
+  std::ofstream(dir / "iso.stamp", std::ios::binary | std::ios::trunc) << IsoIdentity();
+  if (progress) progress->store(1000);
+  REXLOG_INFO("dbz3: ISO + mods: listo ({} MB)", total >> 20);
+  return true;
 }
 
 std::filesystem::path XexCacheDir() {

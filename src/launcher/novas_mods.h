@@ -3,8 +3,10 @@
 //
 // The repository holds catalogo.toml ([[mod]] id, version, zip, size, tipo,
 // nombre_<lang>, descripcion_<lang>, and optional autor, enlaces = ["https://..."],
-// partes = [asset ids]) and the zips. A zip over GitHub's file limits (the HD texture
+// partes = [asset ids], sha256 = "<hex>") and the zips. A zip over GitHub's file limits (the HD texture
 // pack) is uploaded as release assets in parts that are downloaded and joined in order.
+// sha256 is the SHA-256 of the whole zip: when present the download is checked against it and not installed
+// on mismatch; a catalog without it installs as before.
 // A download replaces the installed copy, which is moved to <exe>/mods_respaldo first
 // (never deleted).
 
@@ -26,6 +28,7 @@ struct NovaMod {
   std::string autor;                  // credit shown on the card (optional)
   std::vector<std::string> enlaces;   // author's https:// pages, clickable on the card
   std::vector<long long> partes;      // release asset ids of a split zip (empty = `zip`)
+  std::string sha256;                 // hex SHA-256 of the whole zip; "" = old catalog, not checked
 };
 
 enum class NovaState { kNoKey, kLoading, kReady, kFailed };

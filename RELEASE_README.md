@@ -63,7 +63,22 @@ El paquete **NO incluye los archivos del juego** (copyright). Aporta los de tu
 > Para extraer los archivos de tu **ISO legal** usa `extract-xiso` (FATX de Xbox
 > 360). Tamaños y SHA-256 de cada archivo en `baserom.md`.
 
-## Novedades de esta release — v1.4.5 (2026-10-14)
+## Novedades de esta release — v1.5.0 (2026-10-17)
+
+> Vídeo de la versión: tráiler, novedades y tutorial de instalación (ES/EN) en el canal de YouTube de NovaPowers.
+
+- **Dragon HUB:** placas de rango (de KYU 5 a MAESTRO), fondos y anfitriones nuevos, personajes que vuelan a cámara, icono de guardado y marcas **BETA / EXPERIMENTAL** en todo lo que está en construcción.
+- **Tag Team (beta):** relevos con teletransporte, también entre luchadores del ordenador (COM vs COM).
+- **Mods desde la ISO:** jugando directamente con la `.iso` los mods ya funcionan (la primera vez se prepara en unos segundos).
+- **Tus juegos de PS2 con un botón:** "Elegir ISO" para Budokai 1, Budokai 2 e Infinite World (launcher > Juego, o pulsando A dentro de la campaña). Se reconoce el juego por su contenido y no se copia nada.
+- **Launcher renovado** (ayuda al pasar el ratón, Nova's Mods en tarjetas, mods ACTIVO/APAGADO) y **menú F1 renovado**.
+- **Modos nuevos:** Misión 100, Modo Héroe (beta, cambia de estilo entre combates con LB/RB), Leyenda de Mr. Satán (beta, modelos de Budokai 3).
+- **Campañas de Infinite World y de Budokai 2 + Nave de Babidi (EXPERIMENTAL):** se pueden probar; les queda trabajo.
+- **Cápsula única de transformaciones** y versión EU.
+- **Todo traducido** a español, inglés, francés, alemán e italiano (también las descripciones de Nova's Mods).
+- Créditos: **🇮🇹⚠ 𝐒𝐏𝐈𝐃𝐄𝐑 ⚠🇮🇹** por la decompilación de Infinite World.
+
+## Novedades de la v1.4.5 (2026-10-14)
 
 - **Pack de texturas HD sin tirones**: las texturas HD se preparan en segundo plano (como
   Burst Limit) y entran poco a poco; el juego ya no se para al llegar a un menú o a un combate,
@@ -148,6 +163,8 @@ rendimiento»**.
 
 | Versión | Fecha | Resumen |
 |---|---|---|
+| v1.5.0 | 2026-10-17 | Dragon HUB, Tag Team con teletransporte, mods desde la ISO, pasarela PS2 (B1/B2/IW), launcher y F1 renovados, Misión 100, Modo Héroe y Leyenda de Mr. Satán (beta), campañas IW y B2 + Nave de Babidi (experimental), todo traducido | 1.4.3 |
+| v1.4.5.2 | 2026-10-14 | Tag Team: ring out con compañero vivo = relevo; Online: instalar los mods que faltan desde el panel, UPnP/STUN; ports oficiales recreables; campañas con textos automáticos | 1.4.3 |
 | v1.4.5.1 | 2026-10-14 | El pack HD instalado desde el launcher se ve al pulsar JUGAR, sin reiniciar | 1.4.3 |
 | v1.4.5 | 2026-10-14 | Pack HD sin tirones (carga en segundo plano, precarga aprendida) y en Nova's Mods, launcher que coloca y protege los mods, buscadores, traducciones IT/DE/FR | 1.4.3 |
 | v1.4.4 | 2026-10-12 | Tag Team y Online (beta) nativos, Nova's Mods, historia de Freezer, selector de transformación (beta), Budokai 2 en el importador | 1.4.3 |
@@ -218,6 +235,14 @@ seguridad de tus AFS.
   versión USA y los datos en carpeta (no modo ISO).
 - **Textos nuevos de la v1.4.0** (launcher y menú rápido): en español e inglés;
   en italiano, alemán y francés se ven en inglés por ahora.
+
+## Créditos y apoyo
+
+- **🇮🇹⚠ 𝐒𝐏𝐈𝐃𝐄𝐑 ⚠🇮🇹** — decompilación de *Dragon Ball Z: Infinite World* que hemos usado para portar la
+  campaña de Infinite World / *decompilation of DBZ: Infinite World used to port the Infinite World campaign*.
+- **@ArielPVB**, la comunidad de modding de Budokai, ReXGlue SDK y DBZ Burst Limit Recompiled (lista completa en el
+  README del repositorio).
+- Ko-fi (opcional / optional): https://ko-fi.com/novapowers
 
 ## Legal
 

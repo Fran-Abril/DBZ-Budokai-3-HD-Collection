@@ -233,6 +233,15 @@ def preparar(dest, desde=None, exe=EXE):
     for n in ("dbz3_input.req", "dbz3_shot.req", "dbz3_shot.bmp"):   # senales de control viejas
         (dest / n).unlink(missing_ok=True)
     escribir_toml(dest / "dbz3_user.toml")
+    # R9 (2026-10-16): las copias no pasan por JUGAR del launcher, que monta el roster; con uno viejo (modos_test del
+    # 14/10, sin cam_pad_clips) Pan colgaba el juego. Igual que el launcher; no hace nada si el roster esta al dia.
+    if (dest / "mods").is_dir():
+        r = subprocess.run([sys.executable, str(R / "mod center hd" / "roster_build.py"), "construir", "--mods",
+                            str(dest / "mods")], capture_output=True, text=True, errors="replace")
+        ult = (r.stdout.strip().splitlines() or [""])[-1]
+        print(f"  roster: {ult}" if r.returncode == 0 else
+              f"  aviso: roster_build codigo {r.returncode}, se queda el roster anterior: {(r.stderr or r.stdout)[-300:]}",
+              flush=True)
 
 
 def podar_respaldos(copia):
@@ -599,12 +608,163 @@ def _batalla(j, par):
     # Again? / Reselect Characters / Return to Main Menu, cursor en el primero; medido 2026-10-15). A
     # ciegas, una A antes de tiempo elegia la revancha con el PC cargado.
     j.log(r"tag: prueba: estado del combate 7", 40)
-    time.sleep(1)
-    for k in ("S", "S", "Space", "W"):                  # Return to Main Menu -> "Exit?" -> Yes
-        j.tecla(k, 1200)
-    j.tecla_hasta_log("Space", r"hub: fin del combate nativo", 3, 4)
+    # ronda 3: en los combates del HUB el menu final ya no sale (modos.cpp, sub_820FF750): sale solo al menu
+    j.log(r"sin menu final", 20)
+    j.log(r"hub: fin del combate nativo", 30)
     j.esperar_pantalla([5], 40)                         # vuelta al menu principal
     j.captura("02_vuelta_menu")
+
+
+def _tienda(j, par):
+    # HUB > Supervivencia > "Supervivencia con tienda": el primer combate se gana por ring out (DBZ3_TEST_RINGOUT) y
+    # entre combates sale la tienda con las piezas de la Skill Shop del juego (botellas, caja de Zenie).
+    time.sleep(2.5)
+    j.tecla("W", 1200)
+    j.tecla("Space", 3500)                              # HUB
+    for _ in range(4):                                  # tagteam .. supervivencia
+        j.tecla("S", 450)
+    j.tecla("Space", 2500)                              # selector de retos
+    j.tecla("S", 700)                                   # Supervivencia con tienda
+    j.captura("a_selector")
+    j.tecla("Space", 3500)
+    if "partida reanudada entre combates" not in j.texto_log():   # sin partida a medias: se gana el primero
+        j.tecla_hasta_log("Space", r"hub: combate nativo", 4, 4)
+        j.log(r"rival fuera del ring", 90)
+        j.log(r"hub: fin del combate nativo", 40)
+        time.sleep(5)
+    j.captura("b_tienda")
+    j.tecla("Space", 1500)                              # compra la cura (o avisa de que no se puede)
+    j.captura("c_tienda_compra")
+
+
+def _hub_lab(j, par):
+    # HUB con el fondo propio y sin tiras doradas; Laboratorio (entrada 7) con su fondo y el selector de luchador y
+    # rival (izquierda/derecha en las filas 0 y 1). B vuelve al HUB.
+    time.sleep(2.5)
+    j.tecla("W", 1200)                                  # fila HUB (la ultima del menu principal)
+    j.tecla("Space", 3500)                              # pantalla HUB (cursor en Tag Team)
+    j.captura("a_hub")
+    for _ in range(7):                                  # tagteam .. laboratorio
+        j.tecla("S", 450)
+    j.captura("b_hub_lab")
+    j.tecla("Space", 2500)
+    j.captura("c_lab")
+    j.tecla("D", 700)                                   # luchador siguiente
+    j.tecla("D", 700)
+    j.captura("d_lab_luchador")
+    j.tecla("S", 500)
+    j.tecla("D", 700)                                   # rival siguiente
+    j.captura("e_lab_rival")
+    j.tecla("Backspace", 2000)
+    j.captura("f_vuelta_hub")
+
+
+def _hub_filas(j, par):
+    # HUB pagina 2: la fila Pasarela con el avance de las campanas (bocadillo) y la fila nueva Mision 100, que se abre.
+    time.sleep(2.5)
+    j.tecla("W", 1200)                                  # fila HUB (la ultima del menu principal)
+    j.tecla("Space", 3500)                              # pantalla HUB (cursor en Tag Team)
+    for _ in range(8):                                  # tagteam .. pasarela (pagina 2; escenarios y minijuegos no salen)
+        j.tecla("S", 450)
+    j.captura("a_pasarela")
+    for _ in range(2):                                  # .. satan .. mision 100
+        j.tecla("S", 450)
+    j.captura("b_mision100")
+    j.tecla("Space", 2500)
+    j.captura("c_paginas")
+    j.tecla("Backspace", 2000)
+    j.captura("d_vuelta_hub")
+
+
+def _heroe_crear(j, par):
+    # frente G (ronda 3): HUB > Kumite > Modo Heroe > pantalla de creacion (raza, cuerpo, apariencia, maestro) >
+    # Empezar: Humano (Krilin) con traje 2 y maestro Krilin (sus tecnicas) -> mision 1 contra los Saibaman.
+    time.sleep(2.5)
+    j.tecla("W", 1200)
+    j.tecla("Space", 3500)                              # HUB
+    for _ in range(5):                                  # tagteam .. kumite
+        j.tecla("S", 450)
+    j.tecla("Space", 2500)                              # selector de retos
+    for _ in range(3):                                  # kumite .. modo heroe
+        j.tecla("S", 700)
+    j.captura("a_selector_heroe")
+    j.tecla("Space", 2500)                              # pantalla de creacion
+    j.captura("b_crear")
+    j.tecla("D", 700)                                   # raza: Humano
+    j.captura("c_raza_humano")
+    j.tecla("S", 500)
+    j.tecla("S", 500)
+    j.tecla("D", 700)                                   # apariencia: traje 2
+    j.tecla("S", 500)
+    for _ in range(3):                                  # maestro: Goku, Vegeta, Piccolo, Krilin
+        j.tecla("D", 600)
+    j.captura("d_maestro_krilin")
+    j.tecla("S", 500)
+    j.captura("e_empezar")
+    j.tecla_hasta_log("Space", r"hub: combate nativo", 4, 4)
+    j.log(r"capsulas del jugador", 40)
+    time.sleep(6)
+    j.captura("f_mision1")
+    time.sleep(5)
+    j.captura("g_mision1_pelea")
+    for l in [l for l in j.texto_log().splitlines() if "dbz3 rpg" in l or "capsulas" in l or "reglas" in l][-6:]:
+        j.info(re.sub(r"^(\[[^\]]*\] ){3}", "", l)[:170])
+
+
+def _r5_heroe(j, par):
+    # frente R5 (ronda 4): Modo Heroe con un cuerpo y el moveset (estilo) de otro luchador. La receta se escribe
+    # antes en user_data/dbz3/rpg.toml (raza/cuerpo/estilo); aqui: HUB > Kumite > Modo Heroe > creacion > Empezar.
+    # --par estilo=N: pulsaciones a la derecha en la fila Estilo (por defecto 0, la del rpg.toml).
+    time.sleep(2.5)
+    j.tecla("W", 1200)
+    j.tecla("Space", 3500)                              # HUB
+    for _ in range(5):                                  # tagteam .. kumite
+        j.tecla("S", 450)
+    j.tecla("Space", 2500)                              # selector de retos
+    for _ in range(3):                                  # kumite .. modo heroe
+        j.tecla("S", 700)
+    j.captura("a_selector_heroe")
+    j.tecla("Space", 2500)                              # pantalla de creacion
+    for _ in range(3):
+        j.tecla("S", 500)
+    for _ in range(int(par.get("estilo", "0"))):
+        j.tecla("D", 600)
+    j.captura("b_estilo")
+    j.tecla("S", 500)
+    j.captura("c_empezar")
+    j.tecla_hasta_log("Space", r"hub: combate nativo", 4, 4)
+    j.log(r"dbz3 heroe: estilo", 40)
+    time.sleep(float(par.get("espera", "16")))         # pasa la presentacion del escenario
+    for k in range(int(par.get("rafaga", "0"))):        # --par rafaga=N: N capturas cada 2 s (intros, READY)
+        j.captura(f"r{k:02d}")
+        time.sleep(2)
+    j.captura("d_pelea_1")
+    time.sleep(5)
+    j.captura("e_pelea_2")
+    j.tecla("J", 300)                                   # un golpe (moveset del estilo)
+    time.sleep(1)
+    j.captura("f_pelea_3")
+    if par.get("ringout") == "1":                       # gana por salida del ring: pantalla entre combates y sale
+        j.log(r"combate 1 ganado", 60)
+        time.sleep(6)
+        j.captura("g_entre")
+        if par.get("completa") == "1":                  # los 3 combates: fin de saga, nivel y saga siguiente
+            for k in (2, 3):
+                j.tecla_hasta_log("Space", rf"combate {k}: pedido", 3, 4)
+                time.sleep(20)
+                j.captura(f"h_pelea_{k}")
+                if k == 2:
+                    j.log(r"combate 2 ganado", 60)
+                    time.sleep(6)
+            j.log(r"fin de saga", 60)
+            time.sleep(4)
+            j.captura("i_fin")
+        else:
+            j.tecla("Backspace", 3000)                  # B: guardar y salir (el estilo vuelve a su modelo)
+            j.log(r"vuelve a su modelo", 20)
+            j.captura("h_fin")
+    for l in [l for l in j.texto_log().splitlines() if "dbz3 rpg" in l or "dbz3 heroe" in l][-8:]:
+        j.info(re.sub(r"^(\[[^\]]*\] ){3}", "", l)[:170])
 
 
 def _du_continuar(j, par):
@@ -827,7 +987,945 @@ def _historia_y_duelo(j, par):
         raise Fallo("el menu principal no olvido el combate de historia")
 
 
+def _satan(j, par):
+    # Leyenda de Mr. Satan (src/pasarela.cpp, DBZ3_TEST_PASARELA=auto,seg=8): empieza sola desde el menu principal y
+    # avanza cada 8 s; RINGOUT gana cada combate a los 5 s. desde=N empieza en el paso N (25 = Cell, el ultimo ->
+    # final). Orden de B1 (F6): titulo, dificultad, prologo, Yamcha sin tarjeta, resultado con la cuenta, tablero de
+    # 11 caras y la escena 3D del retador. El registro llega con unos segundos de retraso.
+    d = int(par.get("desde", "0"))
+    j.log(r"pasarela: prueba: disponible true; empieza", 90)
+    j.log(rf"pasarela: paso {d + 1}/\d+", 20)
+    time.sleep(3)
+    j.captura("a_entrada")
+    if d == 0:
+        j.log(r"pasarela: titulo: START", 30)
+        time.sleep(3)
+        j.captura("a2_dificultad")
+        j.log(r"pasarela: prologo 2/7", 40)
+        time.sleep(1)
+        j.captura("b_prologo")
+    else:
+        j.log(r"hub: combate nativo", 40)
+        j.log(r"pasarela: final de la leyenda", 90)
+        time.sleep(2)
+        j.captura("e_final_cuenta")
+        time.sleep(6)
+        j.captura("f_final_total")
+        return
+    j.log(r"hub: combate nativo", 60)
+    if par.get("golpes") == "1":                    # P3: Mr. Satan pega (puntos HIT/COMBO de B1 y su aviso)
+        j.log(r"pasarela: paso \d+ estado del combate 4", 60)
+        j.tecla("Right 700", 100)
+        for k in ["L", "L", "L", "P", "L", "L", "P", "L"]:
+            j.tecla(k, 220)
+        j.captura("c_puntos")
+    time.sleep(4)
+    j.captura("c_combate")
+    if "cinematica: paso" in j.texto_log():
+        raise Fallo("Yamcha no tiene escena en B1 (sale una antes del combate 1)")
+    j.log(r"\): resultado", 90)
+    time.sleep(1)
+    j.captura("d_resultado")
+    j.log(r"pasarela: paso 3/\d+ \(charla", 40)
+    time.sleep(3)
+    j.captura("e_tablero")
+    j.log(r"cinematica: paso 1/", 60)                # la escena del retador va tras su tablero (RINGOUT la corta)
+    time.sleep(1.5)
+    j.captura("f_escena")
+
+
+def _r3_cine(j, par):
+    # frente R3/F6 (src/cinematica.cpp): escena 3D del retador tras su tablero. desde=2 = tablero de Ten Shin Han (1.a
+    # charla con texto y voces) y su escena; desde=1 = Yamcha: sin escena (B1 no tiene charla para el 1.o). Sin
+    # RINGOUT para que la escena se vea entera. prologo=1: el "Mr. Satan's Style".
+    d = int(par.get("desde", "2"))
+    j.log(r"pasarela: prueba: disponible true; empieza", 90)
+    if par.get("prologo") == "1":
+        for k in range(4):
+            j.log(rf"pasarela: prologo {k + 1}/", 40)
+            time.sleep(2)
+            j.captura(f"p{k + 1}_prologo")
+        return
+    if d == 1:
+        j.log(r"hub: combate nativo", 60)
+        j.log(r"pasarela: paso \d+ estado del combate 4", 60)
+        time.sleep(6)
+        j.captura("a_yamcha_sin_escena")
+        if "cinematica: paso" in j.texto_log():
+            raise Fallo("Yamcha no tiene escena en B1 (sale una antes del combate 1)")
+        return
+    if d == 2:
+        j.log(r"pasarela: paso 3/\d+ \(charla", 40)
+        time.sleep(3)
+        j.captura("b_tablero")
+    j.log(r"hub: combate nativo", 60)
+    if par.get("ki") == "1":                        # sonda de la carga de ki: 11 combinaciones de 2,5 s
+        for k in range(1, 12):
+            j.log(rf"cinematica: paso {k}/", 120 if k == 1 else 30)
+            time.sleep(1.8)
+            j.captura(f"k{k:02d}")
+        return
+    if par.get("ringout") == "1":                   # victoria nativa tras la escena cortada (sonda de codigos)
+        j.log(r"cinematica: (terminada|cortada)", 120)
+        for i in range(4):
+            time.sleep(2)
+            j.captura(f"v{i}_victoria")
+        return
+    espera = {1: 1.5, 2: 3.0, 3: 1.5, 4: 1.5}
+    for k in range(1, 5):
+        j.log(rf"cinematica: paso {k}/", 60)
+        time.sleep(espera[k])
+        j.captura(f"c{k}_paso")
+    j.log(r"cinematica: terminada", 30)
+    time.sleep(3)
+    j.captura("d_pelea")
+
+
+def _r3_golpes(j, par):
+    # frente R3: combo del jugador (Fin::combo_max, para R1) y codigo de la carga de ki (sonda DBZ3_CINE_TRAZA): Leyenda
+    # de Mr. Satan contra Yamcha sin escena, el rival es el muneco quieto; Y+B (P+Backspace) mantenido y luego un combo
+    j.log(r"pasarela: prueba: disponible true; empieza", 90)
+    j.log(r"pasarela: paso \d+ estado del combate 4", 120)
+    time.sleep(1)
+    j.tecla("P+Backspace 2500", 300)
+    j.captura("a_ki")
+    time.sleep(1)
+    j.tecla("Right 700", 100)
+    for k in ["L", "L", "L", "P", "L", "L", "P", "L"]:
+        j.tecla(k, 220)
+    j.captura("b_combo")
+    j.log(r"combo mayor del jugador [1-9]", 20)
+
+
+def _fusion_yamhan(j, par):
+    # frente B (src/fusion.cpp): combate normal Yamcha contra Vegeta (DBZ3_TEST_BATTLE); DBZ3_TEST_FUSION=3 hace que
+    # el lado 1 se fusione a los 3 s de pelea con la carga del relevo: Yamcha pasa a Yamhan sin cerrarse
+    j.log(r"tag: empieza un combate", 60)
+    _esperar_pelea(j)
+    j.captura("01_yamcha")
+    if par.get("gesto") == "1":                     # P+K+G de verdad (X+A+B) mantenido 1,5 s, sin DBZ3_TEST_FUSION
+        # P+K+G en el teclado = P+L+Space (Y+X+A, botones D000 en el combate; sonda DBZ3_FUSION_SONDA). X+A+B
+        # (L+Space+Backspace, E000) y Y+X+B (B000) no lo son. Se mantiene 2 s y al soltar sale la fusion
+        for _ in range(3):                          # (la pulsacion del arnes a veces no llega entera)
+            time.sleep(1)
+            j.tecla("P+L+Space 2000", 800)
+            if re.search(r"fusion: lado 1 mantiene", j.texto_log()):
+                break
+        j.log(r"fusion: lado 1 mantiene P\+K\+G", 10)
+    j.log(r"fusion: lado 1: id 13 -> Yamhan", 30)
+    j.log(r"tag: luchador .* en combate: id \d+", 30)
+    for i in range(6):
+        j.captura(f"02_{i:02d}")
+        time.sleep(0.3)
+    time.sleep(4)
+    j.captura("03_yamhan")
+    j.log(r"tag: pose de entrada|fusion", 5)
+
+
+def _bordes(j, par):
+    # frente C (SDK, dbz3_texture_pack.cpp): con "Bordes dorados" apagado la tira "borde" de los menus del juego se
+    # sube transparente. --par bordes=true|false (REX_DBZ3_UI_SIDE_BORDERS). Menu principal y Duelo.
+    time.sleep(3)
+    j.captura("a_menu_principal")
+    _a_duelo(j)
+    j.captura("b_duelo")
+    if par.get("bordes", "false") == "false":
+        j.log(r"pack 'bordes dorados apagados' (reemplaza|subido)", 10)
+
+
+def _tablero(j, par):
+    # frente P2 (ronda 3): Pasarela > Dragon World de B2 (DBZ3_TEST_MISIONES=1,reset lo abre desde el menu principal
+    # en la fase 1). Todo de la ISO de B2: mapa cenital 346 en perspectiva, fichas 342, iconos 398, #YDW 387.
+    # Preparacion (fase y companero) -> Space empieza -> W elige la casilla de arriba (2) -> Space mueve a Goku ->
+    # Backspace (B, el circulo de B2) pasa con el companero -> S elige la casilla 3 (Saibaman) -> Space = contacto "!!" -> tarjeta -> Space = combate.
+    j.log(r"tablero b2: fase 1 leida", 90)
+    time.sleep(3)
+    j.captura("a_preparacion")
+    j.tecla("Space", 2500)
+    j.captura("b_tablero")
+    j.tecla("W", 900)
+    j.captura("c_destino")
+    j.tecla("Space", 1500)
+    j.log(r"tablero b2: turno 1: .* a la casilla", 10)
+    j.captura("d_movimiento")
+    # F4: triangulo (P = Y) abre el menu del original (Salir / Reiniciar) y su Si/No; P vuelve atras dos veces
+    j.tecla("P", 900)
+    j.log(r"tablero b2: menu abierto", 10)
+    j.captura("d2_menu")
+    j.tecla("Space", 900)
+    j.captura("d3_si_no")
+    j.tecla("P", 600)
+    j.tecla("P", 900)
+    j.tecla("Backspace", 1200)   # B = pasar
+    j.tecla("S", 900)
+    j.tecla("Space", 400)
+    j.captura("e_contacto")
+    j.log(r"tablero b2: combate:", 10)
+    time.sleep(2)
+    j.captura("f_tarjeta")
+    j.tecla("Space", 1000)
+    j.log(r"misiones: tablero combate", 20)
+    time.sleep(24)
+    j.captura("g_combate")
+
+
+def _r2_nave(j, par):
+    # frente R2 (ronda 4): Pasarela > Nave de Babidi de B2 (DBZ3_TEST_MISIONES=5,reset abre el modo con 0 Kili).
+    # Graficos de la nave de la ISO (DATA_SP 1131/1132). Pruebas -> S S elige la III (golpes 99 s) -> Space: luchador,
+    # oponente y sitio (Space en cada uno) -> tarjeta -> Space = combate -> fin a los 99 s -> resultado con el Kili.
+    j.log(r"nave: entrar", 90)
+    time.sleep(3)
+    j.captura("a_nave")
+    j.tecla("S", 700)
+    j.tecla("S", 900)
+    j.captura("b_prueba3")
+    j.tecla("Space", 1200)
+    j.captura("c_luchador")
+    j.tecla("Space", 1200)
+    j.captura("d_rival")
+    j.tecla("Space", 1200)
+    j.captura("e_sitio")
+    j.tecla("Space", 1500)
+    j.log(r"nave: prueba 3:", 10)
+    j.captura("f_tarjeta")
+    j.tecla("Space", 1000)
+    j.log(r"misiones: nave combate", 20)
+    time.sleep(24)
+    j.captura("g_combate")
+    j.log(r"nave: fin:", 140)
+    time.sleep(6)
+    j.captura("h_resultado")
+
+
+def _r2_fase1(j, par):
+    # frente R2 (ronda 4): la fase I del Dragon World entera en automatico (DBZ3_TEST_MISIONES=1,auto,reset: Goku va
+    # al rival mas cercano; DBZ3_TEST_RINGOUT gana cada combate a los 5 s). Presentacion del script 301, combates,
+    # sucesos de contacto (T4/T5) y "Fase completada".
+    j.log(r"tablero b2: script 301: mensaje", 120)
+    time.sleep(1)
+    j.captura("a_presentacion")
+    j.log(r"misiones: tablero combate", 120)
+    time.sleep(20)
+    j.captura("b_combate")
+    j.log(r"tablero b2: fase 1 completada", 1500)
+    time.sleep(0.4)   # el automatico pasa de pantalla a los 1,4 s
+    j.captura("c_fase_completada")
+    j.log(r"tablero b2: fase 2 leida", 30)
+    time.sleep(1.5)
+    j.captura("d_fase2_presentacion")
+
+
+def _r2_deseo(j, par):
+    # frente R2 (ronda 4): los deseos de Shenron (DBZ3_TEST_B2_DESEO=1 abre su pantalla al entrar al tablero) y el
+    # "Portal de la nave de Babidi", que abre la Nave en la Pasarela.
+    j.log(r"tablero b2: fase 1 leida", 90)
+    time.sleep(3)
+    j.captura("a_te_concedere")
+    j.tecla("Space", 1000)
+    j.captura("b_lista")
+    j.tecla("S", 800)
+    j.captura("c_otro_deseo")
+    j.tecla("W", 800)
+    j.tecla("Space", 1200)
+    j.log(r"deseo: portal de la nave de Babidi", 10)
+    j.captura("d_aceptable")
+    j.tecla("Space", 1200)
+    j.captura("e_debo_irme")
+    j.tecla("Space", 2500)
+    j.captura("f_fase_1")
+
+
+def _r2_fases(j, par):
+    # frente R2 (ronda 4): las fases del Dragon World seguidas en automatico desde la fase `desde` (1 = la II) hasta la
+    # IX: la ficha va a la Bola de la fase y luego al rival mas cercano; DBZ3_TEST_RINGOUT gana los combates.
+    desde = int(par.get("desde", "1"))
+    hasta = int(par.get("hasta", "9"))   # --par hasta=N: para tras la fase N (una fase por prueba)
+    for n in range(desde + 1, hasta + 1):
+        j.log(r"tablero b2: fase %d completada" % n, 1200)
+        time.sleep(0.4)
+        j.captura("fase_%d_completada" % n)
+
+
+def _iw_misiones(j, par):
+    # frente F (ronda 3): Pasarela > Misiones del Dragon de IW (DBZ3_TEST_MISIONES=4 abre el modo desde el menu
+    # principal). La lista sale de la tabla del ELF de la ISO de IW (registro "IW mision N"); ficha de la mision 1
+    # (Training No.1), su combate, y con --par desde=2 la ficha "no disponibles" de los entrenamientos 2-10.
+    j.log(r"misiones: iw(?: \(\d+ pasos\)|: mapa de Dragon Mission)", 90)   # con el mapa de IW (P1), el mapa
+    time.sleep(3)
+    j.captura("a_ficha")
+    if par.get("desde", "0") != "0":
+        return
+    j.tecla("Space", 2500)
+    j.captura("b_tarjeta_combate")
+    j.tecla("Space", 1500)
+    j.log(r"misiones: iw combate", 40)
+    time.sleep(12)
+    j.captura("c_combate")
+
+
+def _iw_mapa(j, par):
+    # frente P1 (ronda 3): Pasarela > Misiones del Dragon de IW con el mapa del mundo de IW (graficos leidos de la copia
+    # del jugador). desde=N = superadas hasta la N (por defecto 10: el cursor en la 11, Goku contra Raditz).
+    # Mapa, ficha (MISSION START), combate (DBZ3_TEST_RINGOUT lo gana), resultado, mapa despues y cursor movido.
+    j.log(r"misiones: iw: mapa de Dragon Mission", 90)
+    time.sleep(4)
+    j.captura("a_mapa")
+    j.tecla("Space", 2500)
+    j.captura("b_ficha")
+    j.tecla("Space", 1500)
+    j.log(r"misiones: iw combate", 40)
+    time.sleep(16)
+    j.captura("c_combate")
+    j.log(r"misiones: iw: mision \d+ superada", 90)
+    time.sleep(5)
+    j.captura("d_resultado")
+    j.tecla("Space", 2500)
+    if re.search(r"misiones: iw: escena de la historia despues", j.texto_log()):   # R1: escena (FD02 tras la 11)
+        time.sleep(2)
+        j.captura("d2_escena_despues")
+        # el video original (R7) se salta con A; la escena de respaldo, con B
+        j.tecla("Space" if re.search(r"video de la historia 2 \(\S+\): reproduciendo", j.texto_log()) else "Backspace", 2500)
+    j.captura("e_mapa_despues")
+    j.tecla("D", 1500)
+    j.captura("f_cursor")
+    j.tecla("Backspace", 2000)
+    j.captura("g_menu")
+
+
+def _r1_historia(j, par):
+    # frente R1 (ronda 4): escenas de la historia de IW. Con el reproductor de R7 (video_sfd.h): antes de la mision 11
+    # el video FD01B con sus subtitulos, despues FD02 (A los salta); sin video, las escenas de respaldo (modelos de B3
+    # en el combate / subtitulos sobre el mapa). desde=10: mision 11 (Goku contra Raditz).
+    j.log(r"misiones: iw: mapa de Dragon Mission", 90)
+    time.sleep(4)
+    j.captura("a_mapa")
+    j.tecla("Space", 2500)
+    j.captura("b_ficha")
+    j.tecla("Space", 1500)
+    j.log(r"misiones: iw: escena de la historia antes", 20)
+    if re.search(r"video de la historia \d+ \(\S+\): reproduciendo", j.texto_log()):
+        time.sleep(6)
+        j.captura("c_video_antes")
+        j.tecla("Space", 1500)                       # A: salta el video
+        j.log(r"misiones: iw combate", 40)
+        j.captura("d_tras_video")
+    else:
+        j.log(r"misiones: iw combate", 40)
+        j.log(r"cinematica: paso 2/", 90)   # (DBZ3_TEST_RINGOUT acaba el combate a los 5 s de pelea: corta la escena)
+        time.sleep(0.8)
+        j.captura("c_escena_antes")
+        time.sleep(1.6)
+        j.captura("d_escena_antes2")
+    j.log(r"misiones: iw: mision \d+ superada", 120)
+    time.sleep(5)
+    j.captura("e_resultado")
+    j.tecla("Space", 2500)
+    j.log(r"misiones: iw: escena de la historia despues", 20)
+    time.sleep(5)
+    j.captura("f_escena_despues")
+    j.tecla("Space", 1500)
+    j.captura("g_escena_despues2")
+    if not re.search(r"video de la historia 2 \(\S+\): reproduciendo", j.texto_log()):
+        j.tecla("Backspace", 2000)                   # respaldo: B salta los subtitulos
+    j.captura("h_mapa")
+    j.tecla("Backspace", 2000)
+    j.captura("i_menu")
+
+
+def _r7_video(j, par):
+    # frente R7 (ronda 4): reproductor de videos SFD de IW (src/video_sfd.cpp, DBZ3_TEST_VIDEO=<video>,<espera s>).
+    # FD01B: 22 s, subtitulos del CRITAG del SFD (canal 2) con las imagenes de DATA_USA 78: 5,9-8,3 s, 8,3-10,1 s...
+    # saltar=1: A (Space) a los 9 s y se comprueba que se cierra. Empieza al escribir dbz3_video.req (ya en el menu).
+    time.sleep(3)
+    j.captura("0_menu")
+    if par.get("voces") in ("jp", "en"):   # Configuracion > Idioma voces (fila 6) > japones/ingles, y vuelta al menu
+        for _ in range(5):
+            j.tecla("S", 600)
+        j.tecla("Space", 5000)
+        for _ in range(5):
+            j.tecla("S", 700)
+        j.captura("0_fila_idioma")
+        j.tecla("Space", 2000)
+        j.captura("0_idioma_voces")
+        j.tecla(par.get("flecha", "A" if par["voces"] == "jp" else "D"), 800)   # Voz: < Ingles / Japones >
+        j.captura("0_idioma_elegido")
+        j.tecla("Space", 2500)
+        j.captura("0_idioma_hecho")
+        j.tecla("Backspace", 2000)
+        j.tecla("Backspace", 3000)
+        j.captura("0_vuelta_menu")
+    (j.dest / "dbz3_video.req").write_text("1", encoding="ascii")
+    j.log(r"video: reproducir .*" + par.get("video", "FD01B"), 20)
+    j.log(r"lineas de subtitulo en el CRITAG", 20)
+    j.log(r"voces japonesas" if par.get("jp") == "1" or par.get("voces") == "jp"
+          else r"voces inglesas: opcion del juego 1", 5)
+    t0 = time.time()
+    for nombre, seg in (("a_inicio", 2.5), ("b_linea1", 7.0), ("c_linea2", 9.2)):
+        time.sleep(max(0.0, t0 + seg - time.time()))
+        j.captura(nombre)
+    j.log(r"video: mando y sonido del juego parados \(audio_gain 0", 5)
+    if par.get("saltar") == "1":
+        j.tecla("Space", 1500)
+        j.log(r"video: .* saltado", 10)
+        j.log(r"video: mando y sonido del juego devueltos", 5)
+        time.sleep(2.5)
+        j.captura("d_saltado")
+        # la A que salta no debe llegar al menu nativo (antes entraba en Universo Dragon: estado 5)
+        tras = j.texto_log().split("saltado", 1)[-1]
+        if re.search(r"hub: menu principal estado 5", tras):
+            raise Fallo("la A que salta el video llego al menu del juego")
+        j.info("la A que salta no llego al menu")
+        return
+    time.sleep(max(0.0, t0 + 13.0 - time.time()))
+    j.captura("d_linea4")
+    j.log(r"video: .* leido: ", 40)
+    j.log(r"video: .* acabado", 40)
+    j.log(r"video: subir textura", 10)
+    j.log(r"video: mando y sonido del juego devueltos", 5)
+    time.sleep(1.5)
+    j.captura("e_despues")
+
+
+def _r1_road(j, par):
+    # frente R1 (ronda 4): Fighter's Road de IW. Y (P) en el mapa de Dragon Mission -> eleccion del luchador
+    # (D = derecha) -> A: mapa del Road (#DMD 1092) -> ficha -> combate (DBZ3_TEST_RINGOUT) -> resultado -> Y: vuelta.
+    j.log(r"misiones: iw: mapa de Dragon Mission", 90)
+    time.sleep(4)
+    j.tecla("P", 2500)
+    j.log(r"Fighter's Road: eleccion del luchador", 10)
+    j.captura("a_eleccion")
+    j.tecla("D", 1500)
+    j.captura("b_eleccion2")
+    j.tecla("Space", 2500)
+    j.log(r"Fighter's Road con el id", 10)
+    time.sleep(2)
+    j.captura("c_mapa_road")
+    j.tecla("Space", 2500)
+    j.captura("d_ficha")
+    j.tecla("Space", 1500)
+    j.log(r"misiones: iw combate", 40)
+    time.sleep(16)
+    j.captura("e_combate")
+    j.log(r"misiones: iw: mision \d+ superada", 120)
+    time.sleep(5)
+    j.captura("f_resultado")
+    j.tecla("Space", 2500)
+    j.captura("g_mapa_despues")
+    j.tecla("P", 2000)
+    j.captura("h_dragon_mission")
+
+
+def _r1_traza(j, par):
+    # frente R1 (ronda 4): SONDA de los entrenamientos de IW (DBZ3_R1_TRAZA): mision 2 (Training No.2: guardia, esquiva,
+    # teletransporte) con el registro de la accion (X+3244) y la animacion (X+2928) de los dos luchadores ("iw traza").
+    # Guardia mantenida (Space = G), toques de guardia, guardia + direcciones; el COM ataca.
+    j.log(r"misiones: iw: mapa de Dragon Mission", 90)
+    time.sleep(4)
+    j.tecla("Space", 2500)
+    j.captura("a_ficha")
+    j.tecla("Space", 1500)
+    j.log(r"misiones: iw combate", 40)
+    j.log(r"iw paso 1 estado del combate 4", 90)
+    time.sleep(1)
+    j.captura("b_pelea")
+    j.tecla("Space 4000", 4500)
+    for _ in range(8):
+        j.tecla("Space", 400)
+    for k in ("D", "A", "W", "S"):
+        j.tecla("Space+" + k + " 300", 600)
+    j.tecla("Space 3000", 3500)
+    j.captura("c_guardia")
+    time.sleep(3)
+    j.log(r"iw traza: estado 4", 5)
+
+
+def _r1_entreno9(j, par):
+    # frente R1 (ronda 4): Training No.9 de IW (transformarse con 2 barras de ki o mas y ganar). Goku contra Piccolo:
+    # nada mas empezar la pelea, P+K+G (P+L+Space) = transformarse (Kaioken); DBZ3_TEST_RINGOUT gana a los 5 s.
+    j.log(r"misiones: iw: mapa de Dragon Mission", 90)
+    time.sleep(4)
+    j.tecla("Space", 2500)
+    j.captura("a_ficha")
+    j.tecla("Space", 1500)
+    j.log(r"misiones: iw combate", 40)
+    j.log(r"iw paso 1 estado del combate 4", 90)
+    j.tecla("P+L+Space 200", 900)
+    j.captura("b_transformado")
+    j.log(r"iw: entrenamiento: transformado", 10)
+    j.log(r"misiones: iw: mision \d+ superada", 60)
+    time.sleep(5)
+    j.captura("c_resultado")
+
+
+def _r1_road_rueda(j, par):
+    # frente R1 (ronda 4): Fighter's Road con la rueda del select del juego. Y (P) en el mapa de Dragon Mission -> el
+    # piloto lleva a Duelo > 1P VS COM -> A (Space) confirma el personaje del cursor -> el piloto vuelve -> mapa del Road.
+    j.log(r"misiones: iw: mapa de Dragon Mission", 90)
+    time.sleep(4)
+    j.tecla("P", 1500)
+    j.log(r"Fighter's Road: rueda del juego abierta", 30)
+    time.sleep(2)
+    j.captura("a_rueda")
+    j.tecla("D", 1200)
+    j.captura("b_rueda_cursor")
+    j.tecla("Space", 1500)
+    j.log(r"Fighter's Road con el id \d+ \(rueda del juego", 40)
+    time.sleep(3)
+    j.captura("c_mapa_road")
+    j.tecla("Space", 2500)
+    j.captura("d_ficha")
+
+
+def _r1_traza2(j, par):
+    # frente R1 (ronda 4): SONDA 2 de los entrenamientos (DBZ3_R1_TRAZA): mision 12 (Raditz, COM en Normal, ataca) y
+    # guardia + direccion a rafagas cortas mientras pega, para que salgan la esquiva y el teletransporte en el registro.
+    j.log(r"misiones: iw: mapa de Dragon Mission", 90)
+    time.sleep(4)
+    j.tecla("Space", 2500)
+    j.tecla("Space", 1500)
+    j.log(r"misiones: iw combate", 40)
+    j.log(r"iw paso 1 estado del combate 4", 90)
+    for i in range(70):
+        j.tecla("Space+" + "DAWS"[i % 4] + " 60", 140)
+        if i % 10 == 0:
+            j.tecla("Space 400", 450)
+    j.captura("a_fin")
+    j.log(r"iw traza: estado 4", 5)
+
+
+def _r1_entreno2(j, par):
+    # frente R1 (ronda 4): Training No.2 de IW (guardia, esquiva y teletransporte x5). Guardia mantenida, toques de G y
+    # G + izquierda/derecha a rafagas mientras el COM ataca; se comprueba que cuenta (registro "entrenamiento 2").
+    j.log(r"misiones: iw: mapa de Dragon Mission", 90)
+    time.sleep(4)
+    j.tecla("Space", 2500)
+    j.captura("a_ficha")
+    j.tecla("Space", 1500)
+    j.log(r"misiones: iw combate", 40)
+    j.log(r"iw paso 1 estado del combate 4", 90)
+    j.tecla("Space 3000", 3500)
+    for i in range(60):
+        j.tecla(("Space+" + "DA"[i % 2] + " 60") if i % 3 else "Space 60", 160)
+    j.captura("b_pelea")
+    j.log(r"iw: entrenamiento 2: guardia [1-9]", 5)
+
+
+def _iw_minijuego(j, par):
+    # frente P4 (ronda 3): minijuego del mapa de IW (src/iw_minijuegos.cpp, DBZ3_TEST_IWMINI=<clave>[,auto]) lanzado
+    # desde el menu principal en modo libre (un luchador, camara detras, aros/monedas de IW y TIME). auto=1 (de serie):
+    # el jugador salta solo de aro en aro hasta la meta. auto=0: se mueve con la palanca (W/A/S/D) y se ve la marcha.
+    j.log(r"iwmini: prueba: empieza", 90)
+    j.log(r"iwmini: salida puesta", 60)
+    time.sleep(2)
+    j.captura("a_salida")
+    if par.get("npc") == "1":                         # Bubbles (0x7D1) o Piccolo (0x7DD): se mueven solos
+        if par.get("clave") == "0x7D1":               # Bubbles sale delante (con --env DBZ3_IWMINI_NPC_QUIETO=1
+            j.tecla("W 900", 950)                     # no huye): acercarse y verle correr en el sitio
+            j.tecla("D 250", 300)                     # un paso al lado: que Goku no lo tape
+            j.captura("b_bubbles1")
+            time.sleep(0.25)
+            j.captura("b_bubbles2")
+        j.captura("b_npc")
+        if par.get("auto", "1") == "1":
+            j.log(r"iwmini: (Bubbles atrapado|Piccolo te alcanza|META|TIEMPO)", 120)
+            time.sleep(1)
+            j.captura("c_fin")
+        else:
+            j.tecla("W 3000", 3500)
+            j.captura("c_npc")
+            j.tecla("Right 1300", 1500)               # la cruceta (flecha): en el minijuego anda, no lanza tecnicas
+            j.captura("d_mirar")
+            if par.get("clave") == "0x7DD":           # Piccolo acaba alcanzando al jugador quieto
+                j.log(r"iwmini: Piccolo te alcanza", 40)
+                j.captura("e_fin")
+        return
+    if par.get("quieto") == "1":                      # para sondas: el jugador quieto 22 s
+        time.sleep(11)
+        j.captura("b_quieto1")
+        time.sleep(11)
+        j.captura("b_quieto2")
+        return
+    if par.get("salto") == "1":                       # cruz (A del mando = Semicolon): salto de IW, 24 fotos
+        if not any((j.dest / "mods").glob("Campo IW *")):   # el salto solo corre sobre el suelo de un campo de IW (d->campo)
+            raise Fallo("el salto necesita un mod 'Campo IW <n>' en la carpeta mods de la copia: sin el no hay 'codigo 829'")
+        j.log(r"entrada acabada: mando al jugador", 30)
+        time.sleep(2.5)                               # el cartel del objetivo (140 cuadros) para el mando
+        (j.dest / "dbz3_shot.req").write_text("24 3", encoding="ascii")
+        time.sleep(0.6)
+        j.tecla("Semicolon", 200)
+        time.sleep(2.5)
+        j.log(r"codigo 829", 5)
+        return
+    if par.get("scatto") == "1":                      # circulo (B del mando = Quote): scatto de IW hasta agotarse
+        for i in range(4):                            # 47 de energia cada uno: el 3.o agota y el 4.o no sale
+            if i == 0 and par.get("rafaga"):          # 24 fotos (1 de cada 2 cuadros) del arranque: el polvo
+                j.log(r"entrada acabada: mando al jugador", 30)
+                time.sleep(2.5)                       # el cartel del objetivo
+                (j.dest / "dbz3_shot.req").write_text("72 1", encoding="ascii")
+                time.sleep(0.45)
+            j.tecla("Quote", 600)
+            j.captura(f"b_scatto{i + 1}")
+            time.sleep(1.4)
+        j.log(r"iwmini: scatto: sin energia", 5)
+        j.captura("c_agotado")
+        return
+    if par.get("meta") == "1":                        # la meta (nave de Raditz, modelo de IW) abierta desde el principio
+        j.tecla("W 4000", 4500)
+        j.captura("b_nave")
+        j.tecla("W 3000", 3500)
+        j.captura("c_nave_cerca")
+        return
+    if par.get("lejos") == "1":                       # hasta donde se puede correr en el escenario de B3
+        j.tecla("W 14000", 14500)
+        j.captura("b_lejos")
+        return
+    if par.get("auto", "1") != "1":
+        j.tecla("Up 3000", 3500)
+        j.captura("b_adelante")
+        j.tecla("Right 1500", 2000)
+        j.captura("c_derecha")
+        if par.get("rafaga"):   # 24 fotos (1 de cada 6 cuadros) corriendo, en dbz3_shot_NNN.bmp
+            (j.dest / "dbz3_shot.req").write_text("24 6", encoding="ascii")
+            time.sleep(0.6)
+        j.tecla("W 2500", 3000)
+        j.captura("d_adelante2")
+        j.log(r"iwmini: jugador", 10)
+        return
+    # los aros (y marcas del Radar) que da el #ITM en esa dificultad: "curso (dificultad d): A n B .. C .. D m"
+    m = re.search(r"iwmini: curso \(dificultad \d+\): A (\d+) B \d+ C \d+ D (\d+)", j.texto_log())
+    n = int(m.group(1)) + int(m.group(2)) if m else 8
+    j.log(rf"iwmini: aro {min(3, n)} cogido", 40)
+    time.sleep(0.3)
+    j.captura("b_aros")
+    j.log(rf"iwmini: aro {n} cogido", 40)
+    time.sleep(0.3)
+    j.captura("c_aros")
+    j.log(r"iwmini: (META|TIEMPO):", 60)
+    if par.get("rafaga"):   # --par rafaga=1: 24 fotos (1 de cada 10 cuadros) desde la meta, en dbz3_shot_NNN.bmp
+        (j.dest / "dbz3_shot.req").write_text("24 10", encoding="ascii")
+        time.sleep(4.5)
+    time.sleep(1)
+    j.captura("d_meta")
+    j.log(r"iwmini: final de IW", 30)   # con --env DBZ3_IWMINI_FINAL=1: la animacion final (pantalla azul R16)
+    time.sleep(1.5)
+    j.captura("d_final")
+    j.log(r"iwmini: prueba: resultado", 60)
+    time.sleep(3)
+    j.captura("e_menu")
+
+
+def _r6_ranking(j, par):
+    # frente R6 (ronda 4): HUB > Ranking (entrada 6): pagina del perfil y la siguiente (RB), y el Kumite (entrada 5)
+    # con su selector de retos. Solo mira: no empieza nada.
+    time.sleep(2.5)
+    j.tecla("W", 1200)
+    j.tecla("Space", 3500)                              # HUB (cursor en Tag Team)
+    for _ in range(6):                                  # tagteam .. ranking
+        j.tecla("S", 450)
+    j.tecla("Space", 2500)
+    j.captura("a_ranking")
+    j.tecla("D", 1200)                                  # derecha (= RB): pagina siguiente
+    j.captura("b_ranking_2")
+    j.tecla("Backspace", 2500)
+    j.tecla("W", 450)                                   # ranking -> kumite
+    j.tecla("Space", 2500)
+    j.captura("c_kumite")
+    j.tecla("Backspace", 2000)
+
+
+def _r6_torre(j, par):
+    # frente R6 (ronda 4): HUB > Torre > primer reto: combate (marcador del piso bajo el reloj del juego), ring out
+    # (DBZ3_TEST_RINGOUT) y la pantalla entre combates del HUB. No pulsa nada despues: el reto queda a medias.
+    time.sleep(2.5)
+    j.tecla("W", 1200)
+    j.tecla("Space", 3500)                              # HUB
+    for _ in range(3):                                  # tagteam .. torre
+        j.tecla("S", 450)
+    j.tecla("Space", 2500)                              # selector de retos (Torre arriba)
+    j.captura("a_selector_torre")
+    j.tecla_hasta_log("Space", r"hub: combate nativo", 4, 4)
+    time.sleep(14)
+    j.captura("b_combate")
+    j.log(r"rival fuera del ring", 90)
+    j.log(r"hub: fin del combate nativo", 40)
+    time.sleep(5)
+    j.captura("c_entre")
+
+
+def _m100(j, par):
+    # Mision 100 (rpg.cpp): DBZ3_TEST_MODO empieza la mision n con el luchador id; ring out (DBZ3_TEST_RINGOUT), su
+    # pantalla final con el rango y, con A, vuelta a sus paginas.
+    j.log(r"prueba: mision 100 n \d+ con id \d+: empieza", 120)
+    j.log(r"hub: combate nativo", 60)
+    time.sleep(14)
+    j.captura("a_combate")
+    j.log(r"rpg: fin de", 150)
+    time.sleep(4)
+    j.captura("b_fin")
+    j.tecla("Space", 2500)
+    j.captura("c_paginas")
+    j.tecla("D", 800)                                   # otro luchador
+    j.tecla("S", 800)
+    j.captura("d_paginas2")
+
+
+def _r6_hud(j, par):
+    # frente R6 (ronda 4): HUD de los modos en combate contra varios rivales (Modo Heroe, Saibaman 2/2: el contador
+    # nativo de rivales a la derecha del reloj) y la pantalla entre combates de rpg.cpp. Mismo camino que r5_heroe.
+    time.sleep(2.5)
+    j.tecla("W", 1200)
+    j.tecla("Space", 3500)                              # HUB
+    for _ in range(5):                                  # tagteam .. kumite
+        j.tecla("S", 450)
+    j.tecla("Space", 2500)                              # selector de retos
+    for _ in range(3):                                  # kumite .. modo heroe
+        j.tecla("S", 700)
+    j.tecla("Space", 2500)                              # pantalla de creacion
+    for _ in range(4):                                  # .. Empezar
+        j.tecla("S", 500)
+    j.tecla_hasta_log("Space", r"hub: combate nativo", 4, 4)
+    time.sleep(7)
+    j.captura("a0_presentacion")                        # sin HUD del juego: tampoco el del modo
+    time.sleep(13)                                      # pasa la presentacion: HUD del juego a la vista
+    j.captura("a_hud")
+    time.sleep(3)
+    j.captura("b_hud")
+    j.log(r"combate \d ganado|rpg: fin de", 60)        # (una partida a medias sigue por el 2 o el 3: fin)
+    time.sleep(6)
+    j.captura("c_entre")
+    if par.get("estilo") == "1":                      # RB (tecla 3): otro estilo para el combate siguiente y A
+        j.tecla("3", 1500)
+        j.log(r"heroe: estilo \d+ para el combate", 10)
+        j.captura("d_estilo")
+        j.tecla_hasta_log("Space", r"hub: combate nativo", 4, 6)
+        time.sleep(20)
+        j.captura("e_combate2")
+        j.log(r"heroe: estilo \d+ \(", 30)
+
+
+def _r6_pantallas(j, par):
+    # frente R6 (ronda 4): pantallas de los modos que no salen en las otras pruebas. que=entre|derrota|fin: modos.cpp
+    # las pinta en el menu principal con un reto de ejemplo (DBZ3_TEST_R6_PANTALLA, sin tocar nada); que=sim|torneo:
+    # HUB > Supervivencia/Kumite > Simulacion/Torneo de 4 (su primera pantalla); que=abyss: HUB > Torre > Abyss, gana
+    # el primer piso (ring out) y captura las cartas.
+    que = par.get("que", "entre")
+    time.sleep(3)
+    if que in ("entre", "derrota", "fin"):
+        j.captura(f"a_{que}")
+        return
+    entrada = {"sim": 4, "torneo": 5, "abyss": 3}[que]
+    j.tecla("W", 1200)
+    j.tecla("Space", 3500)                              # HUB
+    for _ in range(entrada):
+        j.tecla("S", 450)
+    j.tecla("Space", 2500)                              # selector de retos
+    j.tecla("S", 600)
+    j.tecla("S", 600)                                   # tercera fila: Simulacion / Torneo de 4 / Abyss
+    j.captura("a_selector")
+    j.tecla("Space", 3000)
+    j.captura(f"b_{que}")
+    if que == "abyss":
+        j.tecla_hasta_log("Space", r"hub: combate nativo", 4, 4)
+        j.log(r"rival fuera del ring", 90)
+        j.log(r"hub: fin del combate nativo", 40)
+        time.sleep(6)
+        j.captura("c_cartas")
+
+
+def _r8_limite(j, par):
+    # frente R8: hasta donde llega un luchador en un escenario. Combate del HUB (--par escenario=5 Llanuras, 17 = alta);
+    # el jugador 1 anda con la palanca (--par tecla=Left) mientras se leen las posiciones de los dos (X+64/+68/+72,
+    # X = mgr+2096+8240*lado) y el aviso de fuera del ring (mgr+35569, lo escribe sub_8211F650). Escribe limite.txt.
+    # --par clave=0x7D2: en el modo libre del minijuego de IW (P4; su campo si esta instalado), tecla W por defecto.
+    import struct as _st
+    j.log(r"iwmini: salida puesta" if par.get("clave") else r"tag: empieza un combate", 90)
+    time.sleep(1)
+
+    def f(a):
+        b = leer(j.h, GBASE + a, 4)
+        return _st.unpack(">f", b)[0] if b and len(b) == 4 else float("nan")
+    lineas, maxr, aviso = [], [0.0, 0.0], None
+    tecla, seg = par.get("tecla", "W" if par.get("clave") else "Left"), float(par.get("seg", "20"))
+    fin = time.time() + seg
+    siguiente = 0.0
+    while time.time() < fin and j.vivo():
+        if time.time() >= siguiente:                  # mantener la palanca (tramos de 3 s)
+            j.tecla(f"{tecla} 3000", 0)
+            siguiente = time.time() + 2.9
+        b = leer(j.h, GBASE + 0x823D6CF4, 4)
+        mgr = _st.unpack(">I", b)[0] if b else 0
+        if not mgr:
+            time.sleep(0.05)
+            continue
+        if not lineas:                                # camara: ojo +0x190, objetivo +0x1A0, fov +0x1C4 y vecinos
+            lineas.append("camara mgr+0x180..0x1E0: " + " ".join("%.2f" % f(mgr + o) for o in range(0x180, 0x1E0, 4)))
+            nb = leer(j.h, GBASE + 0x8238941C, 12) or bytes(12)   # niebla puesta (clima.cpp): activa, ?, color
+            lineas.append("niebla: activa %08X color %08X, %.0f..%.0f" % (
+                _st.unpack_from(">I", nb, 0)[0], _st.unpack_from(">I", nb, 8)[0], f(0x823106B4), f(0x823106B8)))
+        pos = [tuple(f(mgr + 2096 + 8240 * l + o) for o in (64, 68, 72)) for l in (0, 1)]
+        flag = (leer(j.h, GBASE + mgr + 35569, 1) or b"\x00")[0]
+        for l in (0, 1):
+            maxr[l] = max(maxr[l], (pos[l][0] ** 2 + pos[l][2] ** 2) ** 0.5)
+        lineas.append("%.2f %s flag=%d" % (time.time() - j.t0, " ".join("(%.1f,%.1f,%.1f)" % p for p in pos), flag))
+        if flag and aviso is None:
+            aviso = lineas[-1]
+            j.captura("b_fuera")
+        time.sleep(0.05)
+    j.captura("a_lejos")
+    res = "radio maximo: jugador %.1f, rival %.1f; aviso de fuera del ring: %s" % (maxr[0], maxr[1], aviso)
+    (j.run / "limite.txt").write_text("\n".join([res] + lineas), encoding="utf-8")
+    j.info(res)
+
+
+def _r14_botones(j, par):
+    # frente R14: minijuego de botones de IW (src/iw_mini_botones.cpp: 0x7D4 Gohan/Piccolo, 0x7DB Camara del Tiempo,
+    # 0x7DC gravedad). auto=1 (de serie): pulsa solo el boton correcto de cada icono al llegar al objetivo.
+    j.log(r"iwmini: prueba: empieza", 90)
+    j.log(r"r14: en juego", 90)
+    j.captura("a_ready")
+    if par.get("teclas") == "1":                      # sonda: cada boton del mando (teclado de pruebas) por turno
+        for k in ("L", "P", "Semicolon", "Quote", "1", "3", "Q", "E", "W", "D", "S", "A", "Shift+Up", "Shift+Right"):
+            j.tecla(k + " 150", 500)
+        return
+    time.sleep(4)
+    j.captura("b_iconos")
+    time.sleep(6)
+    j.captura("c_iconos")
+    j.log(r"r14: fin: ", int(par.get("seg", "240")))   # 0x7DA (10 rondas) tarda ~4 min: --par seg=420
+    time.sleep(1.5)
+    j.captura("d_fin")
+    j.log(r"r14: resultado ", 30)
+    j.log(r"iwmini: prueba: resultado superado", 30)
+
+
+def _r12_vuelo(j, par):
+    # frente R12: minijuegos de vuelo de IW (src/iw_mini_vuelo.cpp: 0x7D6 Vegeta, 0x7E0 carrera con Goten). auto=1 (de
+    # serie): piloto que gira hacia el punto de control mas cercano (y luego la meta) con R1 si el medidor lo permite.
+    j.log(r"iwmini: prueba: empieza", 90)
+    j.log(r"r12: empieza el vuelo", 90)
+    time.sleep(1.5)
+    j.captura("a_salida")
+    if par.get("auto", "1") != "1":                   # a mano: palanca arriba y a la derecha (W / D)
+        j.tecla("W 4000", 4200)
+        j.captura("b_adelante")
+        j.tecla("D 1200", 1400)
+        j.captura("c_derecha")
+        j.tecla("W 3000", 3200)
+        j.captura("d_adelante2")
+        for k in ("L", "P", "Semicolon", "Quote"):     # botones de golpe: el luchador de B3 no debe atacar
+            j.tecla(k + " 150", 300)
+        j.captura("e_botones")
+        j.log(r"r12: \(", 10)
+        return
+    time.sleep(5)
+    j.captura("b_vuelo")
+    j.log(r"r12: punto de control", 60)
+    time.sleep(0.3)
+    j.captura("c_control")
+    j.log(r"r12: fin \(", 240)
+    time.sleep(1.0)
+    j.captura("d_fin")
+    j.log(r"r12: resultado ", 60)
+    j.log(r"iwmini: prueba: resultado superado", 30)
+
+
 ESCENARIOS = {
+    "_r12_vuelo": ("R12: minijuego de vuelo de IW (--par clave=0x7D6 Vegeta | 0x7E0 Goten; auto=0 sin piloto)",
+                   lambda p: {"DBZ3_TEST_IWMINI": p.get("clave", "0x7D6") + (",auto" if p.get("auto", "1") == "1"
+                                                                               else ""),
+                              "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r12_vuelo),
+    "_r14_botones": ("R14: minijuego de botones de IW (--par clave=0x7DC; auto=0 sin piloto)",
+                     lambda p: {"DBZ3_TEST_IWMINI": p.get("clave", "0x7DC") + (",auto" if p.get("auto", "1") == "1"
+                                                                                 else "") +
+                                                    (",fallos" if p.get("fallos") == "1" else ""),
+                                "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r14_botones),
+    "r8_limite": ("R8: radio hasta el que llega un luchador y fuera del ring (--par escenario=5, tecla=Left, seg=20)",
+                  lambda p: ({"DBZ3_TEST_IWMINI": p["clave"], "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"} if p.get("clave")
+                             else {"DBZ3_TEST_BATTLE": "0,7," + p.get("escenario", "5")}), _r8_limite),
+    "r6_pantallas": ("Pantallas de los modos (que=entre|derrota|fin|sim|torneo|abyss) para revisar a ojo",
+                     lambda p: dict({"DBZ3_TEST_RINGOUT": "1"},
+                                    **({"DBZ3_TEST_R6_PANTALLA": p.get("que", "entre")}
+                                       if p.get("que", "entre") in ("entre", "derrota", "fin") else {})),
+                     _r6_pantallas),
+    "hub_filas": ("HUB pagina 2: fila Pasarela (avance de las campanas) y fila Mision 100 abierta desde el HUB",
+                  lambda p: {}, _hub_filas),
+    "m100": ("Mision 100 (rpg.cpp): mision n con el luchador id (--par n=5 id=0), ring out, rango y sus paginas",
+             lambda p: {"DBZ3_TEST_MODO": "mision100,%s,%s" % (p.get("id", "0"), p.get("n", "1")),
+                        "DBZ3_TEST_RINGOUT": "1"}, _m100),
+    "r6_hud": ("HUD de los modos con el contador nativo de rivales (Modo Heroe vs Saibaman) y entre combates",
+               lambda p: {"DBZ3_TEST_RINGOUT": "1"}, _r6_hud),
+    "r6_torre": ("HUB > Torre: combate con el marcador del HUB y pantalla entre combates (ring out)",
+                 lambda p: {"DBZ3_TEST_RINGOUT": "1"}, _r6_torre),
+    "r6_ranking": ("HUB > Ranking (perfil y pagina 2) y selector del Kumite (solo mirar)", lambda p: {}, _r6_ranking),
+    "iw_minijuego": ("Minijuego del mapa de IW (--par clave=0x7D0: Raditz; auto=0 sin piloto automatico)",
+                     lambda p: {"DBZ3_TEST_IWMINI": p.get("clave", "0x7D0") + (",auto" if p.get("auto", "1") == "1"
+                                                                                 else "") +
+                                                    (",meta" if p.get("meta") == "1" else ""),
+                                "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _iw_minijuego),
+    "iw_mapa": ("Pasarela > Misiones del Dragon de IW con el mapa de IW: mapa, ficha, combate, resultado (desde=N)",
+                lambda p: {"DBZ3_TEST_MISIONES": f"4,reset,desde={p.get('desde', '10')}", "DBZ3_TEST_RINGOUT": "1",
+                           "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _iw_mapa),
+    "r1_historia": ("Pasarela > IW: escenas de la historia antes (motor de B3) y despues (mapa) de la mision 11",
+                    lambda p: {"DBZ3_TEST_MISIONES": f"4,reset,desde={p.get('desde', '10')}", "DBZ3_TEST_RINGOUT": "1",
+                               "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r1_historia),
+    "r1_road": ("Pasarela > IW: Fighter's Road (Y en el mapa): luchador, mapa del #DMD 1092, combate y resultado",
+                lambda p: {"DBZ3_TEST_MISIONES": "4,reset,desde=10", "DBZ3_TEST_RINGOUT": "1",
+                           "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r1_road),
+    "r1_traza": ("Pasarela > IW: sonda de los entrenamientos (mision 2, accion y animacion de los luchadores al registro)",
+                 lambda p: {"DBZ3_TEST_MISIONES": "4,reset,desde=1", "DBZ3_R1_TRAZA": "1",
+                            "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r1_traza),
+    "r1_entreno9": ("Pasarela > IW: Training No.9 (transformarse y ganar): Kaioken y K.O. por ring out",
+                    lambda p: {"DBZ3_TEST_MISIONES": "4,reset,desde=8", "DBZ3_TEST_RINGOUT": "1",
+                               "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r1_entreno9),
+    "r1_road_rueda": ("Pasarela > IW: Fighter's Road con la rueda del select del juego (piloto del Tag Team)",
+                      lambda p: {"DBZ3_TEST_MISIONES": "4,reset,desde=10",
+                                 "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r1_road_rueda),
+    "r1_traza2": ("Pasarela > IW: sonda 2 (mision 12, guardia+direccion a rafagas: esquiva y teletransporte)",
+                  lambda p: {"DBZ3_TEST_MISIONES": "4,reset,desde=11", "DBZ3_R1_TRAZA": "1",
+                             "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r1_traza2),
+    "r1_entreno2": ("Pasarela > IW: Training No.2 (guardia, esquiva y teletransporte): el recuento en el registro",
+                    lambda p: {"DBZ3_TEST_MISIONES": "4,reset,desde=1", "DBZ3_R1_TRAZA": "1",
+                               "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r1_entreno2),
+    "iw_misiones": ("Pasarela > Misiones del Dragon de IW (tabla del ELF): ficha de la mision 1 y su combate "
+                    "(--par desde=2: ficha de no disponibles)",
+                    lambda p: {"DBZ3_TEST_MISIONES": f"4,reset,desde={p.get('desde', '0')}",
+                               "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _iw_misiones),
+    "r2_nave": ("Pasarela > Nave de Babidi de B2 (ISO del jugador): menu de pruebas, prueba III, combate, Kili",
+                lambda p: {"DBZ3_TEST_MISIONES": "5,reset", "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r2_nave),
+    "r2_fase1": ("Pasarela > Dragon World de B2: la fase I entera en automatico (presentacion, combates, sucesos, fin)",
+                 lambda p: {"DBZ3_TEST_MISIONES": "1,auto,reset", "DBZ3_TEST_RINGOUT": "1",
+                            "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r2_fase1),
+    "r2_deseo": ("Pasarela > Dragon World de B2: deseos de Shenron y el portal de la Nave de Babidi",
+                 lambda p: {"DBZ3_TEST_MISIONES": "1,reset", "DBZ3_TEST_B2_DESEO": "1",
+                            "DBZ3_TEST_SHEN_ANIM": p.get("anim", "2"),
+                            "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r2_deseo),
+    "r2_fases": ("Pasarela > Dragon World de B2: fases seguidas en automatico hasta la IX (--par desde=1 = la II)",
+                 lambda p: {"DBZ3_TEST_MISIONES": "1,auto,reset,desde=%s" % p.get("desde", "1"),
+                            "DBZ3_TEST_RINGOUT": "1", "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r2_fases),
+    "tablero": ("Pasarela > Dragon World de B2 (ISO del jugador): preparacion, tablero, movimiento, contacto, combate",
+                lambda p: {"DBZ3_TEST_MISIONES": "1,reset", "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games",
+                           "DBZ3_TEST_B2_CONDICION": p.get("condicion", "0")}, _tablero),
+    "bordes": ("menu principal y Duelo con las tiras doradas nativas ocultas o visibles (--par bordes=true)",
+               lambda p: {"REX_DBZ3_UI_SIDE_BORDERS": p.get("bordes", "false")}, _bordes),
+    "satan": ("HUB > Leyenda de Mr. Satan: titulo, dificultad, prologo, combate ganado, resultado, tablero, escena "
+              "(desde=25: final)",
+              lambda p: {"DBZ3_TEST_PASARELA": f"auto,seg=8,desde={p.get('desde', '0')}", "DBZ3_TEST_RINGOUT": "1",
+                         **({"DBZ3_SIN_CINE": "1"} if p.get("golpes") == "1" else {}),
+                         "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _satan),
+    "_r3_cine": ("Leyenda de Mr. Satan: tablero y escena 3D del retador (desde=2 Ten Shin Han; 1 Yamcha sin escena; "
+                 "prologo=1)",
+                 lambda p: {"DBZ3_TEST_PASARELA": f"auto,seg=8,desde={p.get('desde', '2')}"
+                            + (",prologo" if p.get("prologo") == "1" else ""),
+                            "DBZ3_CINE_TRAZA": "1", **({"DBZ3_TEST_RINGOUT": "1"} if p.get("ringout") == "1" else {}),
+                            **({"DBZ3_CINE_KI": "1"} if p.get("ki") == "1" else {}),
+                            "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r3_cine),
+    "_r7_video": ("Video SFD de IW a pantalla completa con audio y subtitulos (--par video=FD01B|ENDING, saltar=1, "
+                  "jp=1 voces japonesas)",
+                  lambda p: {"DBZ3_TEST_VIDEO": p.get("video", "FD01B") + (",jp" if p.get("jp") == "1" else ""),
+                             "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r7_video),
+    "_r3_golpes": ("Leyenda de Mr. Satan: combo del jugador (combo_max) y carga de ki (sonda), sin escena",
+                   lambda p: {"DBZ3_TEST_PASARELA": "auto,seg=8,desde=1", "DBZ3_SIN_CINE": "1", "DBZ3_CINE_TRAZA": "1",
+                              "DBZ3_COMBATE_MUNECO": "quieto", "DBZ3_PS2_GAMES": r"D:\DBZ3HD\ps2_games"}, _r3_golpes),
     "menu": ("llegar al menu principal y captura", lambda p: {}, _menu),
     "du_freezer_nuevo": ("DU > nueva historia > rueda > Freezer > bucle de combate",
                          lambda p: {}, _du_freezer_nuevo),
@@ -851,6 +1949,18 @@ ESCENARIOS = {
                       lambda p: {}, _duelo_fundido),
     "hub_online_fundido": ("HUB > Online: llegada al Duelo y pantalla ONLINE con rafagas de capturas",
                            lambda p: {}, _hub_online_fundido),
+    "tienda": ("HUB > Supervivencia con tienda: gana el primer combate y captura la tienda (piezas de la Skill Shop)",
+               lambda p: {"DBZ3_TEST_RINGOUT": "1"}, _tienda),
+    "hub_lab": ("HUB (fondo propio, sin tiras) > Laboratorio: fondo y selector de luchador y rival",
+                lambda p: {}, _hub_lab),
+    "heroe": ("HUB > Kumite > Modo Heroe: crear (Humano, Krilin, traje 2, maestro Krilin) y empezar la mision",
+              lambda p: {"DBZ3_TEST_RINGOUT": "1"}, _heroe_crear),
+    "r5_heroe": ("Modo Heroe (R5): cuerpo del rpg.toml con el moveset de otro luchador (estilo) en combate",
+                 lambda p: {"DBZ3_TEST_RINGOUT": "1"} if p.get("ringout") == "1" else {}, _r5_heroe),
+    "fusion_yamhan": ("combate normal Yamcha vs Vegeta: a los 3 s se fusiona en Yamhan (src/fusion.cpp)",
+                      lambda p: dict({"DBZ3_TEST_BATTLE": p.get("ids", "13,7,2")},
+                                     **({} if p.get("gesto") == "1" else {"DBZ3_TEST_FUSION": p.get("seg", "3")})),
+                      _fusion_yamhan),
     "tag_swap": ("Tag Team 1P vs COM, relevo con SELECT",
                  lambda p: dict({"DBZ3_TAG_SLOW": "3"},
                                 **({} if p.get("swap", "1") == "1" else {"DBZ3_TEST_KO": "1"})),
@@ -918,7 +2028,8 @@ def _correr(copia, escenario, env_extra=(), instantanea=None, par=None):
     try:
         j.lanzar(env)
         t_cupo = j.t_cupo
-        t_menu = j.arrancar(rapido=par.get("titulo_rapido", "1") == "1")
+        # --par arranque=S: espera mas al menu (R8: el paso de escenarios de PS2 corre antes de arrancar)
+        t_menu = j.arrancar(float(par.get("arranque", "120")), rapido=par.get("titulo_rapido", "1") == "1")
         j.info(f"menu principal en {t_menu:.1f} s")
         fn(j, par)
         if not j.vivo():

@@ -82,7 +82,10 @@ const Dbz3TexturePackEntry* Dbz3PackRevalidate(const Dbz3TexturePackEntry* cache
   if (cached == nullptr || cached->hash == hash) {
     return cached;
   }
-  const Dbz3TexturePackEntry* now = Dbz3TexturePackIndex::Get().Find(hash);
+  const Dbz3TexturePackEntry* now = Dbz3HiddenEntry(hash);
+  if (now == nullptr && Dbz3TexturePacksOn()) {
+    now = Dbz3TexturePackIndex::Get().Find(hash);
+  }
   if (now != nullptr && now->width == cached->width && now->height == cached->height) {
     return now;
   }
@@ -1188,8 +1191,62 @@ void Dbz3PackNoteUsed(uint64_t hash) {
   std::thread(SaveUsage, std::move(session), std::move(previous)).detach();  // sin E/S en la GPU
 }
 
+namespace {
+// Tiras de los menus que se ocultan (XXH3 del nivel base, RGBA8, volcado de la copia del jugador):
+//  - "borde" de data_usi (128x1024): tira interior, dentro del 4:3;
+//  - greca dorada exterior del marco 16:9 (64x1024), sobre el relleno amarillo (10BD011B92384BD7, se queda).
+struct HiddenTexture {
+  Dbz3TexturePackEntry entry;
+  std::shared_ptr<const Dbz3TexturePackIndex::Image> image;  // transparente (alfa 0) con mips
+};
+std::array<HiddenTexture, 2>& Hidden() {
+  static std::array<HiddenTexture, 2> hidden = [] {
+    std::array<HiddenTexture, 2> h{{{{0x4B735AD364D513BAull, {}, 128, 1024, 1, "bordes dorados apagados"}, {}},
+                                    {{0xB21DA43CB61A3DCDull, {}, 64, 1024, 1, "bordes dorados apagados"}, {}}}};
+    for (HiddenTexture& t : h) {
+      auto im = std::make_shared<Dbz3TexturePackIndex::Image>();
+      im->width = t.entry.width;
+      im->height = t.entry.height;
+      BuildMipChain(*im, std::vector<uint8_t>(size_t(im->width) * im->height * 4, 0));
+      t.image = std::move(im);
+    }
+    return h;
+  }();
+  return hidden;
+}
+std::shared_ptr<const Dbz3TexturePackIndex::Image> HiddenImage(const Dbz3TexturePackEntry& entry) {
+  for (const HiddenTexture& t : Hidden()) {
+    if (&entry == &t.entry) {
+      return t.image;
+    }
+  }
+  return nullptr;
+}
+}  // namespace
+
+bool Dbz3SideBordersHidden() { return rex::cvar::GetFlagByName("dbz3_ui_side_borders") == "false"; }
+
+bool Dbz3MaybeHiddenSize(uint32_t width, uint32_t height) {
+  return height == 1024 && (width == 128 || width == 64);
+}
+
+const Dbz3TexturePackEntry* Dbz3HiddenEntry(uint64_t hash) {
+  if (!Dbz3SideBordersHidden()) {
+    return nullptr;
+  }
+  for (const HiddenTexture& t : Hidden()) {
+    if (t.entry.hash == hash) {
+      return &t.entry;
+    }
+  }
+  return nullptr;
+}
+
 std::shared_ptr<const Dbz3TexturePackIndex::Image> Dbz3TexturePackIndex::Decoded(
     const Dbz3TexturePackEntry& entry) const {
+  if (auto hidden = HiddenImage(entry)) {
+    return hidden;
+  }
   if (auto cached = CacheGet(entry.hash)) {
     return cached;
   }
@@ -1205,6 +1262,9 @@ std::shared_ptr<const Dbz3TexturePackIndex::Image> Dbz3TexturePackIndex::Decoded
 
 std::shared_ptr<const Dbz3TexturePackIndex::Image> Dbz3TexturePackIndex::TryDecoded(
     const Dbz3TexturePackEntry& entry) const {
+  if (auto hidden = HiddenImage(entry)) {
+    return hidden;
+  }
   if (auto cached = CacheGet(entry.hash)) {
     return cached;
   }

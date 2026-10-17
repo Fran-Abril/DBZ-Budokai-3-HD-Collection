@@ -14,10 +14,10 @@ struct Area;
 
 namespace dbz3::modos {
 
-// 0-2: los retos de modos.cpp; 3-9: los de rpg.cpp (StartPropio), cada uno con su record.
+// 0-2: los retos de modos.cpp; 3-10: los de rpg.cpp (StartPropio), cada uno con su record (10: Mision 100).
 enum Tipo : int {
   kTorre = 0, kSupervivencia = 1, kKumite = 2, kSimulacion = 3, kTienda = 4, kHeroe = 5, kTorres = 6, kAbyss = 7,
-  kJefes = 8, kTorneo4 = 9, kTipos = 10
+  kJefes = 8, kTorneo4 = 9, kMision = 10, kTipos = 11
 };
 enum Fase : int { kNada = 0, kCombate = 1, kEntre = 2, kFin = 3 };
 enum Resultado : int { kNinguno = -1, kDerrota = 0, kVictoria = 1, kAbandono = 2, kGuardado = 3 };
@@ -71,6 +71,9 @@ bool Continue();
 void Abort();
 Estado Get();
 void SetVida(int vida, int vida_max);
+// Luchador del combate siguiente (entre combates de un reto propio; Modo Heroe: otro estilo). Si ya estaba pedido
+// encadenado con el anterior, se cancela y se pide con el nuevo al seguir.
+void SetJugador(int id);
 void SetReglas(const Reglas& r);
 void SetSiguiente(const Pelea& p);              // rival del combate siguiente (Torneo de 4: el finalista)
 bool ArmaduraActiva();                          // armadura del jefe ahora mismo (marcador)
@@ -90,7 +93,12 @@ namespace dbz3::rpg {
 void Premio(int zeni);       // Zenie al monedero del HUB (reto completado)
 bool Activa();               // tiene una pantalla que ensenar (menu principal)
 bool Busy();                 // selector o reto propio abierto (el HUB espera)
-void AbrirSelector(int entrada);   // 0 torre, 1 supervivencia, 2 kumite (entradas del HUB)
+bool Heroe();                // pantallas del Modo Heroe (su fondo propio)
+bool Mision100();            // pantalla de Mision 100 (su fondo y anfitrion propios)
+void AbrirSelector(int entrada);   // 0 torre, 1 supervivencia, 2 kumite, 3 Mision 100 (entradas del HUB)
+bool ProbarMision(int n, int jugador);   // PRUEBAS: empieza la mision n (1-100) de la Mision 100
+bool EquiposMision();               // la mision en curso lleva equipos (tagteam_slots.cpp no los borra)
 void Dibujar(ImDrawList* dl, const dbz3::ingame::style::Area& a, float t, uint16_t pulsado);
-void Hud(ImDrawList* dl, const dbz3::ingame::style::Area& a);   // durante la pelea de un reto propio
+// durante la pelea de un reto propio: sus reglas en la linea y (px del area) del bloque del HUD de los modos
+void Hud(ImDrawList* dl, const dbz3::ingame::style::Area& a, float y);
 }  // namespace dbz3::rpg

@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <array>
+#include <cstdio>
 #include <cstring>
 
 #include <rex/assert.h>
@@ -28,6 +29,9 @@
 
 REXCVAR_DEFINE_BOOL(audio_mute, false, "Audio", "Mute audio output");
 REXCVAR_DEFINE_DOUBLE(audio_gain, 1.0, "Audio", "Output gain (0.0 - 1.0)");
+REXCVAR_DEFINE_STRING(dbz3_audio_dump, "", "DBZ3/Dev",
+                      "Graba la salida de audio (float32 estereo, 48 kHz, sin cabecera) en este archivo para los videos; "
+                      "se graba aunque el juego este silenciado. Vacio = no");
 // dbz3 - focus behaviour. `dbz3_window_focused` is written by the app when the
 // window gains/loses focus (same name in the launcher registry, so the value is
 // visible in the config); with `dbz3_mute_unfocused` (launcher: "mute when
@@ -209,6 +213,25 @@ static void Dbz3TrackAudioLevel(const float* buffer, uint32_t channel_samples) {
   window_start = now;
 }
 
+// dbz3_audio_dump: la mezcla estereo (antes del silencio por mute/foco) a un archivo crudo f32le. La primera escritura
+// deja en el log su hora del sistema en ms, para juntarla con el video (ffmpeg -itsoffset).
+static void Dbz3DumpAudio(const float* data, size_t floats) {
+  static std::FILE* f = nullptr;
+  static bool tried = false;
+  if (!tried) {
+    tried = true;
+    const std::string path = REXCVAR_GET(dbz3_audio_dump);
+    if (!path.empty()) {
+      f = std::fopen(path.c_str(), "wb");
+      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now().time_since_epoch()).count();
+      REXAPU_INFO("dbz3 audio: volcado {} -> {} (inicio {} ms, 48000 Hz, 2 canales f32le)", f ? "abierto" : "FALLO", path,
+                  static_cast<long long>(ms));
+    }
+  }
+  if (f) std::fwrite(data, sizeof(float), floats, f);
+}
+
 void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int additional_amount,
                                  [[maybe_unused]] int total_amount) {
   SCOPE_profile_cpu_f("apu");
@@ -243,6 +266,7 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
         sdl_callback_count++;
       }
       std::memset(data, 0, len);
+      if (driver->sdl_device_channels_ == 2) Dbz3DumpAudio(data, size_t(sample_count));
       if (!SDL_PutAudioStreamData(stream, data, len)) {
         REXAPU_ERROR("SDL_PutAudioStreamData() failed while filling silence: {}", SDL_GetError());
         break;
@@ -252,23 +276,22 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
       auto buffer = driver->frames_queued_.front();
       driver->frames_queued_.pop();
       Dbz3TrackAudioLevel(buffer, channel_samples_);
+      // se mezcla siempre (el volcado de dbz3_audio_dump graba aunque este silenciado) y despues se calla si toca
+      switch (driver->sdl_device_channels_) {
+        case 2:
+          conversion::sequential_6_BE_to_interleaved_2_LE(data, buffer, channel_samples_, fold, gain);
+          Dbz3DumpAudio(data, size_t(sample_count));
+          break;
+        case 6:
+          conversion::sequential_6_BE_to_interleaved_6_LE(data, buffer, channel_samples_, mix, gain);
+          break;
+        default:
+          assert_unhandled_case(driver->sdl_device_channels_);
+          break;
+      }
       if (REXCVAR_GET(audio_mute) ||
           (REXCVAR_GET(dbz3_mute_unfocused) && !REXCVAR_GET(dbz3_window_focused))) {
         std::memset(data, 0, len);
-      } else {
-        switch (driver->sdl_device_channels_) {
-          case 2:
-            conversion::sequential_6_BE_to_interleaved_2_LE(data, buffer, channel_samples_, fold,
-                                                            gain);
-            break;
-          case 6:
-            conversion::sequential_6_BE_to_interleaved_6_LE(data, buffer, channel_samples_, mix,
-                                                            gain);
-            break;
-          default:
-            assert_unhandled_case(driver->sdl_device_channels_);
-            break;
-        }
       }
       if (!SDL_PutAudioStreamData(stream, data, len)) {
         REXAPU_ERROR("SDL_PutAudioStreamData() failed: {}", SDL_GetError());

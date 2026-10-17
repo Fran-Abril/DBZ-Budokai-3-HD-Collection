@@ -57,6 +57,7 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #pragma comment(lib, "comdlg32.lib")
 #endif
 #include "launcher/launcher_state.h"
+#include "launcher/mod_pipeline.h"
 #include "launcher/ui_kit.h"
 #include "launcher/update_check.h"
 #include "ingame/quick_settings.h"
@@ -101,6 +102,7 @@ bool OverlayOpen() { return g_overlay_open.load() || rex::ui::QuickMenuDialog::I
 #include <thread>
 #include <exception>
 #include <cstdio>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <atomic>
@@ -255,6 +257,9 @@ public:
     // Called before Runtime::Setup() - configure GPU plugin
     void OnPreSetup(rex::RuntimeConfig& config) override {
         PhaseLog("OnPreSetup");
+        // antes de crear la GPU: un fallo de D3D12 al arrancar (rex::FatalError -> abort) cerraba en negro sin
+        // ventana ni registro (auditoria9/4C: "se pone en negro y se cierra"); OnPostSetup lo vuelve a poner
+        SetupCrashHandler();
         // Pre-flight check before Runtime::Setup(): without a default.xex the
         // runtime cannot be constructed, and the framework teardown that follows
         // a failed Setup used to end in a confusing 0xC0000005 access violation
@@ -537,6 +542,14 @@ public:
         // F4 opens the settings launcher in-game (hot-reloadable options).
         rex::ui::RegisterBind("bind_dbz3_settings", "F4", "Open settings", [this]() {
             OpenFullSettings();
+        });
+
+        // F2 enciende/apaga el pack HD de texturas en vivo (lo mismo que su opcion de F1).
+        rex::ui::RegisterBind("bind_dbz3_hd_pack", "F2", "Toggle the HD texture pack", []() {
+            const bool on = rex::cvar::GetFlagByName("dbz3_texture_packs_on") != "false";
+            rex::cvar::SetFlagByName("dbz3_texture_packs_on", on ? "false" : "true");
+            dbz3::settings::SaveUserSettings();
+            REXLOG_INFO("dbz3: F2: pack HD {}", on ? "apagado" : "encendido");
         });
 
         // F10 toggles the in-game dev overlay (only meaningful once running).
@@ -900,6 +913,13 @@ protected:
     // launcher's Play button calls ReXApp::LaunchModule() directly.
     void LaunchModule() override {
         if (REXCVAR_GET(dbz3_skip_launcher)) {
+            // R8 (pruebas): el mismo paso que JUGAR del launcher, escenarios de los juegos de PS2 del jugador
+            if (std::getenv("DBZ3_TEST_ESCENARIOS_AUTO")) {
+                dbz3::launcher::ModPipeline stages;
+                stages.BuildStages();
+                stages.Wait();
+                REXLOG_INFO("dbz3: escenarios de PS2 (prueba): {}", stages.Output());
+            }
             // Skip-launcher is a dev/test fast path. Still guard the XEX so a
             // missing/unrecognized executable does not hit the cryptic "No
             // function registered" guest exit.
@@ -969,6 +989,16 @@ protected:
             // Sin launcher tambien queda en el log la linea `entorno` (version de cada
             // componente, SO, RAM): la necesitan el diagnostico del Mod Kit y los reportes.
             dbz3::launcher::InstalledComponents();
+            // Arranque rapido desde la ISO: la misma copia de sus .afs que hace JUGAR (una vez, segundos) y se vuelve
+            // a montar el disco para que la sirva
+            if (dbz3::settings::IsIsoMode()) {
+                if (dbz3::settings::IsoDataPending(false) > 0) {
+                    std::string error;
+                    if (dbz3::settings::PrepareIsoData(false, nullptr, &error)) {
+                        dbz3::RelocateGameData(dbz3::EffectiveGameRoot());
+                    }
+                }
+            }
             REXLOG_INFO("dbz3: skip_launcher set, booting directly");
             ReXApp::LaunchModule();
             return;
@@ -1141,6 +1171,7 @@ private:
                 REXLOG_CRITICAL("terminate stack[{:02d}]: {:p}", i, frames[i]);
             }
             rex::FlushLogging();
+            crash_logged_ = true;   // el abort() de abajo no saca otra ventana (SIGABRT)
             if (!std::getenv("DBZ3_NO_DIALOGS"))
             dbz3::i18n::SetLanguage(dbz3::settings::Language());
             MessageBoxA(nullptr,
@@ -1153,6 +1184,29 @@ private:
                         "DBZ Budokai 3 - Error",
                         MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
             std::abort();
+        });
+        // abort() sin excepcion (rex::FatalError: GPU que no arranca o se pierde) no pasa por lo de arriba: el
+        // jugador solo veia la pantalla en negro y el cierre. Ventana con el registro y la prueba de Vulkan.
+        std::signal(SIGABRT, [](int) {
+            if (crash_logged_.exchange(true)) return;
+            REXLOG_CRITICAL("abort(): error fatal del runtime (grafica o arranque)");
+            rex::FlushLogging();
+            if (std::getenv("DBZ3_NO_DIALOGS")) return;
+            dbz3::i18n::SetLanguage(dbz3::settings::Language());
+            const std::string log_path = dbz3::settings::LatestLogPath().string();
+            const std::string msg =
+                std::string(dbz3::i18n::T("DBZ Budokai 3 HD Collection se cerro por un error grave (normalmente de la "
+                                          "tarjeta grafica).",
+                                          "DBZ Budokai 3 HD Collection closed because of a fatal error (usually the "
+                                          "graphics card).")) +
+                "\n\n" + dbz3::i18n::T("El registro del juego esta en:", "The game log is in:") + "\n" +
+                (log_path.empty() ? std::string("logs/") : log_path) + "\n\n" +
+                dbz3::i18n::T("Prueba en el lanzador: Motor grafico -> Vulkan, y actualiza el driver de la grafica. "
+                              "Si sigue, comparte el registro.",
+                              "Try in the launcher: Graphics engine -> Vulkan, and update your graphics driver. "
+                              "If it persists, share the log.");
+            MessageBoxA(nullptr, msg.c_str(), "DBZ Budokai 3 - Error",
+                        MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
         });
 #endif
     }

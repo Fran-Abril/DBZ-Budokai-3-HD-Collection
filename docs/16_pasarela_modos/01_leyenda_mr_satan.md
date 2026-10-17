@@ -24,7 +24,7 @@ Se encuentra por firma (vale cualquier región): personaje 21 (Mr. Satán) en `+
 | +0x10 | vec4 | posición del lado 1 (x = -15) |
 | +0x20 | u8 | personaje del lado 1 (21 Mr. Satán) |
 | +0x21 / +0x22 | u8 | variante (sin confirmar) / **forma inicial** (Goku 4 = SSJ, Gohan 1 = SSJ, Cell 2 = perfecto) |
-| +0x26 | u16 | cantidad de luchadores seguidos |
+| +0x26 | u16 | cantidad de luchadores seguidos del lado (la de los rivales es **+0x56**: 5 Cell Jr.; la del lado 1 siempre 1) |
 | +0x28 | s16 | (-1 en el modo; en la historia, número de capítulo) |
 | +0x2A | u16 | **vida**; `0xFFFF` = no se recupera (sigue la del combate anterior) |
 | +0x2C | u16 | ki inicial |
@@ -51,14 +51,27 @@ Lo que sale de la tabla (`python "mod center hd/pasarela/pasarela.py" info`):
 | 5 | Trunks (5 → 8) | ki 400; Mr. Satán herido: atacar con ki (regla en código) |
 | 6 | Vegeta (3 → 7) | **60 s** |
 | 7 | Piccolo (6 → 11) | forma 2; cuesta cargar ki (regla en código) |
-| 8 | Cell Jr. (23 → 43) | **5 seguidos de 1000 de vida**, sin tiempo (-2) |
+| 8 | Cell Jr. (23 → 43) | **5 seguidos de 1000 de vida**, tiempo -2 = **el de las opciones** (G+0x2C08C) |
 | 9 | Goku (0 → 0) | forma 4 (SSJ), ki 600 |
 | 10 | Gohan adolescente (2 → 3) | forma 1 (SSJ), **vida sin recuperar** |
 | 11 | Cell (20 → 33) | forma 2 (perfecto), ki 700, **sin límite de tiempo** |
 
 Dificultad: `0x5E9C10` (0 Novato, 1 Experto, 2 Avanzado); el nivel del COM sale de tablas por personaje
 (`0x26C698`, puntero `+0x48` del fichero del personaje, por dificultad). Ronda en curso: `0x5E9C14` (0..10; al
-ganar sube y con 11 va al final, `0x2175B0`). Puntos: vida y tiempo que sobran (`0x198F18`).
+ganar sube y con 11 va al final, `0x2175B0`).
+
+**Puntos** (desensamblado 2026-10-16, rabbitizer; script `E:\DBZ3HD_trabajo\P3\dis.py`): `0x1AF6F0(luchador, puntos,
+etiqueta)` solo actúa en el modo de Mr. Satán: suma en `luchador+0x4F4C` (sin bajar de 0) y mete {puntos, etiqueta}
+en un anillo de 8 avisos (`+0x63C0`). Sus 18 llamadas: HIT 30 × min(n, 10) al que pega (n = golpe n-ésimo del combo,
+`+0x4F40` del que recibe; solo si n < 21), DAMAGE... −20 × n al que recibe (`0x1AB700`), COMBO FIN 60 × n y SPECIAL
+FIN 2000 en el KO final (`0x1AD670`), THROW 300 y SPECIAL 450 (`0x19F6C4`), ANTI-THROW 400, REFLECT 300, BURST! 400,
+CUT-OFF 150, RECOVERY 100, AROUSE ;-) 500, ESCAPE... −300 × (n − 1), DULL... −200 × k. Al acabar (`0x198E18`) el
+ganador suma LIFE (su vida − la del otro) y TIME (segundos que sobran × 20), y la leyenda se queda con **la mitad
+de todo** su marcador (`0x198F00`).
+
+**Voces** (`satanmode.c` → `0x1369D0(canal, entrada ADX)` → `ADXT_StartAfs`): charla del retador r (2.º..11.º) =
+`ADX_JP.AFS` 1269 + 2 (r − 2) (lo que dice) y la siguiente (lo que piensa), tabla del ELF `0x3507F0`; título 1261
+(19 s); 1262-1268 los consejos del título; 1259/1263 música (canal 0), 1178/1180 jingles del resultado y del final.
 
 ### 2.2 Imágenes (AFS de cada idioma, `/USR/DATA_EN|FR|GE|SP|IT.AFS`, entradas 665-669)
 
@@ -79,7 +92,8 @@ El banco de charlas se busca por firma (#AMA, #AMT(10), #AMA, #AMT(26), #AMT(22)
 
 Entrada **"Leyenda de Mr. Satán"** del HUB (clave `satan`, página 2). Con la ISO de B1 en `ps2_games`:
 
-1. Presentación: fondo azul y logo del original (en el idioma del juego), dibujo de Mr. Satán y un texto nuestro.
+1. Título como el de B1: fondo azul (a toda la ventana sin "Bordes dorados"), logo, dibujo de Mr. Satán y "Pulsa
+   START" (666 #5) parpadeando; con START, el letrero de la dificultad y un texto nuestro en el bocadillo.
 2. Por cada retador: charla del original (imagen de texto en el bocadillo del juego) con la cara del rival a la
    derecha; tarjeta "Retador N de 11" con las dos caras del marcador de B3, "VS" y el aviso del original en una
    franja oscura; combate nativo (Mr. Satán contra el equivalente de B3, en el ring de los Juegos de Cell de B3:
@@ -115,5 +129,6 @@ Sin las imágenes del banco (ISO de otra región con otra disposición) el modo 
 | ~~Reglas en código (armadura de A16, Mr. Satán herido, ki lento)~~ | hecho (ronda 2) por memoria, sin ganchos: A16 anula la mitad del daño que recibe; contra Trunks el daño que no viene de gastar ki en los 1,5 s anteriores se queda en un 25 %; contra Piccolo Mr. Satán gana la mitad de ki. Los multiplicadores de B1 están en `satanmode.c` sin descifrar: los valores son nuestros | — |
 | ~~Dificultad Novato/Experto/Avanzado~~ | hecho (ronda 2): el título lleva el letrero de B1 (666 #6) con las 3 dificultades (666 #7-9); la elegida es el **nivel de la IA del COM** (`mgr+35573`: `sub_820FC9B0` lo pone de las opciones en el Duelo y del nivel en el Torneo; lo leen las tablas por personaje de `sub_8213E6C8`, como B1 `charfile+0x48[dificultad]`) | — |
 | ~~Puntos y pantalla de resultado~~ | hecho (ronda 2): puntos como B1 (`0x198E18`: LIFE = vida del ganador − la del otro, TIME = segundos que sobran × 20; la leyenda suma la mitad, `0x198F00`) y pantalla de resultado con las piezas de la 668 (#15 tablón y NEXT BATTLE, #16 "Challenger Nth", #19 "Now!!", #21 "You have", #22 cifras, #24 caras de los 11: vencidos en color, el resto en silueta) y total con récord al final (#18). Sin los puntos por golpe de B1 (HIT, COMBO FIN, THROW...: 14 sucesos más con `0x1AF6F0`; necesitan ganchos en el combate) | — |
-| Voces de Mr. Satán en las charlas | `ADX_JP.AFS` (solo japonés en B1 EU); sin mapa de clips | medio |
+| ~~Cinemáticas de entrada y final~~ | revisado (ronda 3): la ISO europea **no trae ningún vídeo** (ni PSS/SFD/IPU/M2V, ni dentro de los AFS; el ELF no nombra ninguno; listado en `E:\DBZ3HD_trabajo\D\`). La "entrada" (`SATAN DEMO MAIN`) y el final (`SATAN CLEAR MAIN`, "# CLEAR #") son pantallas del motor con las imágenes 666/668/669, que ya se enseñan: título con "Pulsa START" (666 #5) → letrero de dificultad → charlas → resultado → total (668 #18). Los créditos (`endcredits.c`) son los generales del juego, no del modo. La 669 #20 ("Estos son tus puntos y la contraseña") y #21 (web de 2002) no se usan: la contraseña era para una web que ya no existe | — |
+| ~~Voces de Mr. Satán en las charlas~~ | hecho (P3, 2026-10-16): la voz japonesa del original (mapa en §2.1) suena en cada charla y en el título (ADX decodificado en marcha; Windows, por winmm, aparte de la mezcla del juego) | — |
 | ISO americana de B1 | probar la firma de la tabla y del banco (no hay copia en disco) | bajo |

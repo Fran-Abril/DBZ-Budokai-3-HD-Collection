@@ -156,6 +156,16 @@ class RegionDiscDevice : public rex::filesystem::DiscImageDevice {
 
   bool Initialize() override {
     xex_device_ = MakeXexStubDevice(xex_override_, "\\Device\\Dbz3IsoXexStaging");
+    // ISO + mods: los .afs copiados una vez (settings::PrepareIsoData) se sirven como archivos reales, que es lo que
+    // necesita el override por entrada de los mods. Solo si la copia es de ESTA ISO.
+    std::error_code ec;
+    const auto cache = dbz3::settings::IsoDataCacheDir();
+    if (dbz3::settings::IsoDataCacheValid() && std::filesystem::is_directory(cache, ec)) {
+      cache_device_ = std::make_unique<rex::filesystem::HostPathDevice>("\\Device\\Dbz3IsoDatos", cache,
+                                                                        /*read_only=*/true);
+      if (!cache_device_->Initialize()) cache_device_.reset();
+      REXLOG_INFO("MountIsoDrive: .afs para mods desde {} ({})", cache.string(), cache_device_ ? "ok" : "fallo");
+    }
     return DiscImageDevice::Initialize();
   }
 
@@ -173,6 +183,14 @@ class RegionDiscDevice : public rex::filesystem::DiscImageDevice {
         mapped = "eu";
       } else if (mapped.rfind("us\\", 0) == 0 || mapped.rfind("us/", 0) == 0) {
         mapped = "eu" + mapped.substr(2);
+      }
+    }
+
+    if (cache_device_ && !mapped.empty()) {   // solo archivos: un directorio de la copia esconderia el del disco
+      for (const std::string& c : {mapped, prefix_dbz3_ ? PathLeaf(mapped) : std::string()}) {
+        if (c.empty()) continue;
+        auto* e = cache_device_->ResolvePath(c);
+        if (e && !(e->attributes() & rex::filesystem::kFileAttributeDirectory)) return e;
       }
     }
 
@@ -196,6 +214,7 @@ class RegionDiscDevice : public rex::filesystem::DiscImageDevice {
   std::filesystem::path xex_override_;
   bool prefix_dbz3_ = false;
   std::unique_ptr<rex::filesystem::HostPathDevice> xex_device_;
+  std::unique_ptr<rex::filesystem::HostPathDevice> cache_device_;
 };
 
 bool IsoPathActive() {
@@ -261,6 +280,11 @@ std::filesystem::path EffectiveGameRoot() {
   if (!g_effective_game_root.empty()) return g_effective_game_root;
   rex::Runtime* rt = rex::Runtime::instance();
   return rt ? rt->game_data_root() : std::filesystem::path{};
+}
+
+std::filesystem::path HostDataRoot() {
+  if (IsoPathActive() && dbz3::settings::IsoDataCacheValid()) return dbz3::settings::IsoDataCacheDir();
+  return EffectiveGameRoot();
 }
 
 void SetEffectiveGameRoot(const std::filesystem::path& root) {

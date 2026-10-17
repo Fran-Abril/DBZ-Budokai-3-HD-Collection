@@ -6,6 +6,19 @@ are summarized at the end; the full history (in Spanish) is in
 
 Downloads: [latest release](../../releases/latest).
 
+## v1.5.0 (2026-10-17)
+- Dragon HUB: rank plates, new backgrounds/hosts, fly-in fighters, save icon, BETA/EXPERIMENTAL labels.
+- Tag Team (beta): teleport relays, COM vs COM included.
+- Mods now work when playing from the ISO (one-time preparation cache).
+- PS2 gateway: pick your Budokai 1 / Budokai 2 / Infinite World ISO from the launcher or in-game; recognised by content.
+- Renewed launcher (tooltips, Nova's Mods cards, ON/OFF state) and renewed F1 menu.
+- New modes: Mission 100, Hero mode (beta, swappable movesets), Mr. Satan legend (beta, Budokai 3 models).
+- Infinite World campaign and Budokai 2 campaign + Babidi's Ship (EXPERIMENTAL).
+- Single transformation capsule, EU version (from the unreleased 1.4.6).
+- Full translations (EN/ES/FR/DE/IT), including Nova's Mods descriptions.
+- Fixes: ISO cache leftovers on failed copy, PS2 ISO choice save check, B2 board reload, safer HUB menu navigation.
+- Credits: 🇮🇹⚠ 𝐒𝐏𝐈𝐃𝐄𝐑 ⚠🇮🇹 (Infinite World decompilation). Support: https://ko-fi.com/novapowers
+
 ## v1.4.5.1 (2026-10-14)
 - Fixed: an HD texture pack installed from the launcher (Nova's Mods, zip or enabling it) was not used until the game was restarted. The pack index is now rebuilt when the list of packs changes, so the pack shows as soon as you press PLAY.
 

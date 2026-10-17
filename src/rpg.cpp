@@ -35,9 +35,11 @@
 
 #include "guest_region.h"
 #include "ingame/game_style.h"
+#include "launcher/i18n.h"
 #include "launcher/settings.h"
 #include "escenarios.h"
 #include "modos.h"
+#include "tagteam.h"
 
 namespace dbz3::rpg {
 namespace {
@@ -83,57 +85,51 @@ const Articulo kArticulos[] = {
      "Défense : -25% de dégâts subis (prochain combat)", "Abwehr: -25% erlittener Schaden (nächster Kampf)",
      "Difesa: -25% di danni subiti (prossimo incontro)"},
 };
-// Heroe (25): una familia (el cuerpo de Goku, trajes 0-2; el 3 es de un evento) y sus tecnicas compatibles
-struct Variante {
-  int traje, dano, vida, defensa;
-  const char* es;
-  const char* en;
-  const char* fr;
-  const char* de;
-  const char* it;
-};
-const Variante kVariantes[] = {
-    {0, 115, 3000, 100, "Guerrero: +15% de daño", "Warrior: +15% damage", "Guerrier : +15% de dégâts",
-     "Krieger: +15% Schaden", "Guerriero: +15% di danni"},
-    {1, 100, 4000, 100, "Guardián: +1000 de vida", "Guardian: +1000 health", "Gardien : +1000 vie",
-     "Wächter: +1000 Leben", "Guardiano: +1000 vita"},
-    {2, 100, 3000, 80, "Viajero: -20% de daño recibido", "Traveler: -20% damage taken",
-     "Voyageur : -20% de dégâts subis", "Reisender: -20% erlittener Schaden", "Viaggiatore: -20% di danni subiti"},
-};
-struct Tecnica {
-  int capsula;
-  const char* nombre;
-};
-const Tecnica kTecnicas[] = {{6, "Kamehameha"}, {10, "Genki Dama / Spirit Bomb"}, {9, "Warp Kamehameha"}};
-constexpr int kHeroeId = 0;
-struct Paso {
-  int rival, vida, escenario;
-  const char* es;
-  const char* en;
-  const char* fr;
-  const char* de;
-  const char* it;
-};
-const Paso kMision[] = {
-    {42, 1500, 5,
-     "Unos Saibaman atacan la ciudad del Oeste. ¡Demuestra quién eres!",
-     "Saibamen are attacking West City. Show them who you are!",
-     "Des Saibaman attaquent la Capitale de l'Ouest. Montre-leur qui tu es !",
-     "Saibaman greifen die Westliche Hauptstadt an. Zeig ihnen, wer du bist!",
-     "Dei Saibaman attaccano la Città dell'Ovest. Mostra loro chi sei!"},
-    {19, 3000, 4,
-     "Nappa ha visto tu fuerza y viene a por ti. ¡No te rindas!",
-     "Nappa saw your strength and is coming for you. Don't give up!",
-     "Nappa a vu ta force et vient te chercher. N'abandonne pas !",
-     "Nappa hat deine Stärke gesehen und kommt zu dir. Gib nicht auf!",
-     "Nappa ha visto la tua forza e viene a cercarti. Non arrenderti!"},
-    {7, 3500, 6,
-     "El príncipe Vegeta en persona. ¡Es el combate decisivo!",
-     "Prince Vegeta himself. This is the decisive fight!",
-     "Le prince Vegeta en personne. C'est le combat décisif !",
-     "Prinz Vegeta höchstpersönlich. Das ist der entscheidende Kampf!",
-     "Il principe Vegeta in persona. È lo scontro decisivo!"},
-};
+// Heroe (25): la creacion (raza, cuerpo, traje, maestro) y sus reglas estan en heroe.cpp
+}  // namespace
+}  // namespace dbz3::rpg
+namespace dbz3::pasarela {
+int RangoMejora(const std::string& clave, int valor, int pe_por_paso, int pe_primera);   // pasarela.h (Escalafon)
+}
+namespace dbz3::heroe {   // heroe.cpp (creacion del heroe, estilo, sagas; con g_mu puesto)
+void Leer(const toml::table& t);
+void Escribir(std::ostream& o);
+int Cuerpo();
+int Traje();
+int EstiloId();
+int Saga();
+int Nivel();
+int NivelAntes();   // antes de la ultima saga
+int Vida(int estilo);
+int CuerpoDe(int extra, int jugador);
+void Mover(int fila, int dir);
+std::string Fila(int fila);
+std::string Detalle();
+std::string DetalleEstilo(int id);   // bonus y tecnicas del estilo (2 lineas)
+std::string LineaNivel(int pendientes);   // "Nivel 2  XP 1/3" (+ los combates ganados de la saga en curso)
+const char* NombreSaga(int saga);
+int EstiloVecino(int d);   // luchador del estilo elegido +- d (carrusel)
+bool EsMaestro(int id);
+void ElegirEstilo(int id);   // el estilo de la partida es el elegido
+dbz3::modos::Reglas Reglas(int estilo, int extra, int traje);
+void Mision(int saga, int k, int estilo, int cuerpo, int* rival, int* vida, int* escenario);
+std::string MisionTexto(int saga, int k, int rival);
+void FinRun(int ganados, bool victoria);
+void Sync(bool activo);
+}  // namespace dbz3::heroe
+namespace dbz3::rpg {
+namespace {
+namespace M = dbz3::modos;
+namespace S = dbz3::ingame::style;
+namespace H = dbz3::heroe;
+namespace T = dbz3::i18n;   // textos nuevos: T::T(es, en)
+using M::L;
+// Texto con solo es/en en el codigo (titulos de mision, nombres de torre): es y en tal cual; fr/de/it por
+// i18n::T (clave = texto ingles en res/ingame_ui/i18n_modos.toml, o kTable por el espanol).
+const char* Tr(const char* es, const char* en) {
+  return !std::strcmp(dbz3::i18n::LangCode(), "es") ? es : dbz3::i18n::T(es, en);
+}
+// Heroe: sagas de 3 combates en heroe.cpp (Mision, MisionTexto)
 // Torres del Tiempo (26): catalogo (version 1). La de la semana rota cada lunes (semana UTC); 0 y 1, siempre.
 struct Torre {
   const char* es;
@@ -205,6 +201,155 @@ struct Jefe {
 };
 const Jefe kJefes[] = {{33, 5000, 50, 10, 150, 0, 0}, {40, 6000, 60, 8, 175, 0, 1.8f}, {36, 7000, 70, 12, 150, 45, 0}};
 
+// Mision 100 (la idea de Tenkaichi 3, sin sus datos): 20 paginas de 5 misiones por sagas (11 sagas). Todas siguen el
+// mismo patron con la dificultad de su pagina: 0 combate, 1 contrarreloj, 2 aguantar, 3 regla especial (rota cada
+// pagina) y 4 Tag Team (tu y un aliado contra un equipo; SELECT releva) o, cada 5 paginas, supervivencia (3 seguidos
+// con la misma vida). Rango S/A/B/C por la vida que queda; la pagina siguiente se abre con 3 misiones superadas.
+struct PaginaM100 {
+  int a, b, jefe, aliado;   // rivales (distintos: forman el equipo rival) y el aliado de la mision de equipo
+};
+const PaginaM100 kPaginas[] = {
+    {42, 10, 18, 11}, {42, 19, 7, 10},  {42, 21, 20, 7},  {20, 7, 27, 11}, {21, 20, 27, 0},    // Saiyans, Namek
+    {27, 42, 38, 0},  {32, 29, 30, 8},  {29, 30, 28, 11}, {43, 28, 33, 3}, {43, 30, 33, 3},     // Cooler, Androides, Cell
+    {7, 0, 40, 8},    {14, 15, 4, 9},   {7, 42, 37, 16},  {37, 7, 34, 4},  {37, 34, 35, 6},     // Broly, Torneo, Majin
+    {34, 4, 35, 6},   {35, 34, 36, 7},  {36, 14, 17, 0},  {40, 38, 41, 0}, {40, 36, 41, 7}};   // Buu, Uub, Omega
+constexpr int kNumPaginas = int(std::size(kPaginas)), kNumMisiones = kNumPaginas * 5;
+struct MisionM100 {
+  std::vector<int> rivales;   // un combate por rival (supervivencia) o, con equipo, el equipo rival en uno
+  bool equipo = false;
+  int aliado = -1;            // companero del jugador (Tag Team)
+  int vida = 0, tiempo = 0, regen = 0, objetivo = 0;
+  float gigante = 0;
+  M::Reglas reglas;
+};
+MisionM100 MisionDe(int n, int jugador) {
+  n = std::clamp(n, 0, kNumMisiones - 1);
+  const int pg = n / 5, m = n % 5;
+  const PaginaM100& p = kPaginas[pg];
+  MisionM100 x;
+  x.vida = 1800 + 120 * pg;
+  switch (m) {
+    case 0: x.rivales = {p.a}; break;
+    case 1:
+      x.rivales = {p.b};
+      x.tiempo = std::max(45, 99 - 3 * pg);
+      break;
+    case 2:
+      x.rivales = {p.jefe};
+      x.vida = 4000 + 100 * pg;
+      x.objetivo = 40 + pg;
+      x.reglas.dano_recibido = std::min(200, 125 + 5 * pg);
+      break;
+    case 3:
+      x.rivales = {p.jefe};
+      x.vida = 2600 + 120 * pg;
+      if (pg % 4 == 0) x.reglas.ki_drena = 4;
+      if (pg % 4 == 1) x.regen = 15 + pg;
+      if (pg % 4 == 2) x.reglas.armadura = 30 + 2 * pg, x.reglas.ventana = 10;
+      if (pg % 4 == 3) x.gigante = 1.6f;
+      break;
+    default:
+      if (pg % 5 == 4) {   // supervivencia: los tres seguidos, la vida se arrastra
+        x.rivales = {p.a, p.b, p.jefe};
+        break;
+      }
+      x.equipo = true;
+      x.rivales = pg >= 10 ? std::vector<int>{p.a, p.b, p.jefe} : std::vector<int>{p.a, p.jefe};
+      x.aliado = p.aliado != jugador ? p.aliado : jugador != 0 ? 0 : 7;
+      x.vida = 0;   // cada miembro con su vida normal
+      break;
+  }
+  return x;
+}
+// Titulo propio de cada mision (es, en; fr/de/it en ingles, como las torres)
+const char* const kTitulos[100][2] = {
+    {"Semilla saiyan", "Saiyan seed"}, {"Calentamiento en Kame House", "Kame House warm-up"},
+    {"El hermano perdido", "The lost brother"}, {"Cola de mono", "Monkey tail"},
+    {"Alianza inesperada", "Unlikely alliance"}, {"Cosecha de Saibaman", "Saibaman harvest"},
+    {"Nappa no espera", "Nappa won't wait"}, {"Más de 8000", "Over 8000"},
+    {"Orgullo del príncipe", "Prince's pride"}, {"Defensa de la Tierra", "Earth's defense"},
+    {"Exploradores de Namek", "Namek scouts"}, {"La pose de Recoome", "Recoome's pose"},
+    {"Cambio de cuerpo", "Body change"}, {"Armadura de élite", "Elite armor"},
+    {"Tregua en Namek", "Namek truce"}, {"Capitán sin fuerzas", "Captain down"},
+    {"Príncipe traicionado", "Betrayed prince"}, {"El emperador del universo", "Emperor of the universe"},
+    {"Transformación final", "Final transformation"}, {"Fusión namekiana", "Namekian fusion"},
+    {"Fuerzas especiales", "Special forces"}, {"Cuenta atrás de Namek", "Namek countdown"},
+    {"Cinco minutos", "Five minutes"}, {"Planeta en llamas", "Planet ablaze"},
+    {"Leyenda dorada", "Golden legend"}, {"Venganza de familia", "Family revenge"},
+    {"Escuadrón de Cooler", "Cooler's squadron"}, {"El hermano mayor", "The older brother"},
+    {"Metal que se repara", "Self-repairing metal"}, {"Dinastía helada", "Frozen dynasty"},
+    {"Laboratorio secreto", "Secret laboratory"}, {"Ruta de los androides", "Androids' road"},
+    {"Gemelos sin piedad", "Ruthless twins"}, {"Blindaje de Gero", "Gero's plating"},
+    {"Viajero del futuro", "Time traveler"}, {"El 17 al volante", "17 at the wheel"},
+    {"Duelo en la isla", "Island duel"}, {"El gigante pacífico", "The gentle giant"},
+    {"Androide colosal", "Colossal android"}, {"Rival a la altura", "A worthy rival"},
+    {"Hijos de Cell", "Cell's children"}, {"Último aliento del 16", "16's last stand"},
+    {"Los Juegos de Cell", "The Cell Games"}, {"Energía absorbida", "Absorbed energy"},
+    {"Padre e hijo", "Father and son"}, {"Ring del torneo", "Tournament ring"},
+    {"La que escapó", "The one who got away"}, {"Forma perfecta", "Perfect form"},
+    {"Regeneración celular", "Cellular regeneration"}, {"El fin de los juegos", "End of the games"},
+    {"Príncipe en guardia", "Prince on guard"}, {"Saiyan de clase baja", "Low-class Saiyan"},
+    {"El saiyan legendario", "The legendary Saiyan"}, {"Furia sin límites", "Limitless fury"},
+    {"Nuevo planeta Vegeta", "New Planet Vegeta"}, {"Campeón del mundo", "World champion"},
+    {"La hija del campeón", "The champion's daughter"}, {"Héroe enmascarado", "Masked hero"},
+    {"Estrella del torneo", "Tournament star"}, {"Final de exhibición", "Exhibition final"},
+    {"Marca de Majin", "Majin mark"}, {"Guerreros de Babidi", "Babidi's warriors"},
+    {"Rey de los demonios", "King of demons"}, {"Escupitajo de piedra", "Stone spit"},
+    {"Guardianes del cosmos", "Guardians of the cosmos"}, {"Nave de Babidi", "Babidi's ship"},
+    {"Sacrificio del príncipe", "Prince's sacrifice"}, {"El despertar de Buu", "Buu awakens"},
+    {"Cuerpo de goma", "Rubber body"}, {"Poder místico", "Mystic power"},
+    {"Ejército de Babidi", "Babidi's army"}, {"Golosinas para Buu", "Candy for Buu"},
+    {"Mal en estado puro", "Pure evil"}, {"Piel de chicle", "Chewing-gum skin"},
+    {"Noche sin fin", "Endless night"}, {"Buu bueno", "Good Buu"},
+    {"Gohan absorbido", "Gohan absorbed"}, {"Habitación del Tiempo", "Time Chamber"},
+    {"Monstruo colosal", "Colossal monster"}, {"Fusión fallida", "Failed fusion"},
+    {"Por dentro de Buu", "Inside Buu"}, {"La mitad buena", "The good half"},
+    {"Forma original", "Original form"}, {"Genkidama", "Spirit Bomb"},
+    {"Últimos saiyans", "Last Saiyans"}, {"Reencarnación", "Reincarnation"},
+    {"El salvador del mundo", "Savior of the world"}, {"Nuevo discípulo", "New disciple"},
+    {"Talento oculto", "Hidden talent"}, {"Relevo generacional", "Next generation"},
+    {"Furia de Broly", "Broly's rage"}, {"El regreso de Cooler", "Cooler returns"},
+    {"Dragón de una estrella", "One-Star Dragon"}, {"Esferas corruptas", "Corrupted Dragon Balls"},
+    {"Energía negativa", "Negative energy"}, {"Último asalto", "Final assault"},
+    {"Caos primigenio", "Primal chaos"}, {"El dragón definitivo", "The ultimate dragon"},
+    {"Gigante de las sombras", "Shadow giant"}, {"Misión cumplida", "Mission complete"},
+};
+const char* TituloMision(int n) {
+  const auto& t = kTitulos[std::clamp(n, 0, kNumMisiones - 1)];
+  return Tr(t[0], t[1]);
+}
+const char* NombreMision(int n) {
+  const int pg = n / 5, m = n % 5;
+  switch (m) {
+    case 0: return L("Combate", "Battle", "Combat", "Kampf", "Scontro");
+    case 1: return L("Contrarreloj", "Time attack", "Contre la montre", "Zeitangriff", "Contro il tempo");
+    case 2: return L("Aguanta", "Survive", "Tiens bon", "Durchhalten", "Resisti");
+    case 3:
+      switch (pg % 4) {
+        case 0: return L("Ki que se agota", "Draining ki", "Ki qui s'épuise", "Schwindendes Ki", "Ki che si esaurisce");
+        case 1: return L("Rival que se regenera", "Regenerating rival", "Adversaire qui se régénère",
+                         "Gegner mit Regeneration", "Avversario che si rigenera");
+        case 2: return L("Rival blindado", "Armored rival", "Adversaire blindé", "Gepanzerter Gegner", "Avversario corazzato");
+        default: return L("Rival gigante", "Giant rival", "Adversaire géant", "Riesiger Gegner", "Avversario gigante");
+      }
+    default:
+      return pg % 5 == 4 ? L("Supervivencia", "Survival", "Survie", "Überleben", "Sopravvivenza") : "Tag Team";
+  }
+}
+std::string g_m100(kNumMisiones, '-');   // mejor rango de cada mision: - (sin superar), C, B, A, S
+std::atomic<bool> g_equipos{false};      // la mision en curso lleva equipos (tagteam_slots.cpp no los borra)
+bool PaginaAbierta(int pg) {   // con 3 misiones superadas se abre la siguiente (DBZ3_M100_TODO=1: todas abiertas)
+  static const bool todo = std::getenv("DBZ3_M100_TODO") != nullptr;
+  if (pg <= 0 || todo) return true;
+  int n = 0;
+  for (int k = 0; k < 5; ++k) n += g_m100[size_t((pg - 1) * 5 + k)] != '-';
+  return n >= 3;
+}
+char RangoDe(int vida, int vida_max, int recibido) {   // por la vida que queda al acabar; Z = S sin recibir dano
+  const int pc = vida * 100 / std::max(vida_max, 1);
+  return pc >= 75 ? (recibido == 0 ? 'Z' : 'S') : pc >= 50 ? 'A' : pc >= 25 ? 'B' : 'C';
+}
+
 // ---- Partida a medias de cada reto y monedero (user_data/dbz3/rpg.toml) ----
 struct Run {
   int modo = -1;   // M::Tipo (3-9); -1 = ninguna
@@ -246,6 +391,9 @@ bool Leer(const std::filesystem::path& p, bool* nueva) {
     g_tienda_record = int(t["tienda_record"].value_or(int64_t(0)));
     g_heroe_variante = std::clamp(int(t["heroe_variante"].value_or(int64_t(0))), 0, 2);
     g_heroe_tecnicas = int(t["heroe_tecnicas"].value_or(int64_t(3))) & 7;
+    H::Leer(t);
+    g_m100 = t["mision100"].value_or(std::string());
+    g_m100.resize(size_t(kNumMisiones), '-');
     g_runs.clear();
     if (const toml::array* a = t["partida"].as_array()) {
       for (const toml::node& n : *a) {
@@ -268,6 +416,8 @@ bool Leer(const std::filesystem::path& p, bool* nueva) {
         if (const toml::array* b = (*x)["bots"].as_array()) {
           for (size_t k = 0; k < 3 && k < b->size(); ++k) r.bots[k] = int((*b)[k].value_or(int64_t(-1)));
         }
+        if (r.modo == M::kMision) r.extra = std::clamp(r.extra, 0, kNumMisiones - 1);
+        if (r.modo == M::kTorres) r.extra = std::clamp(r.extra, 0, kNumTorres - 1);
         if (r.modo > M::kKumite && r.modo < M::kTipos && r.ganados >= 0 && M::EsJugable(r.jugador)) g_runs[r.modo] = r;
       }
     }
@@ -303,6 +453,8 @@ void Guardar() {   // con g_mu
        "version = 1\nzeni = "
     << g_zeni << "\ntienda_record = " << g_tienda_record << "\nheroe_variante = " << g_heroe_variante
     << "\nheroe_tecnicas = " << g_heroe_tecnicas << "\n";
+  H::Escribir(o);
+  o << "mision100 = " << toml::value<std::string>(g_m100) << "\n";
   for (const auto& [modo, r] : g_runs) {
     o << "\n[[partida]]\nmodo = " << r.modo << "\njugador = " << r.jugador << "\ntraje = " << r.traje
       << "\nsemilla = " << r.semilla << "\nganados = " << r.ganados << "\nvida = " << r.vida << "\nvida_max = "
@@ -429,15 +581,8 @@ M::Reglas ReglasDe(const Run& r) {
   } else if (r.modo == M::kTienda) {
     if (r.eventos.find('1') != std::string::npos) g.dano_hecho = 125;
     if (r.eventos.find('2') != std::string::npos) g.dano_recibido = 75;
-  } else if (r.modo == M::kHeroe) {
-    const Variante& v = kVariantes[std::clamp(r.extra, 0, 2)];
-    g.dano_hecho = v.dano;
-    g.dano_recibido = v.defensa;
-    g.ncaps = 0;
-    for (int k = 0; k < int(std::size(kTecnicas)); ++k) {
-      if (r.tecnicas & (1 << k)) g.caps[g.ncaps++] = kTecnicas[k].capsula;
-    }
-    g.reemplazar = true;   // solo sus dos tecnicas (sin las de la partida de Goku)
+  } else if (r.modo == M::kHeroe) {   // heroe.cpp: bonus y tecnicas del maestro (extra) para ese cuerpo
+    g = H::Reglas(r.jugador, r.extra, r.traje);
   } else if (r.modo == M::kTorres) {
     g = kTorres[std::clamp(r.extra, 0, kNumTorres - 1)].reglas;
   } else if (r.modo == M::kAbyss) {
@@ -449,6 +594,8 @@ M::Reglas ReglasDe(const Run& r) {
       g.ncaps = 1;
       g.caps[0] = 380;
     }
+  } else if (r.modo == M::kMision) {
+    g = MisionDe(r.extra, r.jugador).reglas;
   } else if (r.modo == M::kJefes) {
     const Jefe& j = kJefes[std::clamp(r.ganados, 0, 2)];
     g.armadura = j.armadura;
@@ -477,7 +624,11 @@ std::vector<M::Pelea> PeleasDe(const Run& r) {
       for (int k = 0; k < 5; ++k) add(kTiendaRivales[k], 1500 + 400 * k, k + 1);
       break;
     case M::kHeroe:
-      for (const Paso& p : kMision) add(p.rival, p.vida, p.escenario);
+      for (int k = 0; k < 3; ++k) {   // r.jugador = estilo, r.tecnicas = saga (heroe.cpp)
+        int id = 0, vida = 0, esc = 0;
+        H::Mision(r.tecnicas, k, r.jugador, H::CuerpoDe(r.extra, r.jugador), &id, &vida, &esc);
+        add(id, vida, esc);
+      }
       break;
     case M::kTorres: {
       const Torre& t = kTorres[std::clamp(r.extra, 0, kNumTorres - 1)];
@@ -494,6 +645,16 @@ std::vector<M::Pelea> PeleasDe(const Run& r) {
         v.back().clima = kJefes[k].gigante > 0;
       }
       break;
+    case M::kMision: {
+      const MisionM100 x = MisionDe(r.extra, r.jugador);
+      const size_t n = x.equipo ? 1 : x.rivales.size();
+      for (size_t k = 0; k < n; ++k) {
+        add(x.rivales[k], x.vida, (r.extra + int(k)) % 8, x.tiempo, x.regen, x.objetivo);
+        v.back().gigante = x.gigante;
+        v.back().clima = x.gigante > 0;
+      }
+      break;
+    }
     case M::kTorneo4:   // semifinal contra el bot 1; la final contra quien gane la otra (SetSiguiente)
       add(r.bots[0], 3000, 0);
       add(r.finalista >= 0 ? r.finalista : r.bots[1], 3000, 0);
@@ -510,11 +671,13 @@ const char* Palabra(int modo) {
     case M::kTorres:
     case M::kAbyss: return L("Piso", "Floor", "Étage", "Etage", "Piano");
     case M::kTorneo4: return L("Ronda", "Round", "Tour", "Runde", "Turno");
+    case M::kMision: return L("Combate", "Fight", "Combat", "Kampf", "Incontro");
     default: return L("Jefe", "Boss", "Boss", "Boss", "Boss");
   }
 }
-int PremioDe(int modo) {
+int PremioDe(int modo, int extra = 0) {
   switch (modo) {
+    case M::kMision: return 100 + 25 * (std::clamp(extra, 0, kNumMisiones - 1) / 5);
     case M::kSimulacion: return 500;
     case M::kHeroe: return 700;
     case M::kTorres: return 600;
@@ -526,7 +689,7 @@ int PremioDe(int modo) {
 }
 
 // ---- Pantallas ----
-enum Vista { kCerrada, kSelector, kSimDia, kHeroeP, kTorresP, kCuadro };
+enum Vista { kCerrada, kSelector, kSimDia, kHeroeP, kTorresP, kCuadro, kMisionP };
 Vista g_vista = kCerrada;
 int g_entrada = 0, g_sel = 0, g_cursor = 0, g_cursor2 = 0;   // selector, pantallas, torre
 int g_jugador = 0, g_traje = 0;
@@ -538,6 +701,8 @@ bool g_fin_hecho = false;     // ... ya vista (hasta el siguiente StartPropio)
 M::Estado g_fin_st;           // ... su estado
 Run g_fin_run;
 std::string g_fin_texto;
+int g_pagina = 0, g_m100_sel = 0;   // Mision 100: pagina a la vista y mision elegida
+char g_m100_ultimo = '-';           // rango de la ultima mision superada (pantalla final)
 
 // Retos de cada entrada del HUB: el clasico (0-2) y los nuevos.
 const std::vector<int>& Retos(int entrada) {
@@ -580,11 +745,10 @@ std::string Descripcion(int modo) {
                "Cinque incontri di fila con la stessa vita. Ogni vittoria dà Zenie (di più senza subire danni) "
                "per il negozio: cure e potenziamenti per l'incontro successivo.");
     case M::kHeroe:
-      return L("Crea tu héroe: elige una de tres variantes del guerrero Saiyan y dos técnicas, y vive su misión.",
-               "Create your hero: pick one of three Saiyan warrior variants and two techniques, and live his mission.",
-               "Crée ton héros : choisis une des trois variantes du guerrier Saiyan et deux techniques, et vis sa mission.",
-               "Erschaffe deinen Helden: Wähle eine von drei Varianten des Saiyajin-Kriegers und zwei Techniken und erlebe seine Mission.",
-               "Crea il tuo eroe: scegli una delle tre varianti del guerriero Saiyan e due tecniche, e vivi la sua missione.");
+      return T::T("(Beta) Tu héroe = un cuerpo (su aspecto) + un estilo (los golpes de otro luchador; los maestros dan "
+                  "bonus). Gana combates para subir de nivel.",
+                  "(Beta) Your hero = a body (his look) + a style (another fighter's moves; masters give a bonus). "
+                  "Win fights to level up.");
     case M::kTorres:
       return L("Torres de tres combates con tiempo límite y una regla especial. La de la semana cambia cada lunes.",
                "Three-fight towers with a time limit and a special rule. The weekly one changes every Monday.",
@@ -613,6 +777,17 @@ std::string Descripcion(int modo) {
                "Gegen den letzten musst du durchhalten.",
                "Tre boss corazzati che colpiscono duro. La loro armatura cade per 3 secondi ogni tanto: sfruttalo! "
                "Contro l'ultimo, resisti.");
+    case M::kMision:
+      return L("Cien misiones en 20 páginas, una por saga: combate, contrarreloj, aguantar, una regla especial y Tag Team "
+               "o supervivencia. Rango S/A/B/C según la vida que te quede. Con 3 misiones superadas se abre la página siguiente.",
+               "A hundred missions on 20 pages, one per saga: battle, time attack, survive, a special rule and Tag Team or "
+               "survival. S/A/B/C rank by the health you have left. Clear 3 missions to open the next page.",
+               "Cent missions sur 20 pages, une par saga : combat, contre la montre, tenir, une règle spéciale et Tag Team "
+               "ou survie. Rang S/A/B/C selon la vie restante. Réussis 3 missions pour ouvrir la page suivante.",
+               "Hundert Missionen auf 20 Seiten, eine pro Saga: Kampf, Zeitangriff, Durchhalten, eine Sonderregel und Tag "
+               "Team oder Überleben. Rang S/A/B/C nach dem verbleibenden Leben. 3 geschaffte Missionen öffnen die nächste Seite.",
+               "Cento missioni in 20 pagine, una per saga: scontro, contro il tempo, resistere, una regola speciale e Tag "
+               "Team o sopravvivenza. Grado S/A/B/C in base alla vita rimasta. Supera 3 missioni per aprire la pagina dopo.");
     case M::kTorneo4:
       return L("Un torneo de cuatro con tres rivales de la máquina: semifinal y final. El otro combate se decide "
                "por la fuerza de cada luchador.",
@@ -632,14 +807,90 @@ std::string Lang(const char* es, const char* en, const char* fr, const char* de,
   return L(es, en, fr, de, it);
 }
 
+// Lo que pide la mision n (bocadillo de la Mision 100).
+std::string TextoMision(int n, int jugador) {
+  const MisionM100 x = MisionDe(n, jugador);
+  const int m = n % 5;
+  std::string rivales;
+  for (size_t k = 0; k < x.rivales.size(); ++k) {
+    rivales += (k == 0 ? "" : k + 1 == x.rivales.size() ? Lang(" y ", " and ", " et ", " und ", " e ") : std::string(", ")) +
+               M::Nombre(x.rivales[k]);
+  }
+  const std::string a = M::Nombre(x.rivales[0]);
+  switch (m) {
+    case 0: return Lang("Derrota a ", "Defeat ", "Bats ", "Besiege ", "Sconfiggi ") + a + ".";
+    case 1:
+      return Lang("Derrota a ", "Defeat ", "Bats ", "Besiege ", "Sconfiggi ") + a +
+             Lang(" en menos de ", " in under ", " en moins de ", " in unter ", " in meno di ") + Num(x.tiempo) + " s.";
+    case 2:
+      return Lang("Aguanta ", "Survive ", "Tiens ", "Überlebe ", "Resisti ") + Num(x.objetivo) +
+             Lang(" s contra ", " s against ", " s contre ", " s gegen ", " s contro ") + a +
+             Lang(". Recibes un ", ". You take ", ". Tu subis ", ". Du erleidest ", ". Subisci il ") +
+             Num(x.reglas.dano_recibido - 100) + Lang("% más de daño.", "% more damage.", "% de dégâts en plus.",
+                                                       "% mehr Schaden.", "% di danni in più.");
+    case 3: {
+      std::string s = Lang("Derrota a ", "Defeat ", "Bats ", "Besiege ", "Sconfiggi ") + a + ": ";
+      if (x.reglas.ki_drena > 0) return s + Lang("tu ki se agota poco a poco.", "your ki drains bit by bit.",
+                                                  "ton ki s'épuise peu à peu.", "dein Ki schwindet nach und nach.",
+                                                  "il tuo ki si esaurisce poco a poco.");
+      if (x.regen > 0) return s + Lang("recupera ", "recovers ", "récupère ", "erholt ", "recupera ") + Num(x.regen) +
+                              Lang(" de vida por segundo.", " health per second.", " de vie par seconde.",
+                                   " Leben pro Sekunde.", " di vita al secondo.");
+      if (x.reglas.armadura > 0) return s + Lang("su armadura quita un ", "his armor blocks ", "son armure bloque ",
+                                                 "seine Panzerung blockt ", "la sua armatura blocca il ") +
+                                        Num(x.reglas.armadura) + Lang("% de tu daño y cae cada 10 s.", "% of your damage "
+                                        "and drops every 10 s.", "% de tes dégâts et tombe toutes les 10 s.",
+                                        "% deines Schadens und fällt alle 10 s.", "% dei tuoi danni e cade ogni 10 s.");
+      return s + Lang("es gigante y llega con tormenta.", "he is giant and brings a storm.", "il est géant et amène l'orage.",
+                      "er ist riesig und bringt einen Sturm.", "è gigante e porta la tempesta.");
+    }
+    default:
+      if (!x.equipo) return Lang("Derrota a ", "Defeat ", "Bats ", "Besiege ", "Sconfiggi ") + rivales +
+                            Lang(" seguidos con la misma vida.", " in a row with the same health.",
+                                 " d'affilée avec la même vie.", " nacheinander mit demselben Leben.",
+                                 " di fila con la stessa vita.");
+      return Lang("Tú y ", "You and ", "Toi et ", "Du und ", "Tu e ") + M::Nombre(x.aliado) +
+             Lang(" contra el equipo de ", " against the team of ", " contre l'équipe de ", " gegen das Team von ",
+                  " contro la squadra di ") + rivales + Lang(". SELECT: relevo.", ". SELECT: tag.", ". SELECT : relais.",
+                                                            ". SELECT: Wechsel.", ". SELECT: cambio.");
+  }
+}
+
+// Mision de equipo: los equipos del combate (tagteam_slots.cpp los deja mientras dura: EquiposMision).
+void Equipos(const Run& r) {
+  const MisionM100 x = MisionDe(r.extra, r.jugador);
+  g_equipos = x.equipo;
+  if (!x.equipo) return;
+  dbz3::tag::SetDynamicTeam(0, {r.jugador, x.aliado}, false);
+  dbz3::tag::SetDynamicTeam(1, x.rivales, false);
+  dbz3::tag::SetComSide(1, true);
+  REXLOG_INFO("dbz3 rpg: mision 100 n {}: equipos {}+{} contra {} miembros", r.extra + 1, r.jugador, x.aliado,
+              x.rivales.size());
+}
+
+// Heroe: el rival del combate siguiente segun el estilo y el cuerpo de ahora (heroe.cpp Mision da otro si el rival es el
+// luchador del estilo, porque el registro de combate es por ID y saldria con el cuerpo del heroe, o si es el del
+// cuerpo, que seria un espejo).
+void RivalHeroe(const Run& r, int k) {
+  int id = 0, vida = 0, esc = 0;
+  H::Mision(r.tecnicas, k, r.jugador, H::CuerpoDe(r.extra, r.jugador), &id, &vida, &esc);
+  M::Pelea f;
+  f.rival = id;
+  f.vida = vida;
+  f.escenario = esc;
+  M::SetSiguiente(f);
+}
+
 // ---- Arranque de los combates ----
 // Lanza el combate `r.ganados` de la partida (con g_mu). Primera vez: StartPropio; despues, Continue.
 bool Lanzar(Run& r, bool primero, bool pausado = false) {
   const M::Reglas g = ReglasDe(r);
+  if (r.modo == M::kMision) Equipos(r);
   bool ok;
   if (primero) {
     ok = M::StartPropio(r.modo, M::NombreModo(r.modo), Palabra(r.modo), r.jugador, r.traje, r.vida, r.vida_max,
-                        PeleasDe(r), r.ganados, r.modo == M::kTorres || r.modo == M::kJefes, PremioDe(r.modo),
+                        PeleasDe(r), r.ganados, r.modo == M::kTorres || r.modo == M::kJefes || r.modo == M::kMision,
+                        PremioDe(r.modo, r.extra),
                         pausado);
     if (ok) M::SetReglas(g);   // tras StartPropio: es para el combate que se acaba de pedir
     if (ok) g_fin_hecho = false;
@@ -648,9 +899,18 @@ bool Lanzar(Run& r, bool primero, bool pausado = false) {
     M::SetReglas(g);
     ok = M::Continue();
   }
+  if (!ok && r.modo == M::kMision && g_equipos.exchange(false)) {   // no hubo combate: fuera los equipos
+    dbz3::tag::ClearDynamicTeams();
+    dbz3::tag::SetComSide(1, false);
+  }
   REXLOG_INFO("dbz3 rpg: {} combate {}: {} (vida {}/{}, dano {}%, recibido {}%, armadura {}%, ki {}/s, {} capsulas)",
               M::NombreModo(r.modo), r.ganados + 1, !ok ? "no se pudo pedir" : pausado ? "reanudada (aun sin pedir)" : "pedido", r.vida, r.vida_max,
               g.dano_hecho, g.dano_recibido, g.armadura, g.ki_drena, g.ncaps);
+  if (r.modo == M::kHeroe) {   // el estilo con el que sale de verdad el combate (el que dejo el carrusel)
+    REXLOG_INFO("dbz3 rpg: heroe: estilo {} ({}) para el combate {}, cuerpo {} ({}), vida {}/{}: {}", r.jugador,
+                M::Nombre(r.jugador), r.ganados + 1, H::CuerpoDe(r.extra, r.jugador),
+                M::Nombre(H::CuerpoDe(r.extra, r.jugador)), r.vida, r.vida_max, ok ? "pedido" : "no se pudo pedir");
+  }
   return ok;
 }
 
@@ -668,6 +928,14 @@ void Empezar(int modo) {
     return;
   }
   auto it = g_runs.find(modo);
+  if (modo == M::kMision && it != g_runs.end() && (it->second.extra != g_m100_sel || it->second.ganados == 0)) {
+    g_runs.erase(it);   // otra mision (o la misma sin combates ganados): se empieza de cero
+    it = g_runs.end();
+  }
+  if (modo == M::kHeroe && it != g_runs.end() && it->second.ganados == 0) {   // sin combates ganados: se vuelve a crear
+    g_runs.erase(it);
+    it = g_runs.end();
+  }
   const bool sigue = it != g_runs.end();
   if (!sigue) {   // partida nueva
     Run r;
@@ -675,12 +943,19 @@ void Empezar(int modo) {
     r.jugador = g_jugador;
     r.traje = g_traje;
     r.semilla = Semilla();
-    if (modo == M::kHeroe) {
-      r.jugador = kHeroeId;
-      r.extra = g_heroe_variante;
-      r.traje = kVariantes[r.extra].traje;
-      r.tecnicas = g_heroe_tecnicas;
-      r.vida = r.vida_max = kVariantes[r.extra].vida;
+    if (modo == M::kHeroe) {   // la receta de la pantalla de creacion (heroe.cpp)
+      if (g_vista != kHeroeP) {   // desde el selector: primero se crea el heroe
+        g_vista = kHeroeP;
+        g_cursor = 0;
+        return;
+      }
+      r.jugador = H::EstiloId();      // el combate es del luchador del estilo (su moveset)...
+      r.traje = H::Traje();
+      r.extra = 1000 + H::Cuerpo();   // ... con el modelo del cuerpo (heroe.cpp, Vestir)
+      r.tecnicas = H::Saga();
+      r.vida = r.vida_max = H::Vida(r.jugador);
+    } else if (modo == M::kMision) {
+      r.extra = g_m100_sel;
     } else if (modo == M::kTorres) {
       r.extra = g_cursor2 == 0 ? TorreDeLaSemana(SemanaUtc()) : g_cursor2 - 1;
       r.semilla = uint32_t(SemanaUtc());   // la torre queda fija hasta acabar, aunque cambie la semana
@@ -715,6 +990,8 @@ void Empezar(int modo) {
       break;
     default:
       if (Lanzar(r, true)) g_vista = kCerrada;
+      else g_aviso = L("No se pudo empezar el reto.", "The challenge could not start.", "Le défi n'a pas pu commencer.",
+                       "Die Herausforderung konnte nicht starten.", "Impossibile avviare la sfida.");   // sin callejon mudo
       break;
   }
 }
@@ -728,6 +1005,7 @@ void Sincronizar() {
     REXLOG_INFO("dbz3 rpg: premio de {} Zenie (monedero {})", p, g_zeni);
   }
   const M::Estado st = M::Get();
+  H::Sync(st.propio && st.tipo == M::kHeroe && (st.fase == M::kCombate || st.fase == M::kEntre));
   if (!st.propio) return;
   auto it = g_runs.find(st.tipo);
   if (it == g_runs.end()) return;
@@ -742,6 +1020,8 @@ void Sincronizar() {
       r.eventos.clear();   // las mejoras compradas eran para ese combate
       g_aviso = Lang("¡Victoria! +", "Victory! +", "Victoire ! +", "Sieg! +", "Vittoria! +") + Num(z) + " Zenie" +
                 (st.recibido == 0 ? Lang(" (perfecto)", " (perfect)", " (parfait)", " (perfekt)", " (perfetto)") : "");
+    } else if (r.modo == M::kHeroe) {
+      RivalHeroe(r, r.ganados);   // si se cambio de estilo, que el rival no sea el luchador del estilo
     } else if (r.modo == M::kJefes) {
       r.vida = r.vida_max;   // cada jefe con la vida llena
     } else if (r.modo == M::kAbyss) {
@@ -770,10 +1050,26 @@ void Sincronizar() {
     g_fin_st = st;
     g_fin_run = r;
     g_cursor = 0;
+    if (r.modo == M::kMision) {   // los equipos eran de esta mision; el rango, el mejor de cada una
+      g_equipos = false;
+      dbz3::tag::ClearDynamicTeams();
+      dbz3::tag::SetComSide(1, false);
+      g_m100_ultimo = '-';
+      if (st.resultado == M::kVictoria) {
+        static const std::string kOrden = "-CBASZ";
+        g_m100_ultimo = RangoDe(st.vida, st.vida_max, st.recibido);
+        char& mejor = g_m100[size_t(std::clamp(r.extra, 0, kNumMisiones - 1))];
+        if (kOrden.find(g_m100_ultimo) > kOrden.find(mejor)) mejor = g_m100_ultimo;
+        dbz3::pasarela::RangoMejora("rango_m100_" + Num(r.extra + 1), int(kOrden.find(mejor)), 10, 10);
+        REXLOG_INFO("dbz3 rpg: mision 100 n {}: rango {} (vida {}/{}), mejor {}", r.extra + 1, g_m100_ultimo, st.vida,
+                    st.vida_max, mejor);
+      }
+    }
     if (st.resultado == M::kGuardado || st.resultado == M::kAbandono) {   // se sigue la proxima vez
       r.ganados = st.ganados;
     } else {
       if (r.modo == M::kTienda) g_tienda_record = std::max(g_tienda_record, r.zeni);
+      if (r.modo == M::kHeroe) H::FinRun(st.ganados, st.resultado == M::kVictoria);   // nivel y saga siguiente
       if (r.modo == M::kTorneo4) {   // campeon (extra): el jugador, o el resto del cuadro por la fuerza
         if (r.finalista < 0) r.finalista = (Hash(r.semilla, 77) & 1) ? r.bots[1] : r.bots[2];
         r.extra = st.resultado == M::kVictoria ? r.jugador
@@ -789,33 +1085,143 @@ void Sincronizar() {
 }
 
 // ---- Dibujo ----
-void Lista(ImDrawList* dl, const S::Area& a, float y0, const std::vector<std::string>& filas, int cursor, float t,
-           const std::vector<bool>& apagadas = {}, float letra = 34.0f, float x0 = 300, float x1 = 900) {
-  const float paso = 54;
-  S::Frame(dl, a.At(x0, y0), a.At(x1, y0 + 20 + paso * float(filas.size())), a.s);
+// Todas las pantallas siguen el esquema comun (game_style.h, S::mode): columna a la derecha del anfitrion, marcos
+// separados kGap, letra kRow. Lista y Lineas devuelven el borde de abajo de su marco (para apilar el siguiente).
+namespace D = S::mode;
+float Lista(ImDrawList* dl, const S::Area& a, float y0, const std::vector<std::string>& filas, int cursor, float t,
+            const std::vector<bool>& apagadas = {}, float letra = D::kRow, float x0 = D::kX0, float x1 = D::kX1,
+            float paso = 52) {
+  // filas desde kPad (la franja no pisa la linea del marco, como el Duelo)
+  const float y1 = y0 + 2 * D::kPad + paso * float(filas.size());
+  S::Frame(dl, a.At(x0, y0), a.At(x1, y1), a.s);
   for (size_t i = 0; i < filas.size(); ++i) {
-    const float y = y0 + 10 + paso * (float(i) + 0.5f);
+    const float y = y0 + D::kPad + paso * (float(i) + 0.5f);
     const bool sel = int(i) == cursor, off = i < apagadas.size() && apagadas[i];
-    if (sel) S::Highlight(dl, a.At(x0, y - paso * 0.5f + 2), a.At(x1, y + paso * 0.5f - 2), t);
-    S::MenuText(dl, a.At((x0 + x1) * 0.5f, y), letra * a.s, filas[i].c_str(), sel, off);
+    if (sel) D::Stripe(dl, a, x0, y - paso * 0.5f + 2, x1, y + paso * 0.5f - 2, t);
+    S::MenuText(dl, a.At((x0 + x1) * 0.5f, y), letra * a.s, filas[i].c_str(), sel, off, (x1 - x0 - 2 * D::kText) * a.s);
+  }
+  return y1;
+}
+// "Fuerza: +25% de dano" -> "Fuerza": el nombre corto para la lista; el texto entero va al bocadillo.
+std::string Corto(const std::string& s) {
+  std::string c = s.substr(0, s.find(':'));
+  while (!c.empty() && c.back() == ' ') c.pop_back();
+  return c;
+}
+// Lista de tienda como la Skill Shop del juego: botella de capsula (roja, verde, amarilla), nombre y precio; las filas
+// sin precio (seguir) sin botella.
+float ListaTienda(ImDrawList* dl, const S::Area& a, float y0, const std::vector<std::string>& nombres,
+                  const std::vector<int>& precios, int cursor, float t, const std::vector<bool>& apagadas) {
+  const float x0 = D::kX0, x1 = D::kX1, paso = 58, y1 = y0 + 2 * D::kPad + paso * float(nombres.size());
+  S::Frame(dl, a.At(x0, y0), a.At(x1, y1), a.s);
+  const S::Pic cap = S::Img("capsulas");
+  for (size_t i = 0; i < nombres.size(); ++i) {
+    const float y = y0 + D::kPad + paso * (float(i) + 0.5f);
+    const bool sel = int(i) == cursor, off = i < apagadas.size() && apagadas[i];
+    const bool precio = i < precios.size() && precios[i] > 0;
+    if (sel) D::Stripe(dl, a, x0, y - paso * 0.5f + 2, x1, y + paso * 0.5f - 2, t);
+    if (cap && precio) {   // botella al alto de la fila (en la Skill Shop ocupa casi toda la fila)
+      const float bx = 3 + 36 * float(i % 3), h = 52 * a.s, w = h * 31 / 83;
+      const ImVec2 c = a.At(x0 + 70, y);
+      S::DrawPic(dl, cap, ImVec2(c.x - w * 0.5f, c.y - h * 0.5f), ImVec2(c.x + w * 0.5f, c.y + h * 0.5f),
+                 ImVec4(bx, 7, bx + 31, 90), off ? IM_COL32(255, 255, 255, 110) : IM_COL32_WHITE);
+    }
+    if (precio) {
+      S::MenuText(dl, a.At((x0 + 110 + x1 - 170) * 0.5f, y), D::kRow * a.s, nombres[i].c_str(), sel, off,
+                  (x1 - 170 - x0 - 110) * a.s);
+      S::MenuText(dl, a.At(x1 - 90, y), D::kRow * a.s, (Num(precios[i]) + " Z").c_str(), sel, off);
+    } else {
+      S::MenuText(dl, a.At((x0 + x1) * 0.5f, y), D::kRow * a.s, nombres[i].c_str(), sel, off, (x1 - x0 - 40) * a.s);
+    }
+  }
+  return y1;
+}
+// Caja del dinero de la Skill Shop arriba a la derecha (con las cifras naranjas del juego) y el rotulo ZENIE a su
+// izquierda, sin pisarla.
+void CajaZenie(ImDrawList* dl, const S::Area& a, int zeni) {
+  const float k = 0.8f, bw = 322 * k, bh = 102 * k;
+  const ImVec2 p0 = a.At(D::kX1 - bw, D::kCornerY0), p1 = a.At(D::kX1, D::kCornerY0 + bh);
+  if (const S::Pic box = S::Img("caja_zenie")) S::DrawPic(dl, box, p0, p1, ImVec4(1, 3, 323, 105));
+  else S::Frame(dl, p0, p1, a.s);
+  if (const S::Pic z = S::Img("letras_zenie")) {
+    const float zw = 150 * k * a.s, zh = 49 * k * a.s, cy = (p0.y + p1.y) * 0.5f;
+    S::DrawPic(dl, z, ImVec2(p0.x - zw - 8 * a.s, cy - zh * 0.5f), ImVec2(p0.x - 8 * a.s, cy + zh * 0.5f),
+               ImVec4(2, 6, 152, 55));
+  }
+  // cifras de data_usi 2053 (0-9 en una fila, de y 10 a 127), alineadas a la derecha de la caja
+  static constexpr float kX[10][2] = {{4, 90},    {107, 166}, {196, 282}, {293, 372}, {387, 470},
+                                      {489, 568}, {580, 660}, {682, 765}, {772, 863}, {870, 959}};
+  const std::string n = Num(std::max(zeni, 0));
+  const S::Pic d = S::Img("cifras_zenie");
+  if (!d) {
+    S::MenuText(dl, ImVec2(p0.x + (p1.x - p0.x) * 0.63f, (p0.y + p1.y) * 0.5f), 40 * a.s, n.c_str(), true, false);
+    return;
+  }
+  const float h = (p1.y - p0.y) * 0.5f, kk = h / 112.0f, cy = (p0.y + p1.y) * 0.5f;
+  float w = 0;
+  for (const char c : n) w += (kX[c - '0'][1] - kX[c - '0'][0]) * kk - 4 * kk;
+  float x = p1.x - (p1.x - p0.x) * 0.1f - w;
+  for (const char c : n) {
+    const float* g = kX[c - '0'];
+    const float gw = (g[1] - g[0]) * kk;
+    S::DrawPic(dl, d, ImVec2(x, cy - h * 0.5f), ImVec2(x + gw, cy + h * 0.5f), ImVec4(g[0], 10, g[1], 122));
+    x += gw - 4 * kk;
   }
 }
-void Lineas(ImDrawList* dl, const S::Area& a, float y0, const std::vector<std::string>& l, float letra = 30.0f) {
-  const float paso = 46;
-  S::Frame(dl, a.At(300, y0), a.At(900, y0 + 16 + paso * float(l.size())), a.s);
+float Lineas(ImDrawList* dl, const S::Area& a, float y0, const std::vector<std::string>& l) {
+  // sin franja: el texto empieza en el filo de la linea (kPad - 4)
+  const float pad = D::kPad - 4, paso = 44, y1 = y0 + 2 * pad + paso * float(l.size());
+  S::Frame(dl, a.At(D::kX0, y0), a.At(D::kX1, y1), a.s);
   for (size_t i = 0; i < l.size(); ++i) {
-    S::MenuText(dl, a.At(600, y0 + 8 + paso * (float(i) + 0.5f)), (i == 0 ? letra + 6 : letra) * a.s, l[i].c_str(),
-                i == 0, false);
+    S::MenuText(dl, a.At(D::kCx, y0 + pad + paso * (float(i) + 0.5f)), D::kRow * a.s, l[i].c_str(), i == 0, false,
+                (D::kX1 - D::kX0 - 2 * D::kText) * a.s);
   }
+  return y1;
 }
-void Bocadillo(ImDrawList* dl, const S::Area& a, const std::string& s) {
-  S::Speech(dl, a.At(200, 640), a.At(840, 845), a.s, s.c_str(), 0.12f);
-}
-void Cara(ImDrawList* dl, const S::Area& a, int id, float x, float y, float h) {
+void Bocadillo(ImDrawList* dl, const S::Area& a, const std::string& s) { D::Bubble(dl, a, s.c_str()); }
+void Cara(ImDrawList* dl, const S::Area& a, int id, float x, float y, float h, int alfa = 255) {
   if (const S::Pic p = S::Img(("caras/" + Num(id)).c_str())) {
     const float w = h * p.w / std::max(p.h, 1.0f);
-    S::DrawPic(dl, p, a.At(x - w * 0.5f, y - h * 0.5f), a.At(x + w * 0.5f, y + h * 0.5f));
+    S::DrawPic(dl, p, a.At(x - w * 0.5f, y - h * 0.5f), a.At(x + w * 0.5f, y + h * 0.5f), ImVec4(0, 0, 0, 0),
+               IM_COL32(255, 255, 255, alfa));
   }
+}
+// Estrella de maestro (la letra del juego no la tiene): pentagono de dentro y cinco puntas, dorada con perfil oscuro.
+void Estrella(ImDrawList* dl, ImVec2 c, float r) {
+  for (const auto& [rad, col] : {std::pair<float, ImU32>{r + 2.0f, IM_COL32(90, 40, 5, 255)},
+                                 std::pair<float, ImU32>{r, IM_COL32(255, 205, 40, 255)}}) {
+    ImVec2 in[5], out[5];
+    for (int i = 0; i < 5; ++i) {
+      const float ang = -1.5708f + 1.2566f * float(i), ang2 = ang + 0.6283f;   // punta y valle (36 grados mas)
+      out[i] = ImVec2(c.x + std::cos(ang) * rad, c.y + std::sin(ang) * rad);
+      in[i] = ImVec2(c.x + std::cos(ang2) * rad * 0.42f, c.y + std::sin(ang2) * rad * 0.42f);
+    }
+    ImVec2 pent[5];
+    for (int i = 0; i < 5; ++i) pent[i] = in[(i + 4) % 5];   // valles en orden de giro
+    dl->AddConvexPolyFilled(pent, 5, col);
+    for (int i = 0; i < 5; ++i) dl->AddTriangleFilled(in[(i + 4) % 5], out[i], in[i], col);
+  }
+}
+// Carrusel de estilos del Modo Heroe (heroe.cpp): cinco caras con su nombre, la de en medio es el estilo elegido (franja
+// azul, cara grande, nombre brillante). Los maestros llevan estrella. `activo`: salen las flechas del juego. LB/RB
+// mueven el carrusel (en la creacion tambien izquierda/derecha sobre la fila Estilo); y1 - y0 >= 120.
+void CarruselEstilos(ImDrawList* dl, const S::Area& a, float y0, float y1, float t, bool activo) {
+  S::Frame(dl, a.At(D::kX0, y0), a.At(D::kX1, y1), a.s);
+  const float paso = 120, hc = std::min(64.0f, (y1 - y0) - 66.0f), hl = hc * 0.72f;
+  const float yf = y0 + D::kLine + 4 + hc * 0.5f, yn = y0 + D::kLine + 8 + hc + 11;   // caras y nombres
+  S::Highlight(dl, a.At(D::kCx - paso * 0.5f + 4, y0 + D::kLine + 1), a.At(D::kCx + paso * 0.5f - 4, y1 - D::kLine - 1), t);
+  for (int i = -2; i <= 2; ++i) {
+    const int id = H::EstiloVecino(i);
+    const float x = D::kCx + paso * float(i), h = i == 0 ? hc : hl;
+    Cara(dl, a, id, x, yf, h, i == 0 ? 255 : (i == -1 || i == 1 ? 170 : 110));
+    if (H::EsMaestro(id)) {
+      const S::Pic p = S::Img(("caras/" + Num(id)).c_str());
+      const float w = p ? h * p.w / std::max(p.h, 1.0f) : h;
+      Estrella(dl, a.At(x + w * 0.5f - 3, yf - h * 0.5f + 5), (i == 0 ? 9.0f : 7.0f) * a.s);
+    }
+    S::MenuText(dl, a.At(x, yn), (i == 0 ? 24.0f : 18.0f) * a.s, M::Nombre(id).c_str(), i == 0, i != 0, (paso - 8) * a.s);
+  }
+  if (activo) S::Arrows(dl, a.At(D::kX0 - 10, y0), a.At(D::kX1 + 10, y1), 36 * a.s, t);
 }
 const char* Aceptar() { return L("Aceptar", "OK", "Valider", "OK", "Conferma"); }
 const char* Atras() { return L("Atrás", "Back", "Retour", "Zurück", "Indietro"); }
@@ -834,6 +1240,7 @@ void DibujarSelector(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
   const std::vector<int>& lista = Retos(g_entrada);
   const int n = int(lista.size());
   g_sel = std::clamp(g_sel, 0, n - 1);
+  if (p & (kUp | kDown)) g_aviso.clear();   // el aviso de un reto que no arranco no se queda pegado a los demas
   if (p & kUp) g_sel = (g_sel + n - 1) % n;
   if (p & kDown) g_sel = (g_sel + 1) % n;
   const int modo = lista[size_t(g_sel)];
@@ -845,15 +1252,7 @@ void DibujarSelector(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
   if (modo != M::kHeroe) {   // izquierda/derecha: el luchador (el heroe es el suyo)
     if (p & kLeft) g_jugador = Siguiente(g_jugador, -1), g_traje = 0;
     if (p & kRight) g_jugador = Siguiente(g_jugador, +1), g_traje = 0;
-  } else {   // izquierda/derecha: la variante; LB/RB: las tecnicas (dos de tres)
-    if (p & kLeft) g_heroe_variante = (g_heroe_variante + 2) % 3;
-    if (p & kRight) g_heroe_variante = (g_heroe_variante + 1) % 3;
-    static const int kPares[3] = {3, 5, 6};
-    int k = 0;
-    while (k < 3 && kPares[k] != g_heroe_tecnicas) ++k;
-    if (p & kLb) g_heroe_tecnicas = kPares[(k + 2) % 3];
-    if (p & kRb) g_heroe_tecnicas = kPares[(k + 1) % 3];
-  }
+  }   // heroe: se crea en su pantalla (kHeroeP) al pulsar A
   if (p & kB) {
     Guardar();
     g_vista = kCerrada;
@@ -867,17 +1266,21 @@ void DibujarSelector(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
   const char* titulos[3] = {M::NombreModo(M::kTorre), M::NombreModo(M::kSupervivencia), M::NombreModo(M::kKumite)};
   S::Banner(dl, a, titulos[std::clamp(g_entrada, 0, 2)]);
   // arriba: el luchador (o la variante del heroe), con las flechas del juego
-  const ImVec2 g0 = a.At(420, 150), g1 = a.At(870, 214);
+  // (alto 84: la cara del marcador, 50 px, cabe dentro de la linea del marco)
+  constexpr float kSelH = 84;
+  const ImVec2 g0 = a.At(D::kX0 + 60, D::kTop), g1 = a.At(D::kX1 - 60, D::kTop + kSelH);
   S::Frame(dl, g0, g1, a.s);
   std::string quien;
+  const int heroe = g_runs.count(M::kHeroe) ? H::CuerpoDe(g_runs[M::kHeroe].extra, g_runs[M::kHeroe].jugador)
+                                            : H::Cuerpo();   // el de la partida o el creado
   if (modo == M::kHeroe) {
-    const Variante& v = kVariantes[g_heroe_variante];
-    quien = L(v.es, v.en, v.fr, v.de, v.it);
+    quien = Lang("Héroe: ", "Hero: ", "Héros : ", "Held: ", "Eroe: ") + M::Nombre(heroe) + "  -  " + H::LineaNivel(0);
   } else {
     quien = M::Nombre(g_jugador);
   }
-  Cara(dl, a, modo == M::kHeroe ? kHeroeId : g_jugador, 470, 182, 62);
-  S::MenuText(dl, ImVec2((g0.x + g1.x) * 0.5f + 30 * a.s, (g0.y + g1.y) * 0.5f), 34 * a.s, quien.c_str(), true, false);
+  Cara(dl, a, modo == M::kHeroe ? heroe : g_jugador, D::kX0 + 60 + D::kLine + 40, D::kTop + kSelH * 0.5f, 50);
+  S::MenuText(dl, ImVec2((g0.x + g1.x) * 0.5f + 30 * a.s, (g0.y + g1.y) * 0.5f), D::kHead * a.s, quien.c_str(), true,
+              false, g1.x - g0.x - 160 * a.s);
   S::Arrows(dl, ImVec2(g0.x - 18 * a.s, g0.y), ImVec2(g1.x + 18 * a.s, g1.y), 40 * a.s, t);
   // la lista de retos
   std::vector<std::string> filas;
@@ -887,7 +1290,7 @@ void DibujarSelector(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
     if (g_runs.count(m) || (m <= M::kKumite && M::Guardado(m, &gid, &gg))) f += Lang("  (a medias)", "  (in progress)", "  (en cours)", "  (läuft)", "  (in corso)");
     filas.push_back(f);
   }
-  Lista(dl, a, 232, filas, g_sel, t);
+  Lista(dl, a, D::kTop + kSelH + D::kGap, filas, g_sel, t);
   // bocadillo: que es, record y Zenie (y la torre / las tecnicas)
   std::string s = Descripcion(modo);
   if (torres) {
@@ -898,14 +1301,11 @@ void DibujarSelector(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
          (g_cursor2 == 0 && !g_runs.count(modo) ? Lang("de la semana: ", "weekly: ", "de la semaine : ", "Wochenturm: ",
                                                         "della settimana: ")
                                                 : std::string()) +
-         L(tr.es, tr.en, tr.en, tr.en, tr.en) + " (" + L(tr.mod_es, tr.mod_en, tr.mod_fr, tr.mod_de, tr.mod_it) + ")";
-  } else if (modo == M::kHeroe) {
-    std::string tec;
-    for (int k = 0; k < 3; ++k) {
-      if (g_heroe_tecnicas & (1 << k)) tec += std::string(tec.empty() ? "" : " + ") + kTecnicas[k].nombre;
-    }
-    s += "\n" + Lang("LB/RB técnicas: ", "LB/RB techniques: ", "LB/RB techniques : ", "LB/RB Techniken: ",
-                     "LB/RB tecniche: ") + tec;
+         Tr(tr.es, tr.en) + std::string(" (") + L(tr.mod_es, tr.mod_en, tr.mod_fr, tr.mod_de, tr.mod_it) + ")";
+  } else if (modo == M::kHeroe && g_runs.count(modo) && g_runs[modo].ganados > 0) {   // a medias: su estilo y su saga
+    const Run& hr = g_runs[modo];   // en lugar de la descripcion (que ya se leyo): cabe todo con letra grande
+    s = Lang("Estilo: ", "Style: ", "Style : ", "Stil: ", "Stile: ") + M::Nombre(hr.jugador) + "  -  " +
+        H::NombreSaga(hr.tecnicas) + " " + Num(hr.ganados + 1) + "/3\n" + H::LineaNivel(hr.ganados);
   }
   int id = 0, mejor = 0, total = 0, comp = 0;
   if (M::Record(modo, &id, &mejor, &total, &comp)) {
@@ -925,8 +1325,174 @@ void DibujarSelector(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
   }
   if (!g_aviso.empty()) s = g_aviso;
   Bocadillo(dl, a, s);
+  D::Help(dl, a, {{"A", modo == M::kHeroe ? (g_runs.count(modo) && g_runs[modo].ganados > 0 ? T::T("Continuar", "Continue") : T::T("Crear héroe", "Create hero"))
+                                          : L("Empezar", "Start", "Commencer", "Starten", "Inizia")},
+                  {"B", Atras()}});
+}
+
+// Mision 100: LB/RB la pagina, arriba/abajo la mision, izquierda/derecha el luchador, A empieza, B sale.
+void DibujarM100(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
+  const int antes = g_pagina * 5 + g_cursor;
+  if (p & kLb) g_pagina = (g_pagina + kNumPaginas - 1) % kNumPaginas;
+  if (p & kRb) g_pagina = (g_pagina + 1) % kNumPaginas;
+  if (p & kUp) g_cursor = (g_cursor + 4) % 5;
+  if (p & kDown) g_cursor = (g_cursor + 1) % 5;
+  g_cursor = std::clamp(g_cursor, 0, 4);
+  if (p & kLeft) g_jugador = Siguiente(g_jugador, -1), g_traje = 0;
+  if (p & kRight) g_jugador = Siguiente(g_jugador, +1), g_traje = 0;
+  const int n = g_pagina * 5 + g_cursor;
+  if (n != antes) g_aviso.clear();
+  if (p & kB) {
+    Guardar();
+    g_vista = kCerrada;
+    return;
+  }
+  const bool abierta = PaginaAbierta(g_pagina);
+  if (p & kA) {
+    if (!abierta) {
+      g_aviso = Lang("Supera 3 misiones de la página anterior para abrir esta.",
+                     "Clear 3 missions of the previous page to open this one.",
+                     "Réussis 3 missions de la page précédente pour ouvrir celle-ci.",
+                     "Schaffe 3 Missionen der vorigen Seite, um diese zu öffnen.",
+                     "Supera 3 missioni della pagina precedente per aprire questa.");
+    } else {
+      g_m100_sel = n;
+      Empezar(M::kMision);
+      if (g_vista != kMisionP) return;
+    }
+  }
+  S::Banner(dl, a, M::NombreModo(M::kMision));
+  // arriba a la derecha: la pagina (LB/RB) con las flechas del juego
+  constexpr float c0 = D::kCornerY0, c1 = D::kTop - 24;
+  const ImVec2 q0 = a.At(D::kCornerX0, c0), q1 = a.At(D::kX1, c1);
+  S::Frame(dl, q0, q1, a.s);
+  const std::string pag = Lang("Página ", "Page ", "Page ", "Seite ", "Pagina ") + Num(g_pagina + 1) + "/" +
+                          Num(kNumPaginas) + "  " + M::Nombre(kPaginas[g_pagina].jefe);
+  S::MenuText(dl, ImVec2((q0.x + q1.x) * 0.5f, (q0.y + q1.y) * 0.5f), D::kRow * a.s, pag.c_str(), true, !abierta,
+              q1.x - q0.x - 80 * a.s);
+  S::Arrows(dl, ImVec2(q0.x - 18 * a.s, q0.y), ImVec2(q1.x + 18 * a.s, q1.y), 36 * a.s, t);
+  // el luchador (como el selector de retos)
+  constexpr float kSelH = 84;
+  const ImVec2 g0 = a.At(D::kX0 + 60, D::kTop), g1 = a.At(D::kX1 - 60, D::kTop + kSelH);
+  S::Frame(dl, g0, g1, a.s);
+  Cara(dl, a, g_jugador, D::kX0 + 60 + D::kLine + 40, D::kTop + kSelH * 0.5f, 50);
+  float izq = 0, der = 0;   // caras de la mision: aliado junto al jugador; rivales a la derecha (la ficha de T3)
+  if (abierta) {
+    const MisionM100 x = MisionDe(n, g_jugador);
+    if (x.aliado >= 0) Cara(dl, a, x.aliado, D::kX0 + 60 + D::kLine + 96, D::kTop + kSelH * 0.5f, 50), izq = 56;
+    for (size_t k = 0; k < x.rivales.size(); ++k)
+      Cara(dl, a, x.rivales[x.rivales.size() - 1 - k], D::kX1 - 60 - D::kLine - 52 - 56 * float(k), D::kTop + kSelH * 0.5f, 50);
+    der = 56 * float(x.rivales.size()) + 30;
+    S::MenuText(dl, a.At(D::kX1 - 60 - D::kLine - 52 - der + 26, D::kTop + kSelH * 0.5f), D::kSmall * a.s, "VS", false, true);
+  }
+  S::MenuText(dl, ImVec2((g0.x + g1.x) * 0.5f + (30 + izq - der) * 0.5f * a.s, (g0.y + g1.y) * 0.5f), D::kHead * a.s,
+              M::Nombre(g_jugador).c_str(), true, false, g1.x - g0.x - (160 + izq + der) * a.s);
+  S::Arrows(dl, ImVec2(g0.x - 18 * a.s, g0.y), ImVec2(g1.x + 18 * a.s, g1.y), 40 * a.s, t);
+  // las 5 misiones de la pagina con su mejor rango
+  std::vector<std::string> filas;
+  std::vector<bool> off;
+  for (int k = 0; k < 5; ++k) {
+    const int m = g_pagina * 5 + k;
+    const char rg = g_m100[size_t(m)];
+    filas.push_back(abierta ? Num(m + 1) + ". " + TituloMision(m) + (rg != '-' ? std::string("   [") + rg + "]" : "")
+                            : Num(m + 1) + ". ???");
+    off.push_back(!abierta);
+  }
+  Lista(dl, a, D::kTop + kSelH + 30, filas, g_cursor, t, off);
+  int hechas = 0, eses = 0, zetas = 0;
+  for (const char c : g_m100) hechas += c != '-', eses += c == 'S' || c == 'Z', zetas += c == 'Z';
+  std::string b = abierta ? std::string(NombreMision(n)) + ": " + TextoMision(n, g_jugador) + "\n" +
+                                Lang("Premio: ", "Prize: ", "Prix : ", "Preis: ", "Premio: ") +
+                                Num(PremioDe(M::kMision, n)) + " Zenie"
+                          : Lang("Página cerrada: supera 3 misiones de la anterior.",
+                                 "Page locked: clear 3 missions of the previous one.",
+                                 "Page fermée : réussis 3 missions de la précédente.",
+                                 "Seite gesperrt: schaffe 3 Missionen der vorigen.",
+                                 "Pagina chiusa: supera 3 missioni della precedente.");
+  b += "\n" + Lang("Superadas ", "Cleared ", "Réussies ", "Geschafft ", "Superate ") + Num(hechas) + "/" + Num(kNumMisiones) +
+       Lang("   Rango S ", "   S rank ", "   Rang S ", "   Rang S ", "   Grado S ") + Num(eses) + "   Z " + Num(zetas) +
+       "   LB/RB: " + Lang("página", "page", "page", "Seite", "pagina");
+  if (!g_aviso.empty()) b = g_aviso;
+  Bocadillo(dl, a, b);
+  D::Help(dl, a, {{"A", L("Empezar", "Start", "Commencer", "Starten", "Inizia")}, {"B", Atras()}});
+}
+
+// Modo Heroe (beta): creacion del heroe (heroe.cpp). Arriba/abajo la fila, izquierda/derecha la cambia, LB/RB cambian
+// el estilo (carrusel de abajo) desde cualquier fila, A en "Empezar" lanza la mision con ese cuerpo, traje y estilo
+// (bonus y tecnicas si es maestro); B vuelve al selector.
+void DibujarHeroe(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
+  constexpr int kFilas = 5;   // raza, cuerpo, apariencia, estilo, empezar
+  g_cursor = std::clamp(g_cursor, 0, kFilas - 1);
+  if (p & (kUp | kDown | kLeft | kRight | kLb | kRb)) g_aviso.clear();
+  if (p & kUp) g_cursor = (g_cursor + kFilas - 1) % kFilas;
+  if (p & kDown) g_cursor = (g_cursor + 1) % kFilas;
+  if (p & kLeft) H::Mover(g_cursor, -1);
+  if (p & kRight) H::Mover(g_cursor, +1);
+  if (p & kLb) H::Mover(3, -1);   // LB/RB: el estilo (carrusel), este el cursor donde este
+  if (p & kRb) H::Mover(3, +1);
+  if (p & kB) {
+    Guardar();
+    g_vista = kSelector;
+    return;
+  }
+  if (p & kA) {
+    if (g_cursor < kFilas - 1) {
+      ++g_cursor;
+    } else {
+      Guardar();   // la receta
+      Empezar(M::kHeroe);
+      if (g_vista != kHeroeP) return;
+    }
+  }
+  S::Banner(dl, a, L("Crea tu héroe (beta)", "Create your hero (beta)", "Crée ton héros (bêta)",
+                     "Erschaffe deinen Helden (Beta)", "Crea il tuo eroe (beta)"));
+  std::vector<std::string> filas;
+  for (int f = 0; f < kFilas; ++f) filas.push_back(H::Fila(f));
+  constexpr float paso = 44;   // mas apretada que la de siempre (52): debajo cabe el carrusel de estilos
+  const float y_lista = Lista(dl, a, D::kTop, filas, g_cursor, t, {}, D::kRow, D::kX0, D::kX1, paso);
+  if (g_cursor < kFilas - 1 && g_cursor != 3) {   // flechas del juego en la fila que se cambia (el estilo, en su carrusel)
+    const float y = D::kTop + D::kPad + paso * (float(g_cursor) + 0.5f);
+    S::Arrows(dl, a.At(D::kX0 - 10, y - paso * 0.5f), a.At(D::kX1 + 10, y + paso * 0.5f), 36 * a.s, t);
+  }
+  CarruselEstilos(dl, a, y_lista + 40, std::min(y_lista + 40 + 124, D::kBottom), t, g_cursor == 3);
+  // esquina de arriba a la derecha: el cuerpo elegido y el luchador de su estilo (cara del marcador), dentro de kLine
+  const int cuerpo = H::Cuerpo(), estilo = H::EstiloId();
+  constexpr float c0 = D::kCornerY0, c1 = D::kTop - 24, cy = (c0 + c1) * 0.5f, ch = c1 - c0 - 2 * D::kLine - 4;
+  S::Frame(dl, a.At(D::kCornerX0, c0), a.At(D::kX1, c1), a.s);
+  Cara(dl, a, cuerpo, D::kCornerX0 + 90, cy, ch);
+  S::MenuText(dl, a.At(D::kCornerX0 + 220, cy), D::kSmall * a.s, "+", false, true);
+  Cara(dl, a, estilo, D::kCornerX0 + 300, cy, ch);
+  S::MenuText(dl, a.At(D::kX1 - 60, cy), D::kSmall * a.s, L("Estilo", "Style", "Style", "Stil", "Stile"), false, true);
+  std::string b = g_aviso.empty() ? H::Detalle() : g_aviso;
+  if (g_aviso.empty()) {   // F3: que es cada fila (ayudas_tutoriales.md, seccion 5)
+    static const char* const kAyuda[kFilas][5] = {
+        {"Raza: decide qué cuerpos y trajes puedes elegir.", "Race: decides which bodies and costumes you can pick.",
+         "Race : décide quels corps et costumes tu peux choisir.", "Rasse: bestimmt, welche Körper und Kostüme du wählen kannst.",
+         "Razza: decide quali corpi e costumi puoi scegliere."},
+        {"Cuerpo: el modelo que usa tu héroe en combate.", "Body: the model your hero uses in battle.",
+         "Corps : le modèle que ton héros utilise en combat.", "Körper: das Modell, das dein Held im Kampf nutzt.",
+         "Corpo: il modello che il tuo eroe usa in combattimento."},
+        {"Apariencia: el traje de ese cuerpo.", "Look: the costume of that body.", "Apparence : le costume de ce corps.",
+         "Aussehen: das Kostüm dieses Körpers.", "Aspetto: il costume di quel corpo."},
+        {},   // estilo: su texto va aparte (T::T)
+        {"Empieza la misión: 3 combates. Cada victoria da experiencia y sube el nivel.",
+         "Start the mission: 3 fights. Each win gives experience and raises the level.",
+         "Commence la mission : 3 combats. Chaque victoire donne de l'expérience et fait monter le niveau.",
+         "Starte die Mission: 3 Kämpfe. Jeder Sieg gibt Erfahrung und erhöht das Level.",
+         "Inizia la missione: 3 scontri. Ogni vittoria dà esperienza e fa salire il livello."}};
+    const auto& h = kAyuda[std::clamp(g_cursor, 0, kFilas - 1)];
+    b += std::string(1, '\n') + (g_cursor == 3 ? T::T("Estilo: cómo peleas (los golpes de otro luchador). La estrella marca a "
+                                                    "un maestro, que da bonus.",
+                                                    "Style: how you fight (another fighter's moves). The star marks a "
+                                                    "master, who gives a bonus.")
+                                                : L(h[0], h[1], h[2], h[3], h[4]));
+  }
+  Bocadillo(dl, a, b);
   S::HelpLine(dl, a.At(600, 868), 38 * a.s,
-              {{"A", L("Empezar", "Start", "Commencer", "Starten", "Inizia")}, {"B", Atras()}});
+              {{"A", g_cursor == kFilas - 1 ? L("Empezar", "Start", "Commencer", "Starten", "Inizia") : Aceptar()},
+               {"B", Atras()},
+               {"LB", T::T("Estilo -", "Style -")},
+               {"RB", T::T("Estilo +", "Style +")}});
 }
 
 // Simulacion: un dia (entrenar / explorar / descansar) o, gastados los tres, el jefe.
@@ -982,10 +1548,10 @@ void DibujarSim(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
   const std::string dia = jefe ? Lang("¡Ha llegado el día!", "The day has come!", "Le jour est venu !",
                                       "Der Tag ist gekommen!", "È arrivato il giorno!")
                                : Lang("Día ", "Day ", "Jour ", "Tag ", "Giorno ") + Num(s.dia) + " / " + Num(kSimDias);
-  Lineas(dl, a, 150, {dia, Vida(s.vida, s.vida_max) + "   " + Lang("Fuerza +", "Strength +", "Force +", "Kraft +", "Forza +") +
+  const float sim_y = Lineas(dl, a, D::kTop, {dia, Vida(s.vida, s.vida_max) + "   " + Lang("Fuerza +", "Strength +", "Force +", "Kraft +", "Forza +") +
                                Num(s.fuerza) + "%   " + Lang("Fatiga ", "Fatigue ", "Fatigue ", "Erschöpfung ", "Fatica ") +
                                Num(s.fatiga)});
-  Lista(dl, a, 290, ops, g_cursor, t);
+  Lista(dl, a, sim_y + D::kGap, ops, g_cursor, t);
   std::string b;
   if (!g_aviso.empty()) b = g_aviso + "\n";
   if (jefe) {
@@ -1013,13 +1579,13 @@ void DibujarSim(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
     b += Lang("  Cápsulas: ", "  Capsules: ", "  Capsules : ", "  Kapseln: ", "  Capsule: ") + Num(int(s.caps.size()));
   }
   Bocadillo(dl, a, b);
-  S::HelpLine(dl, a.At(600, 868), 38 * a.s, {{"A", Aceptar()}, {"B", L("Guardar y salir", "Save and exit",
+  D::Help(dl, a, {{"A", Aceptar()}, {"B", L("Guardar y salir", "Save and exit",
                                                                          "Sauver et quitter", "Speichern und raus",
                                                                          "Salva ed esci")}});
 }
 
 // Torneo de 4: el cuadro (semifinales y final) con las caras del juego.
-void DibujarCuadro(ImDrawList* dl, const S::Area& a, float t, uint16_t p, const Run& r, bool fin, bool campeon) {
+float DibujarCuadro(ImDrawList* dl, const S::Area& a, float t, uint16_t p, const Run& r, bool fin, bool campeon) {
   S::Banner(dl, a, M::NombreModo(M::kTorneo4));
   const int sf1 = r.ganados >= 1 || campeon ? r.jugador : (fin ? r.bots[0] : -1);   // ganador de la semifinal 1
   const int champ = fin ? r.extra : -1;
@@ -1028,28 +1594,36 @@ void DibujarCuadro(ImDrawList* dl, const S::Area& a, float t, uint16_t p, const 
     float x, y;
     bool gana;
   };
-  constexpr float y1 = 225, y2 = 345, ym = (y1 + y2) * 0.5f;   // semifinales arriba y abajo; la final en medio
-  const Caja cajas[] = {{r.jugador, 330, y1, sf1 == r.jugador}, {r.bots[0], 330, y2, sf1 == r.bots[0]},
-                        {r.bots[1], 870, y1, r.finalista == r.bots[1]}, {r.bots[2], 870, y2, r.finalista == r.bots[2]}};
+  // en la columna del esquema comun (a la derecha del anfitrion): semifinales arriba y abajo; la final en medio
+  constexpr float y1 = D::kTop + 50, y2 = D::kTop + 170, ym = (y1 + y2) * 0.5f;
+  constexpr float cl = D::kCx - 230, cr = D::kCx + 230, hw = 115, xl = D::kCx - 85, xr = D::kCx + 85;
+  const Caja cajas[] = {{r.jugador, cl, y1, sf1 == r.jugador}, {r.bots[0], cl, y2, sf1 == r.bots[0]},
+                        {r.bots[1], cr, y1, r.finalista == r.bots[1]}, {r.bots[2], cr, y2, r.finalista == r.bots[2]}};
   const ImU32 oro = IM_COL32(255, 210, 90, 255), gris = IM_COL32(200, 200, 200, 160);
   for (const Caja& c : cajas) {
-    const bool izq = c.x < 600;
-    const ImVec2 p0 = a.At(c.x - 140, c.y - 40), p1 = a.At(c.x + 140, c.y + 40);
+    const bool izq = c.x < D::kCx;
+    const ImVec2 p0 = a.At(c.x - hw, c.y - 40), p1 = a.At(c.x + hw, c.y + 40);
     S::Frame(dl, p0, p1, a.s);
-    Cara(dl, a, c.id, izq ? c.x - 100 : c.x + 100, c.y, 58);
-    S::MenuText(dl, a.At(c.x + (izq ? 25 : -25), c.y), 26 * a.s, M::Nombre(c.id).c_str(), c.gana, false);
-    const float xe = izq ? c.x + 140 : c.x - 140, xm = izq ? 470 : 730;
+    // la cara dentro de la linea del marco (alto 46 de los 80 del marco)
+    const float cx = hw - D::kLine - 34;   // (-28 rozaba la linea: 20261016-032857_hub_test_r6_pantallas\b_torneo)
+    Cara(dl, a, c.id, izq ? c.x - cx : c.x + cx, c.y, 46);
+    S::MenuText(dl, a.At(c.x + (izq ? 30 : -30), c.y), D::kSmall * a.s, M::Nombre(c.id).c_str(), c.gana, false,
+                (hw * 2 - 110) * a.s);
+    const float xe = izq ? c.x + hw : c.x - hw, xm = izq ? xl : xr;
     dl->AddLine(a.At(xe, c.y), a.At(xm, c.y), c.gana ? oro : gris, 4 * a.s);
   }
-  dl->AddLine(a.At(470, y1), a.At(470, y2), sf1 >= 0 ? oro : gris, 4 * a.s);
-  dl->AddLine(a.At(730, y1), a.At(730, y2), r.finalista >= 0 ? oro : gris, 4 * a.s);
-  dl->AddLine(a.At(470, ym), a.At(540, ym), sf1 >= 0 ? oro : gris, 4 * a.s);
-  dl->AddLine(a.At(660, ym), a.At(730, ym), r.finalista >= 0 ? oro : gris, 4 * a.s);
-  S::Frame(dl, a.At(540, ym - 40), a.At(660, ym + 40), a.s);
-  if (champ >= 0) Cara(dl, a, champ, 600, ym, 66);
-  else S::MenuText(dl, a.At(600, ym), 36 * a.s, "VS", true, false);
+  dl->AddLine(a.At(xl, y1), a.At(xl, y2), sf1 >= 0 ? oro : gris, 4 * a.s);
+  dl->AddLine(a.At(xr, y1), a.At(xr, y2), r.finalista >= 0 ? oro : gris, 4 * a.s);
+  dl->AddLine(a.At(xl, ym), a.At(D::kCx - 45, ym), sf1 >= 0 ? oro : gris, 4 * a.s);
+  dl->AddLine(a.At(D::kCx + 45, ym), a.At(xr, ym), r.finalista >= 0 ? oro : gris, 4 * a.s);
+  S::Frame(dl, a.At(D::kCx - 45, ym - 40), a.At(D::kCx + 45, ym + 40), a.s);
+  if (champ >= 0) Cara(dl, a, champ, D::kCx, ym, 44);
+  else if (const S::Pic vs = S::Img("vs_torneo"))   // el "VS" del Torneo Mundial del juego (data_usi 2047)
+    S::DrawPic(dl, vs, a.At(D::kCx - 27, ym - 11), a.At(D::kCx + 27, ym + 12), ImVec4(0, 4, 236, 103));
+  else S::MenuText(dl, a.At(D::kCx, ym), D::kHead * a.s, "VS", true, false);
   (void)t;
   (void)p;
+  return y2 + 40;   // borde de abajo del cuadro
 }
 
 void DibujarTorneo(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
@@ -1067,11 +1641,10 @@ void DibujarTorneo(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
     if (Lanzar(r, true)) g_vista = kCerrada;
     return;
   }
-  DibujarCuadro(dl, a, t, p, r, false, false);
-  Lineas(dl, a, 410, {Lang("Semifinal: ", "Semifinal: ", "Demi-finale : ", "Halbfinale: ", "Semifinale: ") +
+  Lineas(dl, a, DibujarCuadro(dl, a, t, p, r, false, false) + D::kGap, {Lang("Semifinal: ", "Semifinal: ", "Demi-finale : ", "Halbfinale: ", "Semifinale: ") +
                           M::Nombre(r.jugador) + " - " + M::Nombre(r.bots[0])});
   Bocadillo(dl, a, Descripcion(M::kTorneo4));
-  S::HelpLine(dl, a.At(600, 868), 38 * a.s, {{"A", L("¡A luchar!", "Fight!", "Au combat !", "Kämpfen!", "Combatti!")},
+  D::Help(dl, a, {{"A", L("¡A luchar!", "Fight!", "Au combat !", "Kämpfen!", "Combatti!")},
                                              {"B", Atras()}});
 }
 
@@ -1088,10 +1661,12 @@ void DibujarEntre(ImDrawList* dl, const S::Area& a, float t, uint16_t p, const M
   if (r.modo == M::kTienda) {
     // tienda: arriba/abajo, A compra; la ultima fila sigue
     std::vector<std::string> filas;
+    std::vector<int> precios;
     std::vector<bool> off;
     for (int k = 0; k < 3; ++k) {
       const Articulo& ar = kArticulos[k];
-      filas.push_back(std::string(L(ar.es, ar.en, ar.fr, ar.de, ar.it)) + "  " + Num(ar.precio) + " Z");
+      filas.push_back(Corto(L(ar.es, ar.en, ar.fr, ar.de, ar.it)));
+      precios.push_back(ar.precio);
       const bool comprado = k > 0 && r.eventos.find(char('0' + k)) != std::string::npos;
       off.push_back(r.zeni < ar.precio || comprado || (k == 0 && r.vida >= r.vida_max));
     }
@@ -1117,8 +1692,13 @@ void DibujarEntre(ImDrawList* dl, const S::Area& a, float t, uint16_t p, const M
       }
       p = 0;
     }
-    Lineas(dl, a, 150, {paso + "   " + Vida(r.vida, r.vida_max) + "   " + Num(r.zeni) + " Zenie"});
-    Lista(dl, a, 230, filas, g_cursor, t, off, 30.0f, 220, 980);
+    ListaTienda(dl, a, Lineas(dl, a, D::kTop, {paso + "   " + Vida(r.vida, r.vida_max)}) + D::kGap, filas, precios,
+                g_cursor, t, off);
+    CajaZenie(dl, a, r.zeni);
+    if (g_cursor < 3 && g_aviso.empty()) {
+      const Articulo& ar = kArticulos[g_cursor];
+      mas(std::string(L(ar.es, ar.en, ar.fr, ar.de, ar.it)) + "  (" + Num(ar.precio) + " Zenie)");
+    }
     mas(siguiente);
     if (g_cursor == 3 && (p & kA)) p = kA;   // sigue
     else p &= ~kA;
@@ -1147,9 +1727,12 @@ void DibujarEntre(ImDrawList* dl, const S::Area& a, float t, uint16_t p, const M
         p &= ~kA;
       }
       std::vector<std::string> filas;
-      for (const int c : oferta) filas.push_back(L(kCartas[c].es, kCartas[c].en, kCartas[c].fr, kCartas[c].de, kCartas[c].it));
-      Lineas(dl, a, 150, {paso + "   " + Vida(r.vida, r.vida_max)});
-      Lista(dl, a, 230, filas, g_cursor, t, {}, 30.0f, 220, 980);
+      for (const int c : oferta) filas.push_back(Corto(L(kCartas[c].es, kCartas[c].en, kCartas[c].fr, kCartas[c].de, kCartas[c].it)));
+      Lista(dl, a, Lineas(dl, a, D::kTop, {paso + "   " + Vida(r.vida, r.vida_max)}) + D::kGap, filas, g_cursor, t);
+      if (!oferta.empty()) {
+        const Carta& ca = kCartas[oferta[size_t(g_cursor)]];
+        mas(L(ca.es, ca.en, ca.fr, ca.de, ca.it));
+      }
       mas(Lang("Elige una carta: dura hasta el final de esta partida.", "Pick a card: it lasts until the end of this run.",
                "Choisis une carte : elle dure jusqu'à la fin de cette partie.",
                "Wähle eine Karte: Sie gilt bis zum Ende dieses Laufs.",
@@ -1164,12 +1747,11 @@ void DibujarEntre(ImDrawList* dl, const S::Area& a, float t, uint16_t p, const M
                                                                 kCartas[k].it) + (ab.stacks[k] > 1 ? " x2" : "");
         }
       }
-      Lineas(dl, a, 150, l);
+      Lineas(dl, a, D::kTop, l);
       if (!cartas.empty()) mas(cartas);
     }
   } else if (r.modo == M::kTorneo4) {
-    DibujarCuadro(dl, a, t, p, r, false, false);
-    Lineas(dl, a, 410, {Lang("Final: ", "Final: ", "Finale : ", "Finale: ", "Finale: ") + M::Nombre(r.jugador) + " - " +
+    Lineas(dl, a, DibujarCuadro(dl, a, t, p, r, false, false) + D::kGap, {Lang("Final: ", "Final: ", "Finale : ", "Finale: ", "Finale: ") + M::Nombre(r.jugador) + " - " +
                         M::Nombre(r.finalista)});
     mas(M::Nombre(r.finalista) + Lang(" ha ganado la otra semifinal.", " won the other semifinal.",
                                       " a gagné l'autre demi-finale.", " hat das andere Halbfinale gewonnen.",
@@ -1188,10 +1770,31 @@ void DibujarEntre(ImDrawList* dl, const S::Area& a, float t, uint16_t p, const M
                                                          "  -  Gigante!")
                                                   : std::string()));
     }
-    Lineas(dl, a, 150, l);
     if (r.modo == M::kHeroe) {
-      const Paso& m = kMision[std::clamp(r.ganados, 0, 2)];
-      mas(L(m.es, m.en, m.fr, m.de, m.it));
+      H::ElegirEstilo(r.jugador);   // el carrusel parte del estilo de la partida
+      if (!cargando && (p & (kLb | kRb))) {   // otro estilo (moveset) para el combate siguiente
+        const int vida_max_antes = r.vida_max;
+        H::Mover(3, (p & kRb) ? +1 : -1);
+        r.jugador = H::EstiloId();
+        r.vida_max = H::Vida(r.jugador);
+        // la vida de la partida pasa de un combate al otro: se conserva la misma fraccion (con el maximo del estilo
+        // nuevo; antes un heroe sano quedaba a 3000/3500 al cambiar a un maestro con vida extra)
+        r.vida = std::clamp(int(int64_t(r.vida) * r.vida_max / std::max(vida_max_antes, 1)), 1, r.vida_max);
+        M::SetJugador(r.jugador);
+        RivalHeroe(r, r.ganados);
+        Guardar();
+        REXLOG_INFO("dbz3 rpg: heroe: estilo {} para el combate {}", r.jugador, r.ganados + 1);
+        p &= uint16_t(~(kLb | kRb));
+      }
+      l.push_back(H::LineaNivel(r.ganados));
+    }
+    const float y_lineas = Lineas(dl, a, D::kTop, l);
+    if (r.modo == M::kHeroe) {
+      CarruselEstilos(dl, a, y_lineas + D::kGap, y_lineas + D::kGap + 140, t, !cargando);
+      int rival = 0, vida_rival = 0, esc = 0;
+      H::Mision(r.tecnicas, r.ganados, r.jugador, H::CuerpoDe(r.extra, r.jugador), &rival, &vida_rival, &esc);
+      mas(H::DetalleEstilo(r.jugador));
+      mas(H::MisionTexto(r.tecnicas, r.ganados, rival));
     }
   }
   if (cargando) {
@@ -1215,10 +1818,16 @@ void DibujarEntre(ImDrawList* dl, const S::Area& a, float t, uint16_t p, const M
   }
   Bocadillo(dl, a, b);
   if (!cargando) {
-    S::HelpLine(dl, a.At(600, 868), 38 * a.s,
-                {{"A", r.modo == M::kTienda && g_cursor < 3 ? L("Comprar", "Buy", "Acheter", "Kaufen", "Compra")
-                                                            : L("Siguiente", "Next", "Suivant", "Weiter", "Avanti")},
-                 {"B", L("Guardar y salir", "Save and exit", "Sauver et quitter", "Speichern und raus", "Salva ed esci")}});
+    std::vector<std::pair<const char*, const char*>> ayuda = {
+        {"A", r.modo == M::kTienda && g_cursor < 3 ? L("Comprar", "Buy", "Acheter", "Kaufen", "Compra")
+              : r.modo == M::kHeroe                ? L("¡A luchar!", "Fight!", "Au combat !", "Kämpfen!", "Combatti!")
+                                                   : L("Siguiente", "Next", "Suivant", "Weiter", "Avanti")},
+        {"B", L("Guardar y salir", "Save and exit", "Sauver et quitter", "Speichern und raus", "Salva ed esci")}};
+    if (r.modo == M::kHeroe) {   // LB/RB cambian el estilo del carrusel
+      ayuda.push_back({"LB", T::T("Estilo -", "Style -")});
+      ayuda.push_back({"RB", T::T("Estilo +", "Style +")});
+    }
+    D::Help(dl, a, ayuda);
   }
 }
 
@@ -1230,6 +1839,13 @@ void DibujarFin(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
     g_fin_hecho = true;
     g_aviso.clear();
     M::CerrarFin();   // el HUB vuelve
+    if (st.tipo == M::kMision) {   // Mision 100: de vuelta a su pagina, en la siguiente mision si la supero
+      const int sig = std::min(r.extra + (st.resultado == M::kVictoria ? 1 : 0), kNumMisiones - 1);
+      g_pagina = sig / 5;
+      g_cursor = sig % 5;
+      if (!PaginaAbierta(g_pagina)) g_pagina = r.extra / 5, g_cursor = r.extra % 5;
+      g_vista = kMisionP;
+    }
     return;
   }
   S::Banner(dl, a, M::NombreModo(st.tipo));
@@ -1249,17 +1865,36 @@ void DibujarFin(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
     l.push_back(Lang("Zenie sin gastar: ", "Unspent Zenie: ", "Zenie non dépensés : ", "Nicht ausgegebene Zenie: ",
                      "Zenie non spesi: ") + Num(r.zeni));
   }
-  if (st.resultado == M::kVictoria && PremioDe(st.tipo) > 0) {
-    l.push_back(Lang("Premio: ", "Prize: ", "Prix : ", "Preis: ", "Premio: ") + Num(PremioDe(st.tipo)) + " Zenie");
+  if (st.tipo == M::kHeroe) {   // el heroe: su cuerpo y su nivel (heroe.cpp, FinRun)
+    l[1] = Lang("Héroe ", "Hero ", "Héros ", "Held ", "Eroe ") + M::Nombre(H::CuerpoDe(r.extra, r.jugador)) + ": " +
+           Num(st.ganados) + " / " + Num(st.total);
+    const int sube = st.resultado == M::kVictoria || st.resultado == M::kDerrota ? H::Nivel() - H::NivelAntes() : 0;
+    if (st.resultado == M::kVictoria || st.resultado == M::kDerrota) l.push_back(H::LineaNivel(0));   // nivel y XP
+    if (sube > 0) {   // lo que da cada nivel (heroe.cpp: Vida, Reglas)
+      l.push_back(Lang("¡Sube de nivel! ", "Level up! ", "Niveau supérieur ! ", "Stufenaufstieg! ", "Livello su! ") +
+                  Num(H::NivelAntes()) + " > " + Num(H::Nivel()) + "  (+" + Num(100 * sube) +
+                  Lang(" vida, +", " health, +", " vie, +", " Leben, +", " vita, +") + Num(2 * sube) +
+                  Lang("% daño)", "% damage)", "% dégâts)", "% Schaden)", "% danni)"));
+    }
+  }
+  if (st.tipo == M::kMision) {
+    l[1] = Lang("Misión ", "Mission ", "Mission ", "Mission ", "Missione ") + Num(r.extra + 1) + ": " + TituloMision(r.extra);
+    if (st.resultado == M::kVictoria) {
+      l.push_back(Lang("Rango ", "Rank ", "Rang ", "Rang ", "Grado ") + std::string(1, g_m100_ultimo) + "   " +
+                  Lang("Mejor ", "Best ", "Meilleur ", "Bester ", "Migliore ") +
+                  std::string(1, g_m100[size_t(std::clamp(r.extra, 0, kNumMisiones - 1))]));
+    }
+  }
+  if (st.resultado == M::kVictoria && PremioDe(st.tipo, r.extra) > 0) {
+    l.push_back(Lang("Premio: ", "Prize: ", "Prix : ", "Preis: ", "Premio: ") + Num(PremioDe(st.tipo, r.extra)) + " Zenie");
   }
   if (st.tipo == M::kTorneo4) {
-    DibujarCuadro(dl, a, t, p, r, true, st.resultado == M::kVictoria);
-    Lineas(dl, a, 410, l);
+    Lineas(dl, a, DibujarCuadro(dl, a, t, p, r, true, st.resultado == M::kVictoria) + D::kGap, l);
   } else {
-    Lineas(dl, a, 170, l);
+    Lineas(dl, a, D::kTop, l);
   }
   std::string b;
-  if (st.resultado == M::kVictoria && PremioDe(st.tipo) == 0) {
+  if (st.resultado == M::kVictoria && PremioDe(st.tipo, r.extra) == 0) {
     b = Lang("¡Increíble! Los Zenie que no gastaste quedan como tu récord.",
              "Amazing! The Zenie you didn't spend stay as your record.",
              "Incroyable ! Les Zenie non dépensés restent comme ton record.",
@@ -1278,12 +1913,22 @@ void DibujarFin(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
              "Cette partie est terminée. Réessaie !", "Dieser Lauf ist vorbei. Versuch es noch einmal!",
              "Questa partita è finita. Riprova!");
   }
+  if (st.tipo == M::kHeroe && st.resultado == M::kVictoria) {   // la saga siguiente (heroe.cpp FinRun ya la avanzo)
+    b += "\n" + std::string(T::T("Próxima saga: ", "Next saga: ")) + H::NombreSaga(H::Saga());
+  }
   b += "\n" + Lang("Monedero: ", "Wallet: ", "Porte-monnaie : ", "Geldbörse: ", "Portafoglio: ") + Num(g_zeni) + " Zenie";
   Bocadillo(dl, a, b);
-  S::HelpLine(dl, a.At(600, 868), 38 * a.s, {{"A", Aceptar()}});
+  D::Help(dl, a, {{"A", Aceptar()}});
 }
 
 }  // namespace
+
+// tagteam_slots.cpp: la Mision 100 en curso lleva equipos (no se borran al empezar su combate ni al reintentarlo).
+bool EquiposMision() {
+  if (!g_equipos.load()) return false;
+  const M::Estado st = M::Get();
+  return st.propio && st.tipo == M::kMision && st.fase == M::kCombate;
+}
 
 // Premio de un reto (modos.cpp, con su candado puesto): se suma en el siguiente Sincronizar.
 void Premio(int zeni) { g_premio += std::max(zeni, 0); }
@@ -1301,6 +1946,33 @@ bool Busy() {
   return g_vista != kCerrada || g_fin;
 }
 
+// Fondo de las pantallas del Modo Heroe (selector en su fila, su pantalla o su reto en curso).
+bool Mision100() {
+  std::lock_guard<std::mutex> lk(g_mu);
+  return g_vista == kMisionP;
+}
+
+bool Heroe() {
+  std::lock_guard<std::mutex> lk(g_mu);
+  const std::vector<int>& r = Retos(g_entrada);
+  if (g_vista == kHeroeP || (g_vista == kSelector && g_sel >= 0 && g_sel < int(r.size()) && r[size_t(g_sel)] == M::kHeroe))
+    return true;
+  const M::Estado st = M::Get();
+  return st.propio && st.tipo == M::kHeroe && (st.fase == M::kEntre || st.fase == M::kCombate || g_fin);
+}
+
+// PRUEBAS (DBZ3_TEST_MODO=mision100,jugador,n, modos.cpp): empieza la mision n (1-100) sin pasar por sus paginas.
+bool ProbarMision(int n, int jugador) {
+  std::lock_guard<std::mutex> lk(g_mu);
+  Cargar();
+  g_jugador = jugador;
+  g_traje = 0;
+  g_m100_sel = std::clamp(n - 1, 0, kNumMisiones - 1);
+  g_vista = kMisionP;
+  Empezar(M::kMision);
+  return g_vista == kCerrada;
+}
+
 void AbrirSelector(int entrada) {
   std::lock_guard<std::mutex> lk(g_mu);
   Cargar();
@@ -1314,7 +1986,14 @@ void AbrirSelector(int entrada) {
                 ? Lang("Rango: ", "Rank: ", "Rang : ", "Rang: ", "Grado: ") + nombre + " (" + Num(elo) + ")"
                 : std::string();
   g_vista = kSelector;
-  REXLOG_INFO("dbz3 rpg: selector de {} (luchador {})", M::NombreModo(entrada), g_jugador);
+  if (entrada == 3) {   // Mision 100: sus paginas, en la primera mision sin superar de una pagina abierta
+    const size_t n = std::min(g_m100.find('-'), size_t(kNumMisiones - 1));
+    g_pagina = int(n) / 5;
+    g_cursor = int(n) % 5;
+    while (g_pagina > 0 && !PaginaAbierta(g_pagina)) --g_pagina, g_cursor = 0;
+    g_vista = kMisionP;
+  }
+  REXLOG_INFO("dbz3 rpg: selector de {} (luchador {})", entrada == 3 ? "mision 100" : M::NombreModo(entrada), g_jugador);
 }
 
 void Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pulsado) {
@@ -1323,7 +2002,9 @@ void Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pulsado) {
   switch (g_vista) {
     case kSelector: return DibujarSelector(dl, a, t, pulsado);
     case kSimDia: return DibujarSim(dl, a, t, pulsado);
+    case kHeroeP: return DibujarHeroe(dl, a, t, pulsado);
     case kCuadro: return DibujarTorneo(dl, a, t, pulsado);
+    case kMisionP: return DibujarM100(dl, a, t, pulsado);
     default: break;
   }
   const M::Estado st = M::Get();
@@ -1331,8 +2012,9 @@ void Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pulsado) {
   if (st.propio && it != g_runs.end()) DibujarEntre(dl, a, t, pulsado, st, it->second);
 }
 
-// Durante la pelea de un reto propio, bajo el marcador: armadura del jefe y reglas del combate.
-void Hud(ImDrawList* dl, const S::Area& a) {
+// Durante la pelea de un reto propio, bajo el marcador (linea y del bloque del HUD de los modos, S::mode::kHud*):
+// armadura del jefe y reglas del combate, con la misma letra que las lineas del marcador.
+void Hud(ImDrawList* dl, const S::Area& a, float y) {
   std::lock_guard<std::mutex> lk(g_mu);
   const M::Estado st = M::Get();
   auto it = g_runs.find(st.tipo);
@@ -1341,7 +2023,7 @@ void Hud(ImDrawList* dl, const S::Area& a) {
   std::string s;
   if (r.modo == M::kJefes && kJefes[std::clamp(r.ganados, 0, 2)].armadura > 0) {
     const bool on = M::ArmaduraActiva();
-    S::MenuText(dl, a.At(600, 262), 30 * a.s,
+    S::MenuText(dl, a.At(600, y), 26 * a.s,
                 on ? L("Armadura", "Armor", "Armure", "Panzerung", "Armatura") : L("¡Ahora!", "Now!", "Maintenant !",
                                                                                      "Jetzt!", "Ora!"),
                 !on, on);
@@ -1350,6 +2032,8 @@ void Hud(ImDrawList* dl, const S::Area& a) {
   if (r.modo == M::kTorres) {
     const Torre& tr = kTorres[std::clamp(r.extra, 0, kNumTorres - 1)];
     s = L(tr.mod_es, tr.mod_en, tr.mod_fr, tr.mod_de, tr.mod_it);
+  } else if (r.modo == M::kMision) {
+    s = Lang("Misión ", "Mission ", "Mission ", "Mission ", "Missione ") + Num(r.extra + 1) + ": " + TituloMision(r.extra);
   } else {
     const M::Reglas g = ReglasDe(r);
     if (g.dano_hecho != 100) s += Lang("Daño ", "Damage ", "Dégâts ", "Schaden ", "Danni ") + Num(g.dano_hecho) + "%";
@@ -1358,7 +2042,7 @@ void Hud(ImDrawList* dl, const S::Area& a) {
            Num(g.dano_recibido) + "%";
     }
   }
-  if (!s.empty()) S::MenuText(dl, a.At(600, 262), 24 * a.s, s.c_str(), true, false);
+  if (!s.empty()) S::MenuText(dl, a.At(600, y), 24 * a.s, s.c_str(), true, false, 600 * a.s);
 }
 
 }  // namespace dbz3::rpg

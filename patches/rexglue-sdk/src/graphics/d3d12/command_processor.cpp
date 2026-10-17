@@ -112,6 +112,7 @@ namespace shaders {
 #include "../shaders/bytecode/d3d12_5_1/fxaa_extreme_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_downscale_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/dbz3_depth_copy_cs.h"
+#include "../shaders/bytecode/d3d12_5_1/dbz3_depth_copy_ms_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/dbz3_relight_ao_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/dbz3_relight_apply_ps.h"
 #include "../shaders/bytecode/d3d12_5_1/dbz3_relight_vs.h"
@@ -1688,6 +1689,10 @@ bool D3D12CommandProcessor::SetupContext() {
         ui::d3d12::util::CreateComputePipeline(device, shaders::dbz3_depth_copy_cs,
                                                sizeof(shaders::dbz3_depth_copy_cs),
                                                resolve_downscale_root_signature_.Get());
+    *(dbz3_depth_copy_ms_pipeline_.ReleaseAndGetAddressOf()) =
+        ui::d3d12::util::CreateComputePipeline(device, shaders::dbz3_depth_copy_ms_cs,
+                                               sizeof(shaders::dbz3_depth_copy_ms_cs),
+                                               resolve_downscale_root_signature_.Get());
   }
   if (!resolve_downscale_root_signature_ || !resolve_downscale_pipeline_) {
     resolve_downscale_pipeline_.Reset();
@@ -1910,6 +1915,7 @@ void D3D12CommandProcessor::ShutdownContext() {
   resolve_downscale_pipeline_.Reset();
   resolve_downscale_root_signature_.Reset();
   dbz3_depth_copy_pipeline_.Reset();
+  dbz3_depth_copy_ms_pipeline_.Reset();
   dbz3_depth_.Reset();
   dbz3_relight_ao_.Reset();
   dbz3_relight_depth_.Reset();
@@ -2358,7 +2364,8 @@ static float Dbz3Halton(uint32_t index, uint32_t base) {
 
 void D3D12CommandProcessor::Dbz3TemporalApplyJitter(draw_util::ViewportInfo& viewport_info,
                                                     bool z_enable) {
-  if (!dbz3_temporal_active_ || !dbz3_output_size_[0]) {
+  // R15: with only the UI depth, the scene phase still ends here, but nothing is jittered.
+  if (!(dbz3_temporal_active_ || dbz3_ui_depth_) || !dbz3_output_size_[0]) {
     return;
   }
   const uint32_t w = dbz3_output_size_[0], h = dbz3_output_size_[1];
@@ -2373,7 +2380,7 @@ void D3D12CommandProcessor::Dbz3TemporalApplyJitter(draw_util::ViewportInfo& vie
     dbz3_scene_phase_ = false;
   }
   // Screens without a 3D scene (menus) aren't upscaled temporally: no jitter.
-  if (!dbz3_scene_last_frame_) {
+  if (!dbz3_temporal_active_ || !dbz3_scene_last_frame_) {
     return;
   }
   if (dbz3_scene_phase_) {
@@ -2400,8 +2407,8 @@ void D3D12CommandProcessor::Dbz3TemporalApplyJitter(draw_util::ViewportInfo& vie
 }
 
 void D3D12CommandProcessor::Dbz3TemporalOnCopy() {
-  if (!dbz3_temporal_active_ || !dbz3_scene_phase_ || !dbz3_depth_copy_pipeline_ ||
-      !dbz3_output_size_[0] || !dbz3_frontbuffer_width_unscaled_) {
+  if (!(dbz3_temporal_active_ || dbz3_ui_depth_) || !dbz3_scene_phase_ ||
+      !dbz3_depth_copy_pipeline_ || !dbz3_output_size_[0] || !dbz3_frontbuffer_width_unscaled_) {
     return;
   }
   const RegisterFile& regs = *register_file_;
@@ -2421,10 +2428,14 @@ void D3D12CommandProcessor::Dbz3TemporalOnCopy() {
   ID3D12Resource* depth_rt;
   D3D12_CPU_DESCRIPTOR_HANDLE depth_rt_srv;
   uint32_t depth_rt_width, depth_rt_height;
+  // R15: with native 2x MSAA (the default) the depth is multisampled; only the UI depth reads it
+  // (sample 0), the temporal upscaler keeps its 1x-only behaviour.
+  const bool allow_msaa = dbz3_ui_depth_ && dbz3_depth_copy_ms_pipeline_;
   if (!render_target_cache_->Dbz3BeginReadLastDepth(depth_rt, depth_rt_srv, depth_rt_width,
-                                                    depth_rt_height)) {
+                                                    depth_rt_height, allow_msaa)) {
     return;
   }
+  const bool depth_msaa = depth_rt->GetDesc().SampleDesc.Count > 1;
   const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
   ID3D12Device* device = provider.GetDevice();
   uint32_t width = dbz3_output_size_[0], height = dbz3_output_size_[1];
@@ -2477,7 +2488,8 @@ void D3D12CommandProcessor::Dbz3TemporalOnCopy() {
   PushTransitionBarrier(dbz3_depth_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   SubmitBarriers();
-  SetExternalPipeline(dbz3_depth_copy_pipeline_.Get());
+  SetExternalPipeline(depth_msaa ? dbz3_depth_copy_ms_pipeline_.Get()
+                                 : dbz3_depth_copy_pipeline_.Get());
   deferred_command_list_.D3DSetComputeRootSignature(resolve_downscale_root_signature_.Get());
   uint32_t constants[5] = {std::min(width, depth_rt_width), std::min(height, depth_rt_height), 0,
                            0, 0};
@@ -2942,7 +2954,7 @@ void D3D12CommandProcessor::Dbz3MotionAfterDraw(
 
 void D3D12CommandProcessor::Dbz3TemporalWriteInputs(
     ui::Presenter::GuestOutputRefreshContext& context, uint32_t width, uint32_t height) {
-  if (!dbz3_temporal_active_ || !dbz3_scene_depth_captured_ || !dbz3_depth_) {
+  if (!(dbz3_temporal_active_ || dbz3_ui_depth_) || !dbz3_scene_depth_captured_ || !dbz3_depth_) {
     return;
   }
   D3D12_RESOURCE_DESC desc = dbz3_depth_->GetDesc();
@@ -3007,6 +3019,11 @@ void D3D12CommandProcessor::Dbz3TemporalEndFrame(uint32_t frontbuffer_width_unsc
                           GetD3D12Provider().GetAdapterVendorID() !=
                               ui::GraphicsProvider::GpuVendorID::kIntel &&
                           (effect == "fsr2" || effect == "fsr3" || effect == "dlss");
+  // R15: the game paints depth-tested UI (rexruntime cvar, set by the game). ponytail: Intel is
+  // left out as for the temporal inputs (its reason was not re-measured).
+  dbz3_ui_depth_ = rex::cvar::GetFlagByName("dbz3_ui_depth") == "true" &&
+                   GetD3D12Provider().GetAdapterVendorID() !=
+                       ui::GraphicsProvider::GpuVendorID::kIntel;
   dbz3_frontbuffer_width_unscaled_ = frontbuffer_width_unscaled;
   dbz3_scene_last_frame_ = dbz3_scene_depth_captured_;
   dbz3_scene_phase_ = true;

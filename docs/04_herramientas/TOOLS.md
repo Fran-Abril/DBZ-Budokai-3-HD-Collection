@@ -212,3 +212,8 @@ salta la attract demo battle 3D.
 - `tools/eu_map.py`: mapa US->EU verificado de funciones y datos que usan los ficheros de `src/` (genera `src/eu_map_gen.h` y `docs/14_frentes/eu_mapa.txt`); `tools/eu_convertir.py`: pasa un fichero a ganchos/direcciones con pareja EU (`src/eu_map.h`). Ver `docs/14_frentes/eu.md`.
 - `studies/tools/frame_data.py`: tabla de frame data estilo Budokai 4 (entradas, cuadros, dano por situacion) desde los ficheros del juego; ver `docs/14_frentes/combate.md`.
 - `mod center hd/forma_unica.py`: respaldo de la capsula "Todas las transformaciones" (hoy la genera el propio juego al arrancar, `src/transformaciones.cpp`); ver `docs/14_frentes/transformaciones.md`.
+
+## Tenkaichi 3 (PS2, copia del jugador) — estudio 2026-10-17
+- El `.chd` de Retrobat es de tipo CD (MODE1): `chdman extractcd -i <chd> -o t3.cue -ob t3.bin` da una ISO 9660 valida (sectores de 2048). `extractdvd` termina sin error pero NO da una ISO (unidades de 2448 B).
+- Contenido (PAL SLES_549.45): `DATA/PZS3EU1.AFS` (3645 entradas: modelos `pmdl`, mapas `MAPD`, textos `TXT` UTF-16 en 5 idiomas, animaciones), `DATA/PZS3EU2.AFS` (65201 ADX: voces por personaje, 15000 por idioma). Informe completo y scripts en `E:\DBZ3HD_trabajo\t3\` (no copiar datos del juego al proyecto).
+- Importable en tiempo de ejecucion (como B1/B2/IW), por valor/esfuerzo: voces ADX (lector ya existe en gritos.py), textos de historia, texturas GS de interfaz; modelos/mapas/guiones bloqueados (formato o compresion sin identificar).

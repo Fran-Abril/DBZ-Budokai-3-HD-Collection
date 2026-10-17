@@ -40,7 +40,10 @@ KIT_ENTRIES = ["roster_build", "importar", "swap_b3", "texture_b3", "texture_dum
                "campana", "editor_historias",   # Historias page (montar) and its story editor
                "modos_reto",      # challenge modes card (run as a subprocess: no import reaches it)
                "retos_predefinidos",   # "Retos predefinidos" row (HUB challenges, tower of the week)
-               "forma_unica"]   # respaldo de la capsula "Todas las transformaciones" (hoy la crea el juego)
+               "forma_unica",   # respaldo de la capsula "Todas las transformaciones" (hoy la crea el juego)
+               "campos_iw"]     # escenarios de los juegos de PS2 del jugador (campos de IW, B1/B2) al pulsar
+                                # Jugar (ModPipeline::BuildStages); trae escenarios_convertir. Solo el conversor:
+                                # los escenarios se generan en el equipo del jugador desde sus ISOs
 # Standalone modder tools the Mod Kit window also exposes (advanced mode > Tools), with the
 # local modules they import (kit_modules follows them).
 KIT_EXTRA_TOOLS = ["name_banner", "portrait_hd", "extract_azt_afs", "awg_to_obj_b3", "awg0_export",

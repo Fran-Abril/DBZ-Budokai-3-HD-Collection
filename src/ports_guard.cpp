@@ -74,6 +74,114 @@ DBZ3_HOOK_EU(sub_821266A8) {
   orig(ctx, base);
 }
 
+// Cadenas de fisica del modelo (feedback 1.4.6, Tag Team Janemba + Super Bu, logs/dbz3_1034.log): sub_82134640
+// (cargar modelo: r27 ID, r23 indice de forma, r25 traje, r24 jugador) lee el registro de 12 B
+// char96[ID].lista[byte(+18+8*indice) + por_traje*traje] y pasa su +4 a esta funcion, que lee alli 3 cuentas y
+// sus punteros. Un registro fuera de la lista (traje o indice que el ID no tiene) trae basura (0x54): cierre en
+// lr 0x82138910. Un +4 que no es puntero se trata como "sin cadenas" (0, lo mismo que los ports sin `fisica`).
+DBZ3_HOOK_EU(sub_821388D0) {
+  if (const uint32_t p = ctx.r3.u32; p && p < 0x1000) {
+    static std::atomic<int> avisos{0};
+    if (avisos.fetch_add(1) < 8)
+      REXLOG_WARN("dbz3 ports: cadenas de fisica no validas ({:X}) en el modelo de id {} forma {} traje {} jugador {} "
+                  "(registro {:08X}): se carga sin ellas", p, ctx.r27.s32, ctx.r23.s32, ctx.r25.s32, ctx.r24.s32,
+                  ctx.r28.u32);
+    ctx.r3.u64 = 0;
+    return;
+  }
+  orig(ctx, base);
+}
+
+// Clip de camara que el fichero no tiene (R9, 2026-10-16): sub_82082468(destino r3, #ACC r4, clip r5, frame f1) lee
+// la tabla de clips (+0x14; 16 B: +8 frames, +12 claves) sin mirar la cuenta (+0x10). Con la camara de un port que
+// tiene menos clips que la del donante (roster montado antes de cam_pad_clips de roster_build.py) lee basura: cierre
+// al acabar el vuelo de la presentacion (lr 0x820825A8) o en la pose de victoria (Pan de IW, 21 clips, pide el 23:
+// frames 0x40D4A316 y claves en 0x1, lr 0x82082470; D:\DBZ3HD\_pruebas\20261016-024812_modos_test_iw_mapa).
+// Se usa el ultimo clip que hay; sin clips no se mueve la camara. El montaje actual ya rellena los clips del donante.
+DBZ3_HOOK_EU(sub_82082468) {
+  if (const uint32_t acc = ctx.r4.u32) {
+    const uint32_t n = REX_LOAD_U32(acc + 16);
+    if (ctx.r5.u32 >= n) {
+      static std::atomic<int> avisos{0};
+      if (avisos.fetch_add(1) < 8)
+        REXLOG_WARN("dbz3 ports: clip de camara {} y la camara ({:08X}) tiene {}: {}", ctx.r5.u32, acc, n,
+                    n ? "se usa el ultimo" : "no se mueve");
+      if (!n) return;
+      ctx.r5.u64 = n - 1;
+    }
+  }
+  orig(ctx, base);
+}
+
+// Ordenes de guion (#SPX) de Infinite World que B3 no tiene (R9, 2026-10-16). El interprete (sub_8209F568) busca la
+// orden N en filas[N >> 4][N & 15] (tabla 0x82332670) sin mirar el largo de la fila. La fila 8 de B3 tiene 4 ordenes
+// (0x80-0x83) y la de IW 12 (tabla del ELF USA 0x457AC0): las 0x86 y 0x88 de IW (0x23AF00: nivel de las capsulas
+// 0x49-0x4D del lado p[0]; 0x23AD00: dato del registro de su capsula actual, 1 si no hay) caen en B3 en las 0x92/0x94,
+// sub_8211E520, que hace luchador = mgr[8797 + p[1]] y cambia su estado: con un solo argumento p[1] es basura y el
+// juego se cerraba (Goku GT de IW, definitiva 359: p[1] = 0x4CE81EF, lr 0x8209F668). Aqui, con clase/fila de entrada
+// (r10/4, r9/4 del interprete): las de IW se saltan sin tocar nada (su resultado se descarta en el guion: `12 10 04`;
+// escribir en cmd+0, donde IW deja el resultado, colgaba la definitiva: en B3 cmd+0 es del interprete), y cualquier
+// otra llamada con p[1] que no es un lado tambien.
+DBZ3_HOOK_EU(sub_8211E520) {
+  const uint32_t cmd = ctx.r4.u32, p = cmd ? REX_LOAD_U32(cmd + 44) : 0;
+  const uint32_t clase = ctx.r10.u32 / 4, fila = ctx.r9.u32 / 4;
+  const bool iw = clase == 8 && (fila == 6 || fila == 8);
+  if (cmd && (iw || (p && REX_LOAD_U32(p + 4) > 1))) {
+    static std::atomic<int> avisos{0};
+    if (avisos.fetch_add(1) < 8)
+      REXLOG_WARN("dbz3 ports: orden de guion {:X}{} (lado {:X}, pc {:08X}): {}", clase * 16 + fila,
+                  iw ? " de Infinite World" : "", p ? REX_LOAD_U32(p + (iw ? 0 : 4)) : 0u, REX_LOAD_U32(cmd + 36),
+                  "se salta");
+    ctx.r3.u64 = 1;
+    return;
+  }
+  orig(ctx, base);
+}
+
+// Las otras ordenes de IW que usan sus ports (Goku GT: 0x35-0x37 aura/malla y 0x99-0x9A rafagas de ki, filas 3 y 9
+// mas largas en IW) caen en B3 en las 0x60-0x62 y 0xA0-0xA1 y cambiaban otra cosa: se saltan.
+namespace {
+// true (y avisa) si la orden que llega (clase r10/4, fila r9/4) es la de IW que cae en este manejador de B3
+bool SaltaOrdenIW(PPCContext& ctx, uint8_t* base, uint32_t c, uint32_t f) {
+  if (!ctx.r4.u32 || ctx.r10.u32 / 4 != c || ctx.r9.u32 / 4 != f) return false;
+  static std::atomic<int> avisos{0};
+  if (avisos.fetch_add(1) < 8)
+    REXLOG_WARN("dbz3 ports: orden de guion {:X} de Infinite World (pc {:08X}): se salta", c * 16 + f,
+                REX_LOAD_U32(ctx.r4.u32 + 36));
+  ctx.r3.u64 = 1;
+  return true;
+}
+}  // namespace
+DBZ3_HOOK_EU(sub_8211E148) { if (!SaltaOrdenIW(ctx, base, 3, 5)) orig(ctx, base); }
+DBZ3_HOOK_EU(sub_8211E178) { if (!SaltaOrdenIW(ctx, base, 3, 6)) orig(ctx, base); }
+DBZ3_HOOK_EU(sub_8211E1B0) { if (!SaltaOrdenIW(ctx, base, 3, 7)) orig(ctx, base); }
+DBZ3_HOOK_EU(sub_8211E6A0) { if (!SaltaOrdenIW(ctx, base, 9, 9)) orig(ctx, base); }
+DBZ3_HOOK_EU(sub_8211E6F8) { if (!SaltaOrdenIW(ctx, base, 9, 10)) orig(ctx, base); }
+DBZ3_HOOK_EU(sub_8211E578) { if (!SaltaOrdenIW(ctx, base, 8, 7)) orig(ctx, base); }   // Vegeta saga Saiyan de IW
+DBZ3_HOOK_EU(sub_8211E2B8) { if (!SaltaOrdenIW(ctx, base, 3, 11)) orig(ctx, base); }
+
+// Nodo de efecto reutilizado en uso (R9, 2026-10-16): sub_82155990 coge el siguiente de un anillo de 128 nodos
+// (punteros en 0x824370B0, indice en 0x823EE81C) sin mirar si sigue enlazado en la lista ordenada (centinela
+// 0x823EE820; nodo: +0 siguiente, +4 anterior, +12 prioridad), lo pone a cero y lo vuelve a insertar: si seguia
+// en la lista, sus vecinos apuntan a un nodo con siguiente = 0 y el recorrido lee 0xC (Goku GT de IW con muchas
+// definitivas: lr 0x82155A04, D:\DBZ3HD\_pruebas\20261016-051458_ports_test_combate_port). Antes de reutilizarlo
+// se saca de la lista; el efecto que lo tenia pierde ese nodo, como antes, pero la lista queda bien.
+DBZ3_HOOK_EU(sub_82155990) {
+  constexpr dbz3::GA kIdx = 0x823EE81C, kPool = 0x824370B0;
+  const uint32_t i = REX_LOAD_U32(kIdx);
+  if (const uint32_t node = i < 128 ? REX_LOAD_U32(kPool + 4 * i) : 0) {
+    const uint32_t nx = REX_LOAD_U32(node), pv = REX_LOAD_U32(node + 4);
+    if (nx && pv && nx != node && REX_LOAD_U32(pv) == node && REX_LOAD_U32(nx + 4) == node) {
+      REX_STORE_U32(pv, nx);
+      REX_STORE_U32(nx + 4, pv);
+      static std::atomic<int> avisos{0};
+      if (avisos.fetch_add(1) < 4)
+        REXLOG_WARN("dbz3 ports: nodo de efecto {} reutilizado aun en la lista ({:08X}): se saca antes", i, node);
+    }
+  }
+  orig(ctx, base);
+}
+
 namespace {
 constexpr dbz3::GA kCfg = 0x8245EFC0;
 

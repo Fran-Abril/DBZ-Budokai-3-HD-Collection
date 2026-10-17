@@ -21,6 +21,13 @@
 namespace rex::ui {
 
 // A setting in the quick menu, backed by a cvar.
+//
+// Layout note: these structs keep the exact layout older apps were built with (the exe
+// and rexruntime.dll are built apart), so the extra bits the panel understands ride
+// inside existing strings; an older panel just shows them as plain text:
+//   QuickMenuItem::label         "Name|TAG"  draws TAG (BETA, EXPERIMENTAL...) as a pill after Name.
+//   QuickMenuSection::title      "TITLE" + newline + "note": the note shows, small, under the header.
+//   QuickMenuConfig::text_change "Change" + newline + "Section": the 2nd line names the LB / RB hint.
 struct QuickMenuItem {
   enum class Kind {
     // Boolean cvar, shown as a switch.
@@ -36,7 +43,7 @@ struct QuickMenuItem {
 
   Kind kind = Kind::kToggle;
   std::string label;
-  // Shown under the list while the item is selected.
+  // Shown in the help box while the item is selected (it wraps; keep it to a sentence or two).
   std::string help;
   std::string cvar;
   // Set to the same value as `cvar` (like draw_resolution_scale_y with _x).
@@ -61,6 +68,7 @@ struct QuickMenuItem {
 };
 
 struct QuickMenuSection {
+  // Name in the section list; after a newline, a one-line note shown under the header.
   std::string title;
   std::vector<QuickMenuItem> items;
 };

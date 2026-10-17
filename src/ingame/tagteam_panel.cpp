@@ -99,8 +99,28 @@ std::atomic<bool> g_form_used{false};              // ya empezo un combate con l
 std::array<std::array<bool, 2>, 2> g_trig_prev{};  // LT/RT pulsados el tick anterior por mando
 constexpr const char* kFormats[] = {"2 VS 1", "1 VS 2", "2 VS 2", "3 VS 3"};
 constexpr int kNumFormats = 4;
+// Duelo por puntos (la idea de los DP de Tenkaichi 3, con valores propios): cada luchador cuesta 1-5 segun su fuerza
+// y el equipo no puede pasar del presupuesto (LB/RB en la pantalla TAG TEAM; 0 = libre). Los de mods cuestan 3.
+constexpr int kPresupuestos[] = {0, 6, 9, 12};
+constexpr int kNumPresupuestos = 4;
+// indice de kPresupuestos (PRUEBA: DBZ3_TAG_PUNTOS=N empieza con ese)
+std::atomic<int> g_presupuesto{std::getenv("DBZ3_TAG_PUNTOS") ? std::atoi(std::getenv("DBZ3_TAG_PUNTOS")) % 4 : 0};
+int Coste(int id) {
+  switch (id) {
+    case 40: case 41: return 5;                                           // Broly, Omega Shenron
+    case 0: case 4: case 7: case 27: case 33: case 35: case 36: case 38: return 4;
+    case 3: case 8: case 11: case 17: case 28: case 29: case 30: case 34: case 37: case 39: return 3;
+    case 13: case 14: case 15: case 42: case 43: return 1;               // Yamcha, Hercule, Videl, Saibaman, Cell Jr.
+    default: return id < 44 ? 2 : 3;
+  }
+}
+int Puntos(const std::vector<int>& ids) {
+  int n = 0;
+  for (const int id : ids) n += Coste(id);
+  return n;
+}
 // Ultimo aviso de la eleccion (lado, que paso y cuando), para el letrero sobre la tira.
-enum class Event { kNone, kAdded, kRemoved, kRepeated };
+enum class Event { kNone, kAdded, kRemoved, kRepeated, kPoints };
 struct Notice {
   int side = 0;
   Event what = Event::kNone;
@@ -331,6 +351,15 @@ constexpr double kGameFade = 10.0 / 60.0;  // sub_821D27B8(10): 10 fotogramas
 
 }  // namespace
 
+// Para otros modos (frente R1, Fighter's Road de IW, 2026-10-16): el mismo piloto al Duelo y su rueda, y el aviso del
+// personaje confirmado en la rueda (tambien fuera del Tag Team).
+void PilotarAlDuelo(int fila) { PilotToDuel(fila); }
+std::atomic<void (*)(int, int)> g_aviso_eleccion{nullptr};
+void RegistrarEleccion(void (*aviso)(int jugador, int id)) { g_aviso_eleccion = aviso; }
+void AvisarEleccion(int jugador, int id) {
+  if (auto* f = g_aviso_eleccion.load()) f(jugador, id);
+}
+
 bool TagTeamGate() { return g_gate.load() != Gate::kNone || g_entering.load(); }
 
 std::atomic<double> g_opened_at{0};
@@ -356,6 +385,18 @@ bool OnSelectPicked(int player, int id) {
     g_notice = {player, Event::kRepeated, Now()};
     REXLOG_INFO("dbz3 tag: lado {} ya tiene el id {} (no se repite)", player + 1, id);
     if (g_native_path.load()) {   // su menu de capsulas sigue y al elegir vuelve a la rueda sin sumar (TeamWantsMore)
+      g_skip_caps[size_t(player)] = true;
+    } else {
+      dbz3::ingame::pilot::Run({dbz3::ingame::pilot::PressUntilBrowse(kY, player, PilotUser(player))});
+    }
+    return true;
+  }
+  if (const int tope = kPresupuestos[g_presupuesto.load()];
+      tope > 0 && Puntos(picks) + Coste(id) + (Need(player) - int(picks.size()) - 1) > tope) {
+    g_notice = {player, Event::kPoints, Now()};
+    REXLOG_INFO("dbz3 tag: lado {}: el id {} cuesta {} y el equipo lleva {} de {} puntos (no cabe)", player + 1, id,
+                Coste(id), Puntos(picks), tope);
+    if (g_native_path.load()) {
       g_skip_caps[size_t(player)] = true;
     } else {
       dbz3::ingame::pilot::Run({dbz3::ingame::pilot::PressUntilBrowse(kY, player, PilotUser(player))});
@@ -631,7 +672,9 @@ void TagTeamPanel::DrawMenu(ImGuiIO& io, uint16_t pressed) {
       T::T("Dos jugadores, cada uno elige su equipo en la rueda.", "Two players, each picks a team on the wheel."),
       T::T("Mira un combate entre dos equipos que eliges tu.", "Watch two teams of your choice fight.")};
   constexpr int kRows = 3;
-  constexpr uint16_t kLeft = 0x0004, kRight = 0x0008;
+  constexpr uint16_t kLeft = 0x0004, kRight = 0x0008, kLb = 0x0100, kRb = 0x0200;
+  if (pressed & kLb) g_presupuesto = (g_presupuesto.load() + kNumPresupuestos - 1) % kNumPresupuestos;
+  if (pressed & kRb) g_presupuesto = (g_presupuesto.load() + 1) % kNumPresupuestos;
   if (pressed & kUp) row_ = (row_ + kRows - 1) % kRows;
   if (pressed & kDown) row_ = (row_ + 1) % kRows;
   if (pressed & kLeft) g_format = (g_format.load() + kNumFormats - 1) % kNumFormats;
@@ -701,6 +744,13 @@ void TagTeamPanel::DrawMenu(ImGuiIO& io, uint16_t pressed) {
   S::Frame(dl, g0, g1, a.s);
   S::MenuText(dl, ImVec2((g0.x + g1.x) * 0.5f, (g0.y + g1.y) * 0.5f), 50 * a.s, kFormats[g_format.load()], true, false);
   S::Arrows(dl, ImVec2(g0.x - 18 * a.s, g0.y), ImVec2(g1.x + 18 * a.s, g1.y), 46 * a.s, t);
+  {   // duelo por puntos (LB/RB), bajo el formato
+    const int tope = kPresupuestos[g_presupuesto.load()];
+    char pts[96];
+    if (tope > 0) std::snprintf(pts, sizeof(pts), T::T("LB/RB  Puntos por equipo: %d", "LB/RB  Points per team: %d"), tope);
+    else std::snprintf(pts, sizeof(pts), "%s", T::T("LB/RB  Puntos: libre", "LB/RB  Points: free"));
+    S::MenuText(dl, a.At(600, 578), 28 * a.s, pts, tope > 0, tope == 0);
+  }
   std::string text = no_pad2 ? T::T("Conecta un segundo mando para jugar 1P VS 2P.",
                                      "Connect a second controller to play 1P VS 2P.")
                              : help[row_];
@@ -710,6 +760,11 @@ void TagTeamPanel::DrawMenu(ImGuiIO& io, uint16_t pressed) {
                      "3 VS 3: SELECT switches to the second, SELECT + L to the third.")
               : T::T("SELECT cambia al compañero. Izquierda/derecha: formato.",
                      "SELECT switches to your partner. Left/right: format.");
+  if (kPresupuestos[g_presupuesto.load()] > 0) {
+    text += '\n';
+    text += T::T("Duelo por puntos: cada luchador cuesta de 1 a 5 según su fuerza.",
+                 "Points duel: each fighter costs 1 to 5 by strength.");
+  }
   S::Speech(dl, a.At(200, 615), a.At(840, 845), a.s, text.c_str(), right ? 0.92f : 0.12f);
   S::HelpLine(dl, a.At(600, 868), 40 * a.s, {{"A", T::T("Aceptar", "OK")}, {"B", T::T("Atras", "Back")}});
 }
@@ -749,9 +804,14 @@ void TagTeamPanel::DrawPicking(ImGuiIO& io) {
     S::TeamStrip(dl, p0, a.s, side == 1, need, names, faces, active, done[size_t(side)], t);
     // quien elige este equipo y cuantos lleva, bajo la tira (encima esta el nombre del juego)
     const bool com = (mode == 0 && side == 1) || mode == 2;
-    char head[64];
+    char head[96];
     std::snprintf(head, sizeof(head), "%s  %d/%d", com ? "COM" : side == 0 ? "1P" : "2P",
                   int(picks[size_t(side)].size()), need);
+    if (const int tope = kPresupuestos[g_presupuesto.load()]; tope > 0) {
+      const size_t n = std::strlen(head);
+      std::snprintf(head + n, sizeof(head) - n, T::T("  -  %d/%d puntos", "  -  %d/%d points"),
+                    Puntos(picks[size_t(side)]), tope);
+    }
     const float stripw = need * 84 + (need - 1) * 8;
     const ImVec2 hc(side == 0 ? p0.x + stripw * 0.5f * a.s : p0.x - stripw * 0.5f * a.s, p0.y + 128 * a.s);
     // rotulo y aviso solo con la rueda de ese lado eligiendo: debajo sale el menu de capsulas del juego
@@ -759,11 +819,12 @@ void TagTeamPanel::DrawPicking(ImGuiIO& io) {
     if (!done[size_t(side)] && browsing) S::MenuText(dl, hc, 30 * a.s, head, active, !active);
     // aviso de lo ultimo que paso en este lado (3,5 s: el juego tarda en volver a la rueda)
     if (browsing && notice.side == side && notice.what != Event::kNone && since < 3.5f) {
-      const char* msg = notice.what == Event::kRepeated ? T::T("Ya esta en el equipo", "Already in the team")
+      const char* msg = notice.what == Event::kPoints ? T::T("No quedan puntos para ese", "Not enough points for that one")
+                        : notice.what == Event::kRepeated ? T::T("Ya esta en el equipo", "Already in the team")
                         : notice.what == Event::kRemoved ? T::T("Quitado", "Removed")
                                                          : T::T("Anadido", "Added");
       const ImVec2 mc(hc.x, p0.y + 162 * a.s);
-      S::MenuText(dl, mc, 28 * a.s, msg, notice.what != Event::kRepeated, false);
+      S::MenuText(dl, mc, 28 * a.s, msg, notice.what != Event::kRepeated && notice.what != Event::kPoints, false);
     }
   }
   // ayuda segun el momento: de quien es el turno y que hace cada boton

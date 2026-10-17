@@ -5,6 +5,13 @@
 
 #include "i18n.h"
 
+#include <array>
+#include <filesystem>
+
+#include <toml++/toml.hpp>
+
+#include "../mods.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -984,6 +991,93 @@ static const Entry kTable[] = {
     {"Tamaño", "Dimensione", "Größe", "Taille"},
     {"Intro de cine", "Intro cinematografica", "Kino-Intro", "Intro cinématique"},
     {"Al empezar cada combate, 10 s de cámara de cine sobre el escenario y los luchadores; A la salta. No se usa en el online.", "All'inizio di ogni scontro, 10 s di inquadrature da film sull'arena e sui lottatori; A la salta. Non si usa online.", "Zu Beginn jedes Kampfes 10 s Kinokamera über Arena und Kämpfer; A überspringt sie. Online nicht aktiv.", "Au début de chaque combat, 10 s de caméra cinéma sur l'arène et les combattants ; A la passe. Pas utilisé en ligne."},
+    // i18n sweep 2026-10-17: textos que caian al ingles en fr/de/it (launcher, pasarelas, errores de arranque)
+    {"Usa la carpeta con los datos del juego ya extraidos (la que tiene DBZ3, o default.xex y us/). Los mods funcionan igual que con la ISO.", "Usa la cartella con i dati del gioco già estratti (quella che contiene DBZ3, o default.xex e us/). Le mod funzionano come con la ISO.", "Verwende den Ordner mit den bereits extrahierten Spieldaten (den mit DBZ3 oder default.xex und us/). Mods funktionieren genauso wie mit der ISO.", "Utilise le dossier contenant les données du jeu déjà extraites (celui qui contient DBZ3, ou default.xex et us/). Les mods fonctionnent comme avec l'ISO."},
+    {"Juega desde la imagen del disco (.iso de Xbox 360 de Budokai 3 HD / HD Collection), sin extraerla. Con mods, la primera vez se copian ~0,5 GB de sus datos (una sola vez).", "Gioca dall'immagine del disco (.iso Xbox 360 di Budokai 3 HD / HD Collection), senza estrarla. Con le mod, la prima volta vengono copiati ~0,5 GB dei suoi dati (una sola volta).", "Spiele direkt vom Disc-Abbild (Xbox-360-.iso von Budokai 3 HD / HD Collection), ohne es zu extrahieren. Mit Mods werden beim ersten Mal ~0,5 GB der Daten kopiert (nur einmal).", "Joue depuis l'image du disque (.iso Xbox 360 de Budokai 3 HD / HD Collection), sans l'extraire. Avec des mods, ~0,5 Go de ses données sont copiés la première fois (une seule fois)."},
+    {"Pantalla, calidad de imagen, FPS e idioma.", "Schermo, qualità dell'immagine, FPS e lingua.", "Anzeige, Bildqualität, FPS und Sprache.", "Écran, qualité d'image, FPS et langue."},
+    {"Nitidez y suavizado de la imagen (FSR, FXAA). Si no sabes, déjalo como está.", "Nitidezza e smussatura dell'immagine (FSR, FXAA). Se non sai, lascia com'è.", "Bildschärfe und Kantenglättung (FSR, FXAA). Wenn du unsicher bist, lass es, wie es ist.", "Netteté et lissage de l'image (FSR, FXAA). Si tu hésites, laisse comme c'est."},
+    {"Volumen general y silencio.", "Volume generale e silenzio.", "Gesamtlautstärke und Stummschaltung.", "Volume général et sourdine."},
+    {"Mando o teclado: botones y sensibilidad.", "Controller o tastiera: pulsanti e sensibilità.", "Controller oder Tastatur: Tasten und Empfindlichkeit.", "Manette ou clavier : boutons et sensibilité."},
+    {"Tus mods instalados: actívalos o desactívalos con la casilla. Para instalar uno, arrastra su .zip a esta ventana.", "Le tue mod installate: attivale o disattivale con la casella. Per installarne una, trascina il suo .zip in questa finestra.", "Deine installierten Mods: Schalte sie mit dem Kästchen ein oder aus. Zum Installieren ziehst du die .zip-Datei in dieses Fenster.", "Tes mods installés : active-les ou désactive-les avec la case. Pour en installer un, glisse son .zip dans cette fenêtre."},
+    {"Mods listos para jugar: un clic los descarga e instala.", "Mod pronte da usare: un clic le scarica e le installa.", "Spielfertige Mods: Ein Klick lädt sie herunter und installiert sie.", "Des mods prêts à jouer : un clic les télécharge et les installe."},
+    {"Funciones del juego: arranque rápido, FPS, partida al 100% y brillo HD.", "Funzioni del gioco: avvio rapido, FPS, bagliore HD e partita al 100%.", "Spielfunktionen: Schnellstart, FPS, HD-Glanz und Spielstand bei 100%.", "Fonctions du jeu : démarrage rapide, FPS, brillance HD et partie à 100%."},
+    {"Cambia el modelo de un personaje por el de otro (crea un mod).", "Sostituisci il modello di un personaggio con quello di un altro (crea una mod).", "Tausche das Modell eines Charakters gegen das eines anderen (erstellt einen Mod).", "Remplace le modèle d'un personnage par celui d'un autre (crée un mod)."},
+    {"Packs de texturas HD y captura de texturas para editarlas.", "Pacchetti di texture HD e cattura delle texture per modificarle.", "HD-Texturpakete und Texturaufnahme zum Bearbeiten.", "Packs de textures HD et capture de textures pour les modifier."},
+    {"Personajes nuevos importados de otros juegos (necesita el Kit de modding para crearlos).", "Nuovi personaggi importati da altri giochi (per crearli serve il Kit di modding).", "Neue Charaktere aus anderen Spielen (zum Erstellen brauchst du das Modding-Kit).", "Nouveaux personnages importés d'autres jeux (le kit de modding est nécessaire pour les créer)."},
+    {"Diagnóstico y opciones para quien reporta fallos. No hace falta tocarlo.", "Diagnostica e opzioni per chi segnala problemi. Non serve toccarlo.", "Diagnose und Optionen für alle, die Fehler melden. Du musst es nicht anfassen.", "Diagnostic et options pour qui signale un bug. Pas besoin d'y toucher."},
+    {"Mods desde la ISO: ", "Mod dalla ISO: ", "Mods von der ISO: ", "Mods depuis l'ISO : "},
+    {". JUGAR otra vez = sin mods.", ". Premi di nuovo GIOCA = senza mod.", ". Erneut SPIELEN = ohne Mods.", ". JOUER de nouveau = sans mods."},
+    {"Desde la ISO: la primera vez se preparan sus datos para mods y extras (~0,5 GB, segundos).", "Dalla ISO: la prima volta i suoi dati vengono preparati per mod ed extra (~0,5 GB, pochi secondi).", "Von der ISO: Beim ersten Mal werden ihre Daten für Mods und Extras vorbereitet (~0,5 GB, wenige Sekunden).", "Depuis l'ISO : la première fois, ses données sont préparées pour les mods et les extras (~0,5 Go, quelques secondes)."},
+    {"Preparando la ISO para mods y extras (solo la primera vez)...", "Preparazione della ISO per mod ed extra (solo la prima volta)...", "ISO wird für Mods und Extras vorbereitet (nur beim ersten Mal)...", "Préparation de l'ISO pour les mods et les extras (la première fois seulement)..."},
+    {"Online", "Online", "Online", "En ligne"},
+    {"Falta la carpeta mods_nativos\\partida_100 junto a dbz3.exe: vuelve a instalar la version.", "Manca la cartella mods_nativos\\partida_100 accanto a dbz3.exe: reinstalla la versione.", "Der Ordner mods_nativos\\partida_100 neben dbz3.exe fehlt: Installiere die Version erneut.", "Le dossier mods_nativos\\partida_100 est absent à côté de dbz3.exe : réinstalle la version."},
+    {"Preparando la ISO para los mods...", "Preparazione della ISO per le mod...", "ISO wird für die Mods vorbereitet...", "Préparation de l'ISO pour les mods..."},
+    {"Juegas desde la ISO y tus mods funcionan (sus datos ya estan preparados).", "Giochi dalla ISO e le tue mod funzionano (i suoi dati sono già pronti).", "Du spielst von der ISO und deine Mods funktionieren (ihre Daten sind bereits vorbereitet).", "Tu joues depuis l'ISO et tes mods fonctionnent (ses données sont déjà prêtes)."},
+    {"Juegas desde la ISO: para los mods y los extras se copia una vez parte de sus datos (~0,5 GB; con personajes nuevos, ~2 GB). JUGAR lo hace solo la primera vez, o pulsa el boton.", "Giochi dalla ISO: per le mod e gli extra una parte dei suoi dati viene copiata una volta (~0,5 GB; con personaggi nuovi, ~2 GB). GIOCA lo fa da solo la prima volta, oppure premi il pulsante.", "Du spielst von der ISO: Für Mods und Extras wird einmalig ein Teil ihrer Daten kopiert (~0,5 GB; mit neuen Charakteren ~2 GB). SPIELEN erledigt das beim ersten Mal von selbst, oder drücke die Schaltfläche.", "Tu joues depuis l'ISO : pour les mods et les extras, une partie de ses données est copiée une fois (~0,5 Go ; avec de nouveaux personnages, ~2 Go). JOUER le fait tout seul la première fois, ou appuie sur le bouton."},
+    {"Preparar la ISO para mods", "Prepara la ISO per le mod", "ISO für Mods vorbereiten", "Préparer l'ISO pour les mods"},
+    {"Copia los archivos del juego que cambian los mods a user_data/dbz3/iso_datos. La ISO no se toca.", "Copia in user_data/dbz3/iso_datos i file del gioco che le mod modificano. La ISO non viene toccata.", "Kopiert die Spieldateien, die Mods ändern, nach user_data/dbz3/iso_datos. Die ISO bleibt unberührt.", "Copie dans user_data/dbz3/iso_datos les fichiers du jeu que les mods modifient. L'ISO n'est pas touchée."},
+    {"No se pudo: ", "Non riuscito: ", "Fehlgeschlagen: ", "Échec : "},
+    {"Goku (nino)", "Goku (bambino)", "Goku (Kind)", "Goku (enfant)"},
+    {"Gohan (nino)", "Gohan (bambino)", "Gohan (Kind)", "Gohan (enfant)"},
+    {"Gohan (adolescente)", "Gohan (adolescente)", "Gohan (Teenager)", "Gohan (adolescent)"},
+    {"Gohan (adulto)", "Gohan (adulto)", "Gohan (Erwachsener)", "Gohan (adulte)"},
+    {"Trunks (nino)", "Trunks (bambino)", "Trunks (Kind)", "Trunks (enfant)"},
+    {"\xEE\x9C\xBE" "  Listo para importar", "\xEE\x9C\xBE" "  Pronto per l'importazione", "\xEE\x9C\xBE" "  Bereit zum Import", "\xEE\x9C\xBE" "  Prêt à importer"},
+    {"\xEE\x9E\xBA" "  En desarrollo", "\xEE\x9E\xBA" "  In sviluppo", "\xEE\x9E\xBA" "  In Entwicklung", "\xEE\x9E\xBA" "  En développement"},
+    {"\xEE\xA8\xB9" "  No encontrado (copialo en ps2_games)", "\xEE\xA8\xB9" "  Non trovato (copialo in ps2_games)", "\xEE\xA8\xB9" "  Nicht gefunden (kopiere es nach ps2_games)", "\xEE\xA8\xB9" "  Introuvable (copie-le dans ps2_games)"},
+    {"\xEE\x9C\xA1" "  Buscar personaje...", "\xEE\x9C\xA1" "  Cerca personaggio...", "\xEE\x9C\xA1" "  Charakter suchen...", "\xEE\x9C\xA1" "  Chercher un personnage..."},
+    {"Tag Team (beta)", "Tag Team (beta)", "Tag Team (Beta)", "Tag Team (bêta)"},
+    {"Online (beta)", "Online (beta)", "Online (Beta)", "En ligne (bêta)"},
+    {"no se pudo leer la ISO", "impossibile leggere la ISO", "die ISO konnte nicht gelesen werden", "impossible de lire l'ISO"},
+    {"la ISO no tiene los datos de Budokai 3", "la ISO non contiene i dati di Budokai 3", "die ISO enthält keine Budokai-3-Daten", "l'ISO ne contient pas les données de Budokai 3"},
+    {"falta espacio: hacen falta %.1f GB libres en el disco del juego", "spazio insufficiente: servono %.1f GB liberi sull'unità del gioco", "nicht genug Speicherplatz: Auf dem Laufwerk des Spiels werden %.1f GB frei benötigt", "espace insuffisant : il faut %.1f Go libres sur le disque du jeu"},
+    {"no se pudo abrir ", "impossibile aprire ", "Öffnen nicht möglich: ", "impossible d'ouvrir "},
+    {"no se pudo copiar ", "impossibile copiare ", "Kopieren nicht möglich: ", "impossible de copier "},
+    {" (revisa el espacio libre)", " (controlla lo spazio libero)", " (prüfe den freien Speicherplatz)", " (vérifie l'espace libre)"},
+    {"no se pudo guardar ", "impossibile salvare ", "Speichern nicht möglich: ", "impossible d'enregistrer "},
+    {"No encuentro tu copia de Budokai 3 HD.\n\nPon la imagen del disco (ISO de Xbox 360) junto a dbz3.exe, o elígela ahora. Si tienes el juego extraído en una carpeta, elige esa carpeta (la que tiene DBZ3, o default.xex y us/).\n\nSí: elegir la imagen del disco (.iso)\nNo: elegir la carpeta del juego extraído\nCancelar: salir\n\nCarpeta buscada:\n", "Non trovo la tua copia di Budokai 3 HD.\n\nMetti l'immagine del disco (ISO di Xbox 360) accanto a dbz3.exe, oppure sceglila ora. Se hai il gioco estratto in una cartella, scegli quella cartella (quella che contiene DBZ3, o default.xex e us/).\n\nSì: scegli l'immagine del disco (.iso)\nNo: scegli la cartella del gioco estratto\nAnnulla: esci\n\nCartella cercata:\n", "Ich finde deine Kopie von Budokai 3 HD nicht.\n\nLege das Disc-Abbild (Xbox-360-ISO) neben dbz3.exe oder wähle es jetzt aus. Wenn du das Spiel in einem Ordner extrahiert hast, wähle diesen Ordner (den mit DBZ3 oder default.xex und us/).\n\nJa: Disc-Abbild (.iso) auswählen\nNein: Ordner mit dem extrahierten Spiel auswählen\nAbbrechen: Beenden\n\nGesuchter Ordner:\n", "Je ne trouve pas ta copie de Budokai 3 HD.\n\nPlace l'image du disque (ISO Xbox 360) à côté de dbz3.exe, ou choisis-la maintenant. Si tu as le jeu extrait dans un dossier, choisis ce dossier (celui qui contient DBZ3, ou default.xex et us/).\n\nOui : choisir l'image du disque (.iso)\nNon : choisir le dossier du jeu extrait\nAnnuler : quitter\n\nDossier recherché :\n"},
+    {"DBZ Budokai 3 - Datos del juego", "DBZ Budokai 3 - Dati del gioco", "DBZ Budokai 3 - Spieldaten", "DBZ Budokai 3 - Données du jeu"},
+    {"Ese archivo no es una imagen de disco de Xbox 360 (tiene que ser el disco de\nBudokai 3 o de la HD Collection, completo).", "Quel file non è un'immagine di disco Xbox 360 (deve essere il disco completo di\nBudokai 3 o della HD Collection).", "Diese Datei ist kein Xbox-360-Disc-Abbild (es muss die vollständige Disc von\nBudokai 3 oder der HD Collection sein).", "Ce fichier n'est pas une image de disque Xbox 360 (il doit s'agir du disque complet de\nBudokai 3 ou de la HD Collection)."},
+    {"Has elegido la carpeta us/ (o eu/). Elige la carpeta que la contiene.", "Hai scelto la cartella us/ (o eu/). Scegli la cartella che la contiene.", "Du hast den Ordner us/ (oder eu/) gewählt. Wähle den Ordner, der ihn enthält.", "Tu as choisi le dossier us/ (ou eu/). Choisis le dossier qui le contient."},
+    {"Esa carpeta no tiene el juego. Elige la que contiene DBZ3, o default.xex y us/.", "Quella cartella non contiene il gioco. Scegli quella che contiene DBZ3, o default.xex e us/.", "Dieser Ordner enthält das Spiel nicht. Wähle den Ordner mit DBZ3 oder default.xex und us/.", "Ce dossier ne contient pas le jeu. Choisis celui qui contient DBZ3, ou default.xex et us/."},
+    {"DBZ Budokai 3 HD Collection se cerro inesperadamente.", "DBZ Budokai 3 HD Collection si è chiuso in modo imprevisto.", "DBZ Budokai 3 HD Collection wurde unerwartet beendet.", "DBZ Budokai 3 HD Collection s'est fermé de façon inattendue."},
+    {"Excepcion", "Eccezione", "Ausnahme", "Exception"},
+    {"El registro del juego esta en:", "Il registro del gioco si trova in:", "Das Spielprotokoll befindet sich hier:", "Le journal du jeu se trouve ici :"},
+    {"El registro no se pudo localizar (logs/ junto al juego).", "Impossibile trovare il registro (logs/ accanto al gioco).", "Das Protokoll wurde nicht gefunden (logs/ neben dem Spiel).", "Le journal est introuvable (logs/ à côté du jeu)."},
+    {"Minidump guardado en:", "Minidump salvato in:", "Minidump gespeichert unter:", "Minidump enregistré dans :"},
+    {"Si el problema persiste, comparte el registro para diagnostico.", "Se il problema persiste, condividi il registro per la diagnosi.", "Wenn das Problem weiterhin besteht, teile das Protokoll zur Diagnose.", "Si le problème persiste, partage le journal pour le diagnostic."},
+    {"DBZ Budokai 3 HD Collection se cerro inesperadamente (terminacion del runtime). Consulta el registro en logs/ junto al juego.", "DBZ Budokai 3 HD Collection si è chiuso in modo imprevisto (terminazione del runtime). Consulta il registro in logs/ accanto al gioco.", "DBZ Budokai 3 HD Collection wurde unerwartet beendet (Laufzeitabbruch). Sieh dir das Protokoll in logs/ neben dem Spiel an.", "DBZ Budokai 3 HD Collection s'est fermé de façon inattendue (arrêt du runtime). Consulte le journal dans logs/ à côté du jeu."},
+    {"DBZ Budokai 3 HD Collection se cerro por un error grave (normalmente de la tarjeta grafica).", "DBZ Budokai 3 HD Collection si è chiuso per un errore grave (di solito della scheda grafica).", "DBZ Budokai 3 HD Collection wurde wegen eines schweren Fehlers beendet (meist durch die Grafikkarte).", "DBZ Budokai 3 HD Collection s'est fermé à cause d'une erreur grave (généralement liée à la carte graphique)."},
+    {"Prueba en el lanzador: Motor grafico -> Vulkan, y actualiza el driver de la grafica. Si sigue, comparte el registro.", "Prova nel launcher: Motore grafico -> Vulkan, e aggiorna il driver della scheda grafica. Se continua, condividi il registro.", "Probiere im Launcher: Grafik-API -> Vulkan, und aktualisiere den Grafiktreiber. Wenn es weiterhin auftritt, teile das Protokoll.", "Essaie dans le launcher : Moteur graphique -> Vulkan, et mets à jour le pilote graphique. Si ça continue, partage le journal."},
+    {"el mod '", "la mod '", "der Mod '", "le mod '"},
+    {"' ya instalado está abierto en otro programa. Cierra el juego (y el Mod Kit o la carpeta mods en el Explorador) y vuelve a instalarlo.", "' già installata è aperta in un altro programma. Chiudi il gioco (e il Mod Kit o la cartella mods in Esplora risorse) e installala di nuovo.", "' ist bereits installiert und in einem anderen Programm geöffnet. Schließe das Spiel (und das Mod Kit oder den Mods-Ordner im Explorer) und installiere ihn erneut.", "' déjà installé est ouvert dans un autre programme. Ferme le jeu (et le Mod Kit ou le dossier mods dans l'Explorateur) puis réinstalle-le."},
+    {"no se pudo copiar el mod a la carpeta mods. Cierra lo que la tenga abierta; si el juego está dentro de Archivos de programa, muévelo a otra carpeta (por ejemplo Documentos).", "impossibile copiare la mod nella cartella mods. Chiudi ciò che la tiene aperta; se il gioco si trova in Programmi, spostalo in un'altra cartella (per esempio Documenti).", "der Mod konnte nicht in den Mods-Ordner kopiert werden. Schließe alles, was ihn geöffnet hat; wenn das Spiel unter „Programme“ liegt, verschiebe es in einen anderen Ordner (zum Beispiel Dokumente).", "impossible de copier le mod dans le dossier mods. Ferme ce qui l'utilise ; si le jeu est dans Program Files, déplace-le dans un autre dossier (par exemple Documents)."},
+    {"no se encuentra el .zip. Muévelo a una carpeta normal (por ejemplo Descargas) y vuelve a probar.", "impossibile trovare il .zip. Spostalo in una cartella normale (per esempio Download) e riprova.", "die .zip-Datei wurde nicht gefunden. Verschiebe sie in einen normalen Ordner (zum Beispiel Downloads) und versuche es erneut.", "le .zip est introuvable. Déplace-le dans un dossier normal (par exemple Téléchargements) et réessaie."},
+    {"no se pudo descomprimir el .zip. Puede estar a medio descargar o dañado: descárgalo otra vez. Si tiene contraseña, descomprímelo tú dentro de la carpeta mods. Mira también que quede espacio libre en el disco.", "impossibile estrarre il .zip. Potrebbe essere scaricato a metà o danneggiato: scaricalo di nuovo. Se ha una password, estrailo tu nella cartella mods. Controlla anche che ci sia spazio libero sul disco.", "die .zip-Datei konnte nicht entpackt werden. Sie ist möglicherweise unvollständig heruntergeladen oder beschädigt: Lade sie erneut herunter. Wenn sie ein Passwort hat, entpacke sie selbst in den Mods-Ordner. Prüfe außerdem, ob noch freier Speicherplatz auf der Festplatte vorhanden ist.", "impossible de décompresser le .zip. Il est peut-être incomplet ou endommagé : télécharge-le de nouveau. S'il a un mot de passe, décompresse-le toi-même dans le dossier mods. Vérifie aussi qu'il reste de l'espace libre sur le disque."},
+    {"no se pudo descomprimir el .zip: instala el paquete 'unzip' y vuelve a probar.", "impossibile estrarre il .zip: installa il pacchetto 'unzip' e riprova.", "die .zip-Datei konnte nicht entpackt werden: Installiere das Paket „unzip“ und versuche es erneut.", "impossible de décompresser le .zip : installe le paquet « unzip » et réessaie."},
+    {"Contenido de tus juegos de PS2", "Contenuti dei tuoi giochi PS2", "Inhalte deiner PS2-Spiele", "Contenu de tes jeux PS2"},
+    {"Algunos modos nuevos usan tu copia de otros juegos de Dragon Ball Z de PlayStation 2. Pulsa «Elegir ISO» y busca el archivo .iso de ese juego: no se copia ni se cambia nada, solo se recuerda dónde está.", "Alcune modalità nuove usano la tua copia di altri giochi Dragon Ball Z per PlayStation 2. Premi «Scegli ISO» e cerca il file .iso di quel gioco: non viene copiato né modificato nulla, viene solo ricordato dove si trova.", "Einige neue Modi nutzen deine Kopie anderer Dragon-Ball-Z-Spiele für PlayStation 2. Drücke „ISO wählen“ und suche die .iso-Datei dieses Spiels: Es wird nichts kopiert oder verändert, nur der Speicherort wird gemerkt.", "Certains nouveaux modes utilisent ta copie d'autres jeux Dragon Ball Z pour PlayStation 2. Appuie sur « Choisir l'ISO » et cherche le fichier .iso de ce jeu : rien n'est copié ni modifié, on retient seulement où il se trouve."},
+    {"Falta", "Manca", "Fehlt", "Manquante"},
+    {"Elegir ISO", "Scegli ISO", "ISO wählen", "Choisir l'ISO"},
+    {"¡Listo! Ya puedes jugarlo.", "Fatto! Ora puoi giocarlo.", "Fertig! Du kannst es jetzt spielen.", "C'est prêt ! Tu peux y jouer maintenant."},
+    {"Busca el archivo .iso de ese juego de PS2 (tu copia). No se copia nada.", "Cerca il file .iso di quel gioco PS2 (la tua copia). Non viene copiato nulla.", "Suche die .iso-Datei dieses PS2-Spiels (deine Kopie). Es wird nichts kopiert.", "Cherche le fichier .iso de ce jeu PS2 (ta copie). Rien n'est copié."},
+    // i18n sweep 2026-10-17 (trans2): textos que caian al ingles en fr/de/it
+    {"Leyenda de Mr. Satán y saga de Namek", "Leggenda di Mr. Satan e saga di Namek", "Mr. Satans Legende und Namek-Saga", "Légende d'Hercule et saga de Namek"},
+    {"Campaña de Budokai 2 (tablero) y Nave de Babidi", "Campagna di Budokai 2 (tabellone) e Nave di Babidi", "Budokai-2-Kampagne (Spielbrett) und Babidis Schiff", "Campagne de Budokai 2 (plateau) et vaisseau de Babidi"},
+    {"Campaña de Infinite World, sus minijuegos y animaciones", "Campagna di Infinite World, i suoi minigiochi e le animazioni", "Infinite-World-Kampagne, ihre Minispiele und Animationen", "Campagne d'Infinite World, ses mini-jeux et ses animations"},
+    {"Lista", "Pronta", "Bereit", "Prête"},
+    {"Todos", "Tutti", "Alle", "Tous"},
+    {"Historias", "Storie", "Geschichten", "Histoires"},
+    {"Buscar por nombre o autor...", "Cerca per nome o autore...", "Nach Name oder Autor suchen...", "Chercher par nom ou auteur..."},
+    {"No instalado", "Non installato", "Nicht installiert", "Non installé"},
+    {"Actualización", "Aggiornamento", "Update", "Mise à jour"},
+    {"Lo descarga y lo deja activado. Se usa al pulsar JUGAR.", "Lo scarica e lo lascia attivato. Si usa premendo GIOCA.", "Lädt ihn herunter und lässt ihn aktiviert. Er wird verwendet, wenn du SPIELEN drückst.", "Le télécharge et le laisse activé. Il est utilisé quand tu appuies sur JOUER."},
+    {"Baja la versión nueva. La anterior se guarda en mods_respaldo.", "Scarica la nuova versione. Quella precedente viene salvata in mods_respaldo.", "Lädt die neue Version herunter. Die alte wird in mods_respaldo gesichert.", "Télécharge la nouvelle version. L'ancienne est conservée dans mods_respaldo."},
+    {"Activado: se usa al pulsar JUGAR. Quita la marca para apagarlo.", "Attivato: si usa premendo GIOCA. Togli la spunta per spegnerlo.", "Aktiviert: wird verwendet, wenn du SPIELEN drückst. Entferne das Häkchen, um es auszuschalten.", "Activé : utilisé quand tu appuies sur JOUER. Décoche la case pour le désactiver."},
+    {"Apagado: no se usa. Marca la casilla para activarlo.", "Spento: non viene usato. Spunta la casella per attivarlo.", "Aus: wird nicht verwendet. Setze das Häkchen, um es zu aktivieren.", "Désactivé : non utilisé. Coche la case pour l'activer."},
+    // i18n sweep 2026-10-17 (trans3): textos que caian al ingles en fr/de/it
+    {"Comprobando ", "Verifica di ", "Prüfe ", "Vérification de "},
+    {"la descarga no coincide con el catalogo (archivo danado o alterado); no se instala", "il download non corrisponde al catalogo (file danneggiato o alterato); non viene installato", "der Download stimmt nicht mit dem Katalog überein (Datei beschädigt oder verändert); wird nicht installiert", "le téléchargement ne correspond pas au catalogue (fichier endommagé ou altéré) ; non installé"},
   };
 
 // Indice por texto (antes, ~800 strcmp por llamada: ~1 ms por frame en italiano/aleman/frances).
@@ -1156,6 +1250,28 @@ void SetLanguage(int32_t xbox_language_id) {
   g_ui_lang = xbox_language_id;
 }
 
+// Textos de los modos nuevos que no estan en kTable: ingame_ui/i18n_modos.toml, clave = el texto ingles, con fr/de/it
+// (ronda 4, 2026-10-16). Se lee una vez; sin el archivo queda el ingles como antes.
+const char* Extra(const char* en, int idioma) {
+  static const auto tabla = [] {
+    std::unordered_map<std::string, std::array<std::string, 3>> t;
+    try {
+      const toml::table doc = toml::parse_file((dbz3::ModsRoot().parent_path() / "ingame_ui" / "i18n_modos.toml").string());
+      for (const auto& [k, v] : doc)
+        if (const toml::table* e = v.as_table())
+          t[std::string(k.str())] = {e->get("fr") ? (*e)["fr"].value_or(std::string()) : std::string(),
+                                     e->get("de") ? (*e)["de"].value_or(std::string()) : std::string(),
+                                     e->get("it") ? (*e)["it"].value_or(std::string()) : std::string()};
+    } catch (...) {
+    }
+    return t;
+  }();
+  const auto it = tabla.find(en);
+  if (it == tabla.end()) return nullptr;
+  const std::string& r = it->second[idioma];
+  return r.empty() ? nullptr : r.c_str();
+}
+
 const char* T(const char* es, const char* en) {
   switch (g_ui_lang) {
     case 5:  // Spanish
@@ -1172,6 +1288,8 @@ const char* T(const char* es, const char* en) {
     default:
       break;
   }
+  if (g_ui_lang == 4 || g_ui_lang == 3 || g_ui_lang == 6)
+    if (const char* x = Extra(en, g_ui_lang == 4 ? 0 : g_ui_lang == 3 ? 1 : 2)) return x;
   return en;  // English (and unsupported languages such as Japanese)
 }
 

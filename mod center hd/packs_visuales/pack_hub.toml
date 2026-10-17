@@ -15,11 +15,12 @@ fuente = "Dragon Ball BG -BackGrounds-/King Kai Planet 1.jpg"
 destino = "ui_ingame/fondo_duelo.png"
 tipo = "fondo_duelo"
 
-# Fondo del HUB (16:9)
-[[asset]]
-fuente = "Dragon Ball Z/Frieza Saga/[2020-01-18] Namek Saga (Ginyu Force) Wallpaper [DBZ Kakarot] by Maxiuchiha22 - 827414160.png"
-destino = "ui_ingame/hub/fondo.png"
-tipo = "fondo_hub"
+# Fondo del HUB (16:9): desde la ronda 3 va de serie el del autor (assets_propios/png/add, res/ingame_ui/hub/fondo.png).
+# Receta anterior, por si se vuelve a usar:
+# [[asset]]
+# fuente = "Dragon Ball Z/Frieza Saga/[2020-01-18] Namek Saga (Ginyu Force) Wallpaper [DBZ Kakarot] by Maxiuchiha22 - 827414160.png"
+# destino = "ui_ingame/hub/fondo.png"
+# tipo = "fondo_hub"
 
 # Banner horizontal: desde el HUB v2 el titulo es el logo "Dragon HUB" y el HUB ya no pinta hub/banner.
 # Receta anterior, por si se vuelve a usar:

@@ -13,6 +13,8 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -23,6 +25,15 @@
 #include <thread>
 
 #include <toml++/toml.hpp>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+#endif
 
 namespace dbz3::launcher {
 
@@ -107,6 +118,10 @@ void Fetch() {
           if (std::string a = (*t)["archivo"].value_or(std::string()); !a.empty()) e.mod.zip = std::move(a);
           e.mod.tipo = (*t)["tipo"].value_or(std::string());
           e.mod.size = (*t)["size"].value_or(0LL);
+          // sha256 opcional (tools/novas_mods.py): un catalogo viejo sin el campo se instala como antes
+          e.mod.sha256 = (*t)["sha256"].value_or(std::string());
+          std::transform(e.mod.sha256.begin(), e.mod.sha256.end(), e.mod.sha256.begin(),
+                         [](unsigned char c) { return char(std::tolower(c)); });
           e.mod.autor = (*t)["autor"].value_or(std::string());
           if (const toml::array* a = (*t)["enlaces"].as_array()) {
             for (const toml::node& u : *a) {
@@ -172,6 +187,49 @@ bool StartsWithPK(const fs::path& zip) {
   return in.read(pk, 2) && pk[0] == 'P' && pk[1] == 'K';
 }
 
+// SHA-256 (hex en minusculas) de un fichero; "" si no se puede leer o no hay BCrypt (Linux: no se descarga nada).
+std::string Sha256File(const fs::path& path) {
+  std::string hex;
+#ifdef _WIN32
+  std::ifstream in(path, std::ios::binary);
+  BCRYPT_ALG_HANDLE alg = nullptr;
+  BCRYPT_HASH_HANDLE h = nullptr;
+  if (in && BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0) {
+    if (BCryptCreateHash(alg, &h, nullptr, 0, nullptr, 0, 0) >= 0) {
+      std::vector<char> buf(1 << 20);   // por trozos: el pack HD pesa gigas
+      bool ok = true;
+      while (ok && (in.read(buf.data(), std::streamsize(buf.size())) || in.gcount() > 0)) {
+        ok = BCryptHashData(h, PUCHAR(buf.data()), ULONG(in.gcount()), 0) >= 0;
+      }
+      UCHAR d[32];
+      if (ok && in.eof() && BCryptFinishHash(h, d, sizeof(d), 0) >= 0) {
+        char two[3];
+        for (UCHAR b : d) {
+          std::snprintf(two, sizeof(two), "%02x", b);
+          hex += two;
+        }
+      }
+      BCryptDestroyHash(h);
+    }
+    BCryptCloseAlgorithmProvider(alg, 0);
+  }
+#else
+  (void)path;
+#endif
+  return hex;
+}
+
+// El catalogo trae la huella del zip: si no coincide (corrupto o cambiado por el camino) no se instala nada.
+// Sin huella (catalogo viejo) no se comprueba. Si no se pudo leer el zip tampoco coincide.
+bool BadHash(const NovaMod& mod, const fs::path& zip) {
+  if (mod.sha256.empty()) return false;
+  SetStatus(std::string(i18n::T("Comprobando ", "Checking ")) + mod.name + "...");
+  const std::string got = Sha256File(zip);
+  if (got == mod.sha256) return false;
+  REXLOG_WARN("dbz3: Nova's Mods: {} no coincide con el catalogo (esperado {}, bajado '{}')", mod.id, mod.sha256, got);
+  return true;
+}
+
 // Zip pequeno del repositorio (Contents API).
 long long DownloadWhole(const NovaMod& mod, const fs::path& zip) {
   const std::string data = Get(mod.zip);
@@ -211,7 +269,10 @@ long long DownloadParts(const NovaMod& mod, const fs::path& zip) {
 }  // namespace
 
 void StartNovaCatalog() {
-  if (!g_started.exchange(true)) Fetch();
+  if (g_started.exchange(true)) return;
+  // DBZ3_TEST_SHA256=<fichero>: escribe su SHA-256 en el log (comprobacion del ayudante, tools/novas_mods.py prueba)
+  if (const char* f = std::getenv("DBZ3_TEST_SHA256"); f && *f) REXLOG_INFO("dbz3: sha256 de '{}' = {}", f, Sha256File(f));
+  Fetch();
 }
 
 void RefreshNovaCatalog() { Fetch(); }
@@ -275,6 +336,9 @@ void InstallNovaMod(const NovaMod& mod) {
     if (got < 4 || !StartsWithPK(zip) || (mod.size > 0 && got != mod.size)) {
       error = i18n::T("no se pudo descargar (revisa tu conexion y el espacio libre)",
                       "download failed (check your connection and free disk space)");
+    } else if (BadHash(mod, zip)) {
+      error = i18n::T("la descarga no coincide con el catalogo (archivo danado o alterado); no se instala",
+                      "the download does not match the catalog (damaged or altered file); not installed");
     } else {
       // la copia instalada pasa a mods_respaldo (nunca se borra) y se respeta si estaba desactivada
       bool was_disabled = false;

@@ -64,8 +64,9 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   // be set again on the next draw.
   bool Dbz3GetBoundDepthDsv(D3D12_CPU_DESCRIPTOR_HANDLE& dsv_out) const;
   void Dbz3InvalidateBoundRenderTargets() { are_current_command_list_render_targets_valid_ = false; }
+  // allow_msaa (R15): also a multisampled one (its SRV is then a Texture2DMS).
   bool Dbz3BeginReadLastDepth(ID3D12Resource*& resource_out, D3D12_CPU_DESCRIPTOR_HANDLE& srv_out,
-                              uint32_t& width_out, uint32_t& height_out);
+                              uint32_t& width_out, uint32_t& height_out, bool allow_msaa = false);
   // dbz3 relight: color render target `index` of the last draw (1x MSAA,
   // 32bpp), transitioned for drawing; the bound render targets are set again
   // on the next draw.

@@ -290,7 +290,8 @@ def construir(receta, mods, raiz=None, juego=None, montar=False, instalar_ui=Fal
     with open(os.path.join(out, "CREDITOS.txt"), "w", encoding="utf-8") as f:
         f.write("Arte de terceros, solo para uso personal. Este pack se construye en tu PC con\n"
                 "construir_pack.py; no lo subas ni lo metas en el juego publicado.\n\n" + "\n".join(creditos) + "\n")
-    if solo_fuente:   # sin nada que cargue el juego: no es un mod activo, es la fuente de otros
+    # [pack] desactivado = true: sale con .disabled aunque traiga piezas (arte de terceros: lo activa el usuario)
+    if solo_fuente or info.get("desactivado", False):   # sin nada que cargue el juego: fuente de otros
         open(os.path.join(out, ".disabled"), "w").close()
     print("pack %s: %d imagenes en %s" % (nombre, hechos, out))
     if toml_out and montar:
