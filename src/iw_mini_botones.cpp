@@ -63,6 +63,12 @@ bool RequestBattleEx(int id1, int id2, int stage, bool p2_com, int time_s, int h
 namespace dbz3::net {
 void InyectarPad(uint32_t usuario, int32_t botones);   // net/netplay_hooks.cpp (-1 = el mando de verdad)
 }
+namespace dbz3::anim {
+// 06 (iw_eventos_y_mezcla): true si las animaciones de IW estan disparando sus eventos por
+// cuadro (lineas AP del #BSK) y uno de sonido sono hace menos de 30 cuadros; entonces los
+// retardos fijos de abajo no piden el suyo (para no doblarlo). Definida en anim_iw.cpp.
+bool EventosSonandoReciente();
+}  // namespace dbz3::anim
 namespace dbz3 {
 bool GameDimmed();
 bool OverlayOpen();
@@ -126,25 +132,40 @@ struct Poses {
   // y eje jugador -> rival} en el mundo de IW (de las raices de sus poses: docs/14_frentes/iw_camaras_minijuegos.md).
   int cam_ini, cam_juego, cam_gana, cam_pierde, cam_fin_bien, cam_fin_mal, dur_intro;
   float ancla[5];   // + separacion de los objetos con la camara de IW (la del par de IW: 11-18 u entre las caderas)
+  // 05_iw_minijuegos_pendientes: choque de NB013. En IW Mg_StartClashSequence pone la pose 0x11 (jugador) / 0x21 (rival) y
+  // el clip 0x188 y Mg_SetClashResultPoses los 0x18A/0x18C; aqui, la pose del choque de cada uno y su camara (-1 sin choque).
+  uint16_t choque[2];
+  int cam_choque;
 };
+// R7 (05_iw_minijuegos_pendientes): pausas (cuadros) del clip 0x98 de NB006 al ganar un punto y del choque de NB013.
+constexpr int kPausaPunto = 30, kPausaChoque = 40;
+// R7 (05_iw_minijuegos_pendientes): la camara de juego de MSN019 es el #AMC propio de DATA_CMN 879 (clip 0, 300 cuadros;
+// w_Camera_LoadMotionFile carga el motion 0x36F y Minigame_SetupPlayerModels monta la escena). Id reservado en g_clips
+// para no chocar con los indices de clips de 915 (1456).
+constexpr int kCam879 = 0x8000;
 constexpr Poses kPosesNB014 = {{922, 920},
                                {0x5C8, 0x5CD}, {0x578, 0x579}, {0x57A, 0x57B},
                                {0x582, 0x585, 0x588, 0x58B}, {0x598, 0x59B, 0x59E, 0x5A1}, {0x597, 0x59A, 0x59D, 0x5A0},
                                {0x596, 0x599, 0x59C, 0x59F}, {0x583, 0x586, 0x589, 0x58C}, {0x584, 0x587, 0x58A, 0x58D},
                                {0x5BE, 0x5BF}, {0x5C0, 0x5C1}, 0x5C9, 0x5CA, false, kAire, 62, 26,
-                               0x1A4, 0x1A5, 0x1AE, 0x1AF, 0x4B1, 0x4B2, 230, {1, 0, 1, 0, 17}};   // QteMg_* (0x32E8D0-0x333080 EU)
+                               0x1A4, 0x1A5, 0x1AE, 0x1AF, 0x4B1, 0x4B2, 230, {1, 0, 1, 0, 17}, {0, 0}, -1};   // QteMg_* (0x32E8D0-0x333080 EU)
 constexpr Poses kPosesNB013 = {{931, 928},
                                {0x564, 0x569}, {0x578, 0x579}, {0x57A, 0x57B},
                                {0x582, 0x585, 0x588, 0x58B}, {0x598, 0x59B, 0x59E, 0x5A1}, {0x597, 0x59A, 0x59D, 0x5A0},
                                {0x596, 0x599, 0x59C, 0x59F}, {0x583, 0x586, 0x589, 0x58C}, {0x584, 0x587, 0x58A, 0x58D},
                                {0x5BE, 0x5BF}, {0x5C0, 0x5C1}, 0x565, 0x566, false, kAire, 62, 26,
-                               0x186, 0x187, 0x190, 0x191, 0x47F, 0x480, 230, {1, 0, 1, 0, 17}};   // Mg_UpdateIntroPhase / Mg_StartRoundSequence
+                               0x186, 0x187, 0x190, 0x191, 0x47F, 0x480, 230, {1, 0, 1, 0, 17},
+                               {0x543, 0x552}, 0x188};   // Mg_UpdateIntroPhase / Mg_StartRoundSequence / Mg_StartClashSequence
 constexpr Poses kPosesNB006 = {{921, 925},
                                {0x2AD, 0x2A8}, {0x258, 0x259}, {0x258, 0x259},
                                {0x262, 0x265, 0x268, 0x26B}, {0x278, 0x27B, 0x27E, 0x281}, {0x277, 0x27A, 0x27D, 0x280},
                                {0x276, 0x279, 0x27C, 0x27F}, {0x263, 0x266, 0x269, 0x26C}, {0x264, 0x267, 0x26A, 0x26D},
                                {0x289, 0x28A}, {0x287, 0x288}, 0x2A9, 0x2AA, true, 14, 50, 15,   // NB006 pelea en el suelo (cadera a y = 4-10)
-                               0x96, 0x97, 0x322, 0x323, -1, -1, 100, {-15, -0.5f, 0, 1, 7}};   // Mg_UpdateIntroSequence / EnterResultPhase
+                               0x96, 0x97, 0x9A, 0x9A, 0x322, 0x323, 100, {-15, -0.5f, 0, 1, 7}, {0, 0}, -1};   // Mg_UpdateIntroSequence / EnterResultPhase
+// R7 quinta tanda (NB006): el resultado es 0x9A gane o pierda (Mg_EnterResultPhase EU L467302/467309) y el final del
+// jugador 0x322 con rango > 0 / 0x323 con rango 0 (Mg_StartResultAnim L466793-466901, por iRam0049cebc + 0x1C).
+// 05_iw_minijuegos_pendientes: 0x98 = el clip del punto ganado (Mg_ResetRoundState L467467: jugador con la pose 0x10);
+// en Paso, al acertar en el carril 0, se reproduce el clip y hay una pausa (kPausaPunto) entre puntos.
 // (el final del rango 0 de NB006 es 0x2AA para los dos y el del resto 0x2A9: Mg_StartResultAnim; aqui el jugador)
 
 
@@ -196,6 +217,8 @@ struct Juego {
   float vel = 2, vida[2] = {1000, 1000};
   int fase = 0, t = 0, cuadros = 0, rango = 0, puntos = 100, nota = 0;   // fase 0 espera, 1 READY, 2 juego, 3 fin
   int aviso_t = 0;
+  int pausa = 0;      // R7: cuadros de pausa (clip 0x98 de NB006 al punto ganado; choque de NB013)
+  bool punto = false; // R7: NB006 -> al ganar un punto se reproduce el clip 0x98 (Mg_ResetRoundState) y hay pausa
   const Poses* poses = nullptr;   // R14
   int k = 0;                      // contador de las filas de poses (QteMg_PlayHitPoses: +0x2F4)
   bool aviso_bien = false, auto_ = false, fallos = false;   // prueba: fallos = deja pasar 1 de cada 5 del carril 1
@@ -355,15 +378,12 @@ std::atomic<int> g_cb_clip{-1}, g_cb_frame{0};   // clip en curso y cuadros desd
 std::atomic<bool> g_cb_quieto{false};
 std::atomic<const Poses*> g_poses_a{nullptr};   // las poses (y camaras) del minijuego de la familia A en curso            // se queda en su primer cuadro (UiAnim_Start con play = 0)
 
-void PrecargarClips(const std::vector<int>& ids) {
-  if (g_amc.empty()) {
-    P::AfsPs2 cmn;
-    if (!cmn.Abrir(P::BuscarIW(), "DATA_CMN.AFS")) return;
-    g_amc = P::HijoAmb(cmn.Entrada(915), 2);
-  }
+// Un #AMC de camara: lee los clips `idx` (indices dentro del #AMC) y los guarda como `base` + indice. Devuelve el nº de
+// clips del #AMC (0 si no es un #AMC).
+uint32_t LeerAmc(const std::vector<uint8_t>& amc, int base, const std::vector<int>& idx) {
   auto u32 = [&](size_t o) {
     uint32_t v = 0;
-    if (o + 4 <= g_amc.size()) std::memcpy(&v, g_amc.data() + o, 4);
+    if (o + 4 <= amc.size()) std::memcpy(&v, amc.data() + o, 4);
     return v;
   };
   auto f32 = [&](size_t o) {
@@ -372,13 +392,10 @@ void PrecargarClips(const std::vector<int>& ids) {
     std::memcpy(&f, &v, 4);
     return f;
   };
-  if (g_amc.size() < 0x20 || std::memcmp(g_amc.data(), "#AMC", 4) != 0) {
-    g_amc.clear();
-    return;
-  }
+  if (amc.size() < 0x20 || std::memcmp(amc.data(), "#AMC", 4) != 0) return 0;
   const uint32_t n = u32(0x10), tab = u32(0x14);
-  for (int id : ids) {
-    if (id < 0 || uint32_t(id) >= n || g_clips.count(id)) continue;
+  for (int id : idx) {
+    if (id < 0 || uint32_t(id) >= n || g_clips.count(base + id)) continue;
     ClipCam c;
     c.nf = int(u32(tab + 16 * size_t(id) + 8));
     const uint32_t off = u32(tab + 16 * size_t(id) + 12);
@@ -395,7 +412,31 @@ void PrecargarClips(const std::vector<int>& ids) {
         }
       }
     }
-    if (c.nf > 0 && !c.ojo.empty() && !c.obj.empty()) g_clips[id] = std::move(c);
+    if (c.nf > 0 && !c.ojo.empty() && !c.obj.empty()) g_clips[base + id] = std::move(c);
+  }
+  return n;
+}
+void PrecargarClips(const std::vector<int>& ids) {
+  if (g_amc.empty()) {
+    P::AfsPs2 cmn;
+    if (!cmn.Abrir(P::BuscarIW(), "DATA_CMN.AFS")) return;
+    g_amc = P::HijoAmb(cmn.Entrada(915), 2);
+  }
+  uint32_t n = 0;
+  if (g_amc.size() >= 0x14) std::memcpy(&n, g_amc.data() + 0x10, 4);
+  if (g_amc.size() < 0x20 || std::memcmp(g_amc.data(), "#AMC", 4) != 0) {
+    g_amc.clear();
+    return;
+  }
+  LeerAmc(g_amc, 0, ids);
+  // 05_iw_minijuegos_pendientes: MSN019 lleva su propia camara (#AMC de DATA_CMN 879, clip 0, 300 cuadros), no la de 915.
+  if (std::any_of(ids.begin(), ids.end(), [](int i) { return i >= kCam879; }) && !g_clips.count(kCam879)) {
+    P::AfsPs2 cmn;
+    if (cmn.Abrir(P::BuscarIW(), "DATA_CMN.AFS") && LeerAmc(cmn.Entrada(879), kCam879, {0})) {
+      const auto it = g_clips.find(kCam879);
+      REXLOG_INFO("dbz3 r7: camara de MSN019: #AMC de DATA_CMN 879 (clip 0, {} cuadros)",
+                  it == g_clips.end() ? 0 : it->second.nf);
+    }
   }
   REXLOG_INFO("dbz3 r14: camaras de IW: {} clips (AMC de DATA_CMN 915, {} clips en total)", g_clips.size(), n);
 }
@@ -423,6 +464,9 @@ void CamB(int clip, bool quieto = false) {   // hilo de la interfaz: este clip d
 // DBZ3_TRAZA_SE en un combate normal: banco 2 id 2 = impacto, banco 4 ids 42/43/50 = grito de ataque del luchador 1 y
 // 19/20/25 = su grito al ser golpeado). Se piden desde el hilo de la interfaz con un retardo (el puno llega unos cuadros
 // despues de empezar la pose) y los reproduce el hilo del juego (SeBotones, gancho de iw_minijuegos.cpp).
+// 06 (iw_eventos_y_mezcla): las animaciones de IW que traen lineas de eventos (las poses de NB006 y el #BSK comun) ya
+// disparan su sonido por su cuadro desde anim_iw.cpp; cuando uno de estos retardos vence y ha sonado un evento hace poco,
+// se descarta (no se dobla el golpe). El resto (NB013/NB014, cuyas poses no traen eventos) siguen con estos ids.
 constexpr int kSeImpacto[2] = {2, 2}, kSeAtaque[3] = {42, 43, 50}, kSeHerido[3] = {19, 20, 25};
 struct SePend {
   int t = 0, banco = 0, id = 0;
@@ -439,6 +483,11 @@ void PedirSe(int cuadros, int banco, int id) {
 void CuadroSe() {   // un cuadro de 60 Hz (hilo de la interfaz)
   for (SePend& e : g_cola_se)
     if (e.t > 0 && --e.t == 0) {
+      // 06: si la animacion de IW ya trajo su evento de sonido para este golpe, no se repite
+      if (dbz3::anim::EventosSonandoReciente()) {
+        REXLOG_INFO("dbz3 r14: sonido banco {} id {} descartado (la animacion de IW ya sono su evento)", e.banco, e.id);
+        continue;
+      }
       g_se_listo = e.banco * 1000 + e.id;
       REXLOG_INFO("dbz3 r14: sonido banco {} id {}", e.banco, e.id);
     }
@@ -475,6 +524,11 @@ void Golpe(Juego& j) { j.vida[0] -= float(j.m->ataque_rival[j.dif]); }
 void Paso(Juego& j, uint16_t pulsado) {
   ++j.cuadros;
   if (j.aviso_t > 0) --j.aviso_t;
+  if (j.pausa > 0) {   // R7: pausa del clip 0x98 de NB006 (punto ganado) o del choque de NB013: los iconos no avanzan
+    --j.pausa;
+    return;
+  }
+  bool golpe[2] = {false, false};   // R7: acierto en cada carril este cuadro (para el choque de NB013)
   for (int l = 0; l < 2; ++l) {
     Carril& c = j.c[l];
     if (--c.cuenta <= 0 && c.sale < c.n) {   // sale el siguiente icono
@@ -528,15 +582,34 @@ void Paso(Juego& j, uint16_t pulsado) {
       if (p & (1u << k.boton)) {
         ++c.aciertos;
         k.vivo = false;
+        golpe[l] = true;
         if (l == 0) j.vida[1] -= float(j.m->ataque_jugador[j.dif]);
         PosesGolpe(j, l, true);
         j.aviso_bien = true;
+        if (l == 0 && j.punto) {   // R7: NB006, cada punto ganado: clip 0x98 (Mg_ResetRoundState) y una pausa
+          CamB(0x98);
+          j.pausa = kPausaPunto;
+        }
       } else {
         PosesGolpe(j, l, false);   // boton malo: PlayHitPoses(carril, 0)
         if (l == 1) Golpe(j);
         j.aviso_bien = false;
       }
     }
+  }
+  // R7 (05_iw_minijuegos_pendientes): choque de NB013 (Mg_StartClashSequence / Mg_CheckClashOutcome). Si los dos carriles
+  // aciertan en el mismo cuadro, las poses del choque (jugador 0x11 / rival 0x21) y el clip 0x188; despues vuelven a la
+  // espera de pelea. ponytail [H]: IW decide el ganador del choque con la pose (3 vs 2) y deja los dos a 100 de vida; aqui
+  // es solo visual (no cambia vida), a falta de medir contra el original.
+  static const int choque_t = std::getenv("DBZ3_IWMINI_CHOQUE") ? std::atoi(std::getenv("DBZ3_IWMINI_CHOQUE")) : 0;   // prueba
+  if (choque_t && j.cuadros == choque_t) golpe[0] = golpe[1] = true;   // prueba: fuerza el choque en el cuadro choque_t
+  if (golpe[0] && golpe[1] && j.poses->cam_choque >= 0) {
+    const Poses& q = *j.poses;
+    Poner(q, 0, q.choque[0], false, q.pelea[0]);
+    Poner(q, 1, q.choque[1], false, q.pelea[1]);
+    CamB(q.cam_choque);
+    j.pausa = kPausaChoque;
+    REXLOG_INFO("dbz3 r7: choque (los dos carriles aciertan): clip 0x{:X}", q.cam_choque);
   }
   const bool gastado = j.c[0].actual >= j.c[0].n && j.c[1].actual >= j.c[1].n;
   if (gastado || j.vida[0] <= 0 || j.vida[1] <= 0) {   // QteMg_ClassifyResult + FinalizeResult
@@ -613,14 +686,19 @@ class Panel : public rex::ui::ImGuiDialog {
       ++j->t;
       CuadroSe();
       if (g_cb_clip.load() >= 0 && !g_cb_quieto.load()) ++g_cb_frame;
-      if (j->fase == 0 && j->t == 1) CamB(j->poses->cam_ini, true);   // el plano de salida: el primer cuadro del clip
+      // R7: NB006 abre con el clip 0x321 entero, 300 cuadros (Mg_UpdateIntroSequence EU L468128-468176), y luego 0x96
+      const bool pre = j->poses == &kPosesNB006 && g_clips.count(0x321);
+      if (j->fase == 0 && j->t == 1) {
+        if (pre) CamB(0x321);
+        else CamB(j->poses->cam_ini, true);   // el plano de salida: el primer cuadro del clip
+      }
       if (j->fase <= 1) {
         static const float sep_env = std::getenv("DBZ3_R14_SEP") ? float(std::atof(std::getenv("DBZ3_R14_SEP"))) : 0.0f;   // prueba
         const bool cam_iw = j->poses->cam_ini >= 0 && g_clips.count(j->poses->cam_ini);
         Juntar(base, mgr, sep_env > 0 ? sep_env : cam_iw ? j->poses->ancla[4] : j->poses->sep);
         j->pendiente = 0;   // lo pulsado antes de empezar no cuenta
       }
-      if (j->fase == 0 && j->t >= 30) {
+      if (j->fase == 0 && j->t >= (pre ? 300 : 30)) {
         j->fase = 1;
         j->t = 0;
         REXLOG_INFO("dbz3 r14: en juego ({} dificultad {})", j->m->nombre, j->dif);
@@ -647,6 +725,15 @@ class Panel : public rex::ui::ImGuiDialog {
         lj.insert(lj.end(), {p.gana[0], p.pierde[0], p.fin_bien, p.fin_mal});
         lr.insert(lr.end(), {p.gana[1], p.pierde[1]});
         if (j->t == 1) std::ofstream("dbz3_shot.req") << int(lj.size() * 2) << " 45";
+        if ((j->t - 1) % 90 == 45) {   // la cadera de cada uno a media pose (mundo de B3) y la posicion del objeto
+          for (int rol = 0; rol < 2; ++rol) {
+            float r[3] = {0, 0, 0};
+            const uint32_t x = Luchador(rol);
+            const bool ok = x && dbz3::anim::RaizActual(base, x, r);
+            REXLOG_INFO("dbz3 r14: prueba de poses: rol {} cadera {} ({:.1f}, {:.1f}, {:.1f}) objeto ({:.1f}, {:.1f}, {:.1f})", rol,
+                        ok, r[0], r[1], r[2], LoadF(base, x + 64), LoadF(base, x + 68), LoadF(base, x + 72));
+          }
+        }
         if ((j->t - 1) % 90 == 0) {
           const size_t n = size_t((j->t - 1) / 90);
           if (n < lj.size()) {
@@ -828,11 +915,16 @@ bool Empezar(int clave, int fila, int dificultad) {
   g_cb_clip = -1;
   if (m->poses->cam_ini >= 0 && !std::getenv("DBZ3_IWMINI_CAMARA_B3")) {   // DBZ3_IWMINI_CAMARA_B3: la camara propia
     const Poses& q = *m->poses;
-    PrecargarClips({q.cam_ini, q.cam_juego, q.cam_gana, q.cam_pierde, q.cam_fin_bien, q.cam_fin_mal});
+    PrecargarClips({q.cam_ini, q.cam_juego, q.cam_gana, q.cam_pierde, q.cam_fin_bien, q.cam_fin_mal,
+                    m->poses == &kPosesNB006 ? 0x321 : -1,   // NB006 abre con el clip 0x321 (Mg_UpdateIntroSequence)
+                    m->poses == &kPosesNB006 ? 0x98 : -1,    // NB006 punto ganado (Mg_ResetRoundState)
+                    m->poses == &kPosesNB013 ? 0x188 : -1}); // NB013 choque (Mg_StartClashSequence)
   }
   const char* t = std::getenv("DBZ3_TEST_IWMINI");
   j->auto_ = t && std::strstr(t, "auto");
   j->fallos = t && std::strstr(t, "fallos");
+  // R7: NB006 pausa entre puntos con el clip 0x98 (DBZ3_IWMINI_NB006_SIN_PUNTO=1 lo desactiva)
+  j->punto = m->poses == &kPosesNB006 && !std::getenv("DBZ3_IWMINI_NB006_SIN_PUNTO");
   std::string error;
   if (!Cargar(*j, error)) {
     REXLOG_WARN("dbz3 r14: {}: {}", m->nombre, error);
@@ -921,23 +1013,26 @@ struct PosesB {
   int dur_golpe, dur_mal[2];   // cuadros (de las propias animaciones)
   // Camaras de IW (UiAnim_Start = reproducir un clip del #AMC de DATA_CMN 915, hijo 2): -1 = la de B3. Estatica al empezar,
   // la del READY (dur_intro cuadros), una por ronda (2 cuadros: un plano fijo; ronda r >= 1 usa cam_ronda[r - 1]) y las
-  // del final (el ultimo clip se queda en su ultimo cuadro, como el juego).
-  int cam_ini, cam_intro, cam_ronda[9], cam_gana, cam_pierde, dur_intro;
+  // del final (el ultimo clip se queda en su ultimo cuadro, como el juego). cam_juego: la del juego (fase 2); -1 = la que
+  // hubiera (MSN019 la saca del #AMC de DATA_CMN 879, no de 915: id kCam879).
+  int cam_ini, cam_intro, cam_ronda[9], cam_gana, cam_pierde, dur_intro, cam_juego;
 };
 constexpr PosesB kPosesNB012 = {931, 0x500, {0x4B0, 0x4B0, 0x4B0}, {0, 0, 0}, {0x4BA, 0x4BA, 0x4BA}, {0x4B1, 0x4B2, 0x4B3},
                                 0x4C4, 0x4B1, {0x501, 0x502}, 198, {25, 39},
                                 // Mg_UpdateGameIntro 0x14A / 0x44C (Vegeta; 0x44F Ten, 0x452 Krilin, 0x455 Yamcha), Mg_StartNextRound
                                 // (tabla 0x47E290 EU), Mg_CheckLastRoundEnd 0x154, Mg_StartResultAnimByChar 0x44E
-                                0x14A, 0x44C, {0x14B, 0x14C, 0x14D, 0x14E, 0x14F, 0x150, 0x151, 0x152, 0x153}, 0x154, 0x44E, 180};
+                                0x14A, 0x44C, {0x14B, 0x14C, 0x14D, 0x14E, 0x14F, 0x150, 0x151, 0x152, 0x153}, 0x154, 0x44E, 180, -1};
 constexpr PosesB kPosesNB007 = {922, 0x30C, {0x2BC, 0x2BC, 0x2BC}, {0, 0, 0}, {0x2C6, 0x2C6, 0x2C6}, {0x2BD, 0x2BE, 0x2BF},
                                 0x2D0, 0x2BD, {0x30D, 0x30E}, 130, {25, 40},
                                 // MiniGame_UpdateCountdown 0xB4 / 0x352, MiniGame_StartNextRound (tabla USA 0x472F00), 0xBE, ShowResult 0x354
-                                0xB4, 0x352, {0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD}, 0xBE, 0x354, 180};
+                                0xB4, 0x352, {0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD}, 0xBE, 0x354, 180, -1};
 constexpr PosesB kPosesMSN019 = {930, 0x7BC, {0x76C, 0x76E, 0x770}, {0, 0x76D, 0x76F}, {0x776, 0x777, 0x778}, {0x780, 0, 0},
                                  0x7BC, 0x7BC, {0x7BC, 0x7BC}, 45, {0, 0},   // el final es el estado 4 (Results_BeginOutcome / FinishOutcome)
-                                 -1, -1, {-1, -1, -1, -1, -1, -1, -1, -1, -1}, 0x5AA, 0x5AA, 60};
+                                 -1, -1, {-1, -1, -1, -1, -1, -1, -1, -1, -1}, 0x5AA, 0x5AA, 60, kCam879};
 // MSN019: el clip de resultado de Videl (Results_StateFinishOutcome: tabla USA 0x497DA0 = 0x5AA..0x5AF, el de Videl el primero;
-// plano fijo alrededor de ella en el origen). La camara de juego (DATA_CMN 879, ranura 1) sigue sin portar: ver docs.
+// plano fijo alrededor de ella en el origen). Camara de juego: el #AMC de DATA_CMN 879 (clip 0, 300 cuadros) que carga
+// w_Camera_LoadMotionFile (motion 0x36F) y monta Minigame_SetupPlayerModels (ancla +0x840 = Videl); ponytail [H]: IW la
+// ancla al jugador con el +0x840; aqui va ancorada al luchador (PasoCamaraB), como el resto de la familia B.
 struct ModuloB {
   int indice, clave;
   const char* nombre;
@@ -1053,7 +1148,7 @@ void EventoPose(JuegoB& j, int ev) {
   }
 }
 void PrecargarCamaras(const PosesB& p) {
-  std::vector<int> ids = {p.cam_ini, p.cam_intro, p.cam_gana, p.cam_pierde};
+  std::vector<int> ids = {p.cam_ini, p.cam_intro, p.cam_gana, p.cam_pierde, p.cam_juego};
   ids.insert(ids.end(), std::begin(p.cam_ronda), std::end(p.cam_ronda));
   PrecargarClips(ids);
 }
@@ -1465,6 +1560,7 @@ class PanelB : public rex::ui::ImGuiDialog {
       } else if (j->fase == 1 && j->t >= ((j->ronda == 0 && j->pb) ? j->pb->dur_intro : 60)) {   // READY? (la primera) o el numero de ronda
         j->fase = 2;
         j->t = 0;
+        if (j->pb && j->pb->cam_juego >= 0) CamB(j->pb->cam_juego);   // 05: camara de juego de IW (MSN019: DATA_CMN 879)
       } else if (j->fase == 2) {
         PasoB(*j, j->pendiente);
         j->pendiente = 0;

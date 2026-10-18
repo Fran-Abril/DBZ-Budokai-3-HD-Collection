@@ -19,6 +19,7 @@
 #include "../region.h"
 #include "../ingame/game_style.h"
 #include "../pasarela.h"
+#include "../mods_opcionales.h"
 
 #if REX_PLATFORM_WIN32
 #include <windows.h>
@@ -253,15 +254,18 @@ const char* LanguageDisplayName(int xbox_language_id) {
       return "Español";
     case 6:
       return "Italiano";
+    case 9:
+      return "Portugu\xC3\xAAs (Brasil)";
     default:
       return "English";
   }
 }
 
 // Nombre de cada idioma en su propia lengua (asi lo encuentra quien no entiende el idioma actual).
-constexpr const char* kLanguageItems[] = {"English", "Japanese", "Deutsch", "Fran\xC3\xA7" "ais",
-                                          "Espa\xC3\xB1" "ol", "Italiano"};
-constexpr int kLanguageIds[] = {1, 2, 3, 4, 5, 6};
+constexpr const char* kLanguageItems[] = {"English", "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E (Japanese)", "Deutsch",
+                                          "Fran\xC3\xA7" "ais", "Espa\xC3\xB1" "ol", "Italiano",
+                                          "Portugu\xC3\xAA" "s (Brasil)"};
+constexpr int kLanguageIds[] = {1, 2, 3, 4, 5, 6, 9};   // 9: portugues (launcher y textos propios; el juego en ingles)
 
 // Nombre corto del escalado elegido (resumen de abajo y pestana Video), como lo ve el jugador.
 const char* EffectDisplayName(const std::string& v) {
@@ -1096,6 +1100,9 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
       if (ImGui::SmallButton(i18n::T("Reintentar", "Retry"))) {
         dbz3::launcher::RequestUpdateCheck();
       }
+      if (const std::string why = dbz3::launcher::LastNetworkError(); !why.empty() && ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(i18n::T("Detalle tecnico: %s", "Technical detail: %s"), why.c_str());
+      }
       break;
     case dbz3::launcher::UpdateState::kUpToDate:
       ImGui::TextDisabled("%s", i18n::T("Version actualizada.", "Up to date."));
@@ -1581,7 +1588,7 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
                      dbz3::settings::GpuBackend() == "vulkan" ? "Vulkan" : "D3D12",
                      dbz3::settings::ResolutionScale(),
                      EffectDisplayName(dbz3::settings::PresentEffect()),
-                     LanguageDisplayName(dbz3::settings::Language()));
+                     LanguageDisplayName(dbz3::settings::UiLanguage()));
   ImGui::SameLine();
   const char* region_items[] = {i18n::T("USA (NTSC)", "USA (NTSC)"),
                                        i18n::T("Europa (PAL)", "Europe (PAL)")};
@@ -2113,10 +2120,10 @@ void LauncherDialog::DrawFirstSteps() {
   step(2, i18n::T("Idioma", "Language"));
   {
     int lang_idx = 0;
-    for (int i = 0; i < 6; i++)
-      if (dbz3::settings::Language() == kLanguageIds[i]) lang_idx = i;
+    for (int i = 0; i < 7; i++)
+      if (dbz3::settings::UiLanguage() == kLanguageIds[i]) lang_idx = i;
     ImGui::SetNextItemWidth(220.0f);
-    if (ImGui::Combo("##first_lang", &lang_idx, kLanguageItems, 6)) {
+    if (ImGui::Combo("##first_lang", &lang_idx, kLanguageItems, 7)) {
       dbz3::settings::SetLanguage(kLanguageIds[lang_idx]);
       dbz3::settings::SaveUserSettings();
     }
@@ -2582,14 +2589,14 @@ void LauncherDialog::DrawVideoTab() {
     ImGui::Spacing();
     PushSectionHeader(i18n::T("Idioma", "Language"));
 
-    int lang = dbz3::settings::Language();
+    int lang = dbz3::settings::UiLanguage();
     int lang_idx = 0;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 7; i++) {
       if (lang == kLanguageIds[i]) lang_idx = i;
     }
     ui::RowLabel(i18n::T("Idioma del launcher y del juego", "Launcher and game language"));
     if (ImGui::Combo("##DrawVideoTab_5",
-                     &lang_idx, kLanguageItems, 6)) {
+                     &lang_idx, kLanguageItems, 7)) {
       dbz3::settings::SetLanguage(kLanguageIds[lang_idx]);
       dbz3::settings::SaveUserSettings();
     }
@@ -3474,6 +3481,7 @@ void LauncherDialog::DrawNovasModsTab() {
       if (ImGui::SmallButton(i18n::T("Ver en Mods", "See in Mods"))) request_tab_ = 1;
     }
   }
+  if (ModPipeline::RosterToolAvailable()) DrawPackIW();   // necesita el Kit (importar.py)
   switch (GetNovaState()) {
     case NovaState::kNoKey:
       ImGui::TextColored(kDragonOrangeDim, "%s", i18n::T("Llega en la proxima actualizacion del launcher.",
@@ -3487,6 +3495,9 @@ void LauncherDialog::DrawNovasModsTab() {
                                                          "The list could not be loaded. Check your connection."));
       ImGui::SameLine();
       if (ImGui::Button(i18n::T("Reintentar", "Retry"))) RefreshNovaCatalog();
+      if (const std::string why = dbz3::launcher::LastNetworkError(); !why.empty()) {
+        ImGui::TextDisabled(i18n::T("Detalle tecnico: %s", "Technical detail: %s"), why.c_str());
+      }
       break;
     case NovaState::kReady: {
       // filtro por tipo (botones) y buscador en la misma fila
@@ -3613,6 +3624,72 @@ void LauncherDialog::DrawModsTab() {
   if (dbz3::settings::IsIsoMode()) {
     ImGui::Spacing();
     DrawIsoPrepBox();
+  }
+
+  // Mods opcionales (encargo 13): los datos de B2/IW (musica, videos, sonidos) que el juego lee de su opcional.toml.
+  // Vienen desactivados; la casilla los activa como a cualquier mod (mods.cpp) y cada uno avisa de la ISO que
+  // necesita (pasarela::IsoPs2; se elige en la pestana Juego, "Contenido de tus juegos de PS2").
+  {
+    const auto opc = dbz3::opcional::Listar();
+    if (opc && !opc->empty()) {
+      ui::SectionTitle(i18n::T("Mods opcionales (Budokai 2 / Infinite World)",
+                               "Optional mods (Budokai 2 / Infinite World)"));
+      ui::Hint(i18n::T(
+          "Añaden música, vídeos y sonidos originales de tus juegos de PS2, apagados hasta que los marques. "
+          "Cada uno necesita la ISO del juego que dice (pestaña Juego).",
+          "They add original music, videos and sounds from your PS2 games, off until you tick them. "
+          "Each one needs the ISO of the game it says (Game tab)."));
+      static double iso_leido = -10;
+      static bool iso_lista[3] = {};
+      if (ImGui::GetTime() - iso_leido > 2.0) {
+        iso_leido = ImGui::GetTime();
+        for (int i = 0; i < 3; ++i) iso_lista[i] = !dbz3::pasarela::IsoPs2(i).empty();
+      }
+      const char* const kIdiomaOpc[7] = {"en", "ja", "de", "fr", "es", "it", "pt"};   // el orden de kLanguageIds
+      std::string idioma = "en";
+      for (int i = 0; i < 7; ++i)
+        if (dbz3::settings::UiLanguage() == kLanguageIds[i]) idioma = kIdiomaOpc[i];
+      for (const dbz3::opcional::Mod& m : *opc) {
+        const bool es_iw = m.id.rfind("iw", 0) == 0;   // "iw.*" necesita Infinite World; el resto, Budokai 2
+        const int juego = es_iw ? 2 : 1;
+        const std::string titulo = dbz3::opcional::Nombre(m, idioma);
+        ImGui::PushID(m.carpeta.c_str());
+        bool on = m.activo;
+        if (ImGui::Checkbox("##opc_on", &on)) {
+          dbz3::SetModEnabled(m.carpeta, on);
+          dbz3::opcional::Refrescar();
+          mods_loaded_ = false; broken_mods_ = -1;
+          mods_status_ = std::string(on ? i18n::T("Mod opcional activado: ", "Optional mod enabled: ")
+                                        : i18n::T("Mod opcional desactivado: ", "Optional mod disabled: ")) + titulo;
+        }
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("%s", m.activo ? i18n::T("Activado: se usa al pulsar JUGAR. Quita la marca para apagarlo.",
+                                                     "On: used when you press PLAY. Untick to turn it off.")
+                                           : i18n::T("Apagado: no se usa. Marca la casilla para activarlo.",
+                                                     "Off: not used. Tick the box to turn it on."));
+        ImGui::SameLine();
+        ImGui::TextUnformatted(titulo.c_str());
+        ImGui::SameLine();
+        if (iso_lista[juego]) {
+          ImGui::TextColored(kOk, "%s %s", ICON_OK, i18n::T("Lista", "Ready"));
+        } else {
+          ImGui::TextColored(kGold, "%s %s", ICON_WARN, i18n::T("Falta", "Missing"));
+          ImGui::SameLine();
+          ImGui::TextDisabled("%s", es_iw ? i18n::T("Necesita tu ISO de Infinite World.",
+                                                     "Needs your Infinite World ISO.")
+                                           : i18n::T("Necesita tu ISO de Budokai 2.", "Needs your Budokai 2 ISO."));
+          ImGui::SameLine();
+          if (ImGui::SmallButton(i18n::T("Elegir ISO", "Pick ISO"))) {
+            dbz3::pasarela::ElegirIsoPs2(juego);
+            iso_leido = -10;   // se vuelve a mirar: puede haberla elegido
+          }
+        }
+        const std::string desc = dbz3::opcional::Descripcion(m, idioma);
+        if (!desc.empty()) ImGui::TextDisabled("%s", desc.c_str());
+        ImGui::PopID();
+      }
+      ImGui::Separator();
+    }
   }
 
   // Texturas faciles: capturar las texturas del juego, prepararlas como PNG con el nombre que
@@ -4781,12 +4858,31 @@ void LauncherDialog::PreviewWidget(const std::filesystem::path& rgba, float scal
 }
 
 std::map<std::string, int> LauncherDialog::AssignSlots() const {
-  // Igual que roster_build.assign_ids: primero las plazas pedidas (en orden de
-  // carpeta; si dos piden la misma gana la primera), luego la primera libre.
+  // Igual que roster_build.plan_ids (resumido): el ID guardado en mods/roster_ids.toml se conserva y
+  // los de mods quitados o desactivados quedan reservados; luego las plazas pedidas (en orden de
+  // carpeta; si dos piden la misma gana la primera) y la primera libre.
   std::map<std::string, int> out;
   std::vector<int> used;
   auto taken = [&](int id) { return std::find(used.begin(), used.end(), id) != used.end(); };
+  {
+    std::istringstream in(ReadSmallFile(ModPipeline::ModsDir() / "roster_ids.toml"));
+    bool ids = false;
+    for (std::string ln; std::getline(in, ln);) {
+      if (!ln.empty() && ln[0] == '[') ids = ln.rfind("[ids]", 0) == 0;
+      const size_t q = ln.find("\" = ");
+      if (!ids || ln.empty() || ln[0] != '"' || q == std::string::npos) continue;
+      const std::string folder = ln.substr(1, q - 1);
+      const int id = std::atoi(ln.c_str() + q + 4);
+      const auto cs = std::find_if(char_sources_.begin(), char_sources_.end(),
+                                   [&](const CharacterSource& c) { return c.folder == folder; });
+      if (cs != char_sources_.end() && cs->enabled && !cs->costume &&
+          (cs->req_id < 0 || cs->req_id == id) && !taken(id))
+        out[folder] = id;
+      used.push_back(id);   // activo con su ID, o reservado para cuando vuelva
+    }
+  }
   for (const auto& cs : char_sources_) {
+    if (out.count(cs.folder)) continue;
     if (!cs.enabled || cs.costume) continue;   // los trajes van sobre su personaje, sin plaza
     for (const auto& s : kFreeSlots) {
       if (s.id == cs.req_id && !taken(s.id)) {
@@ -5232,6 +5328,105 @@ void LauncherDialog::DrawCharacterEditor(CharacterSource& cs, const std::map<std
   ImGui::EndDisabled();
   ImGui::EndChild();
   ImGui::PopID();
+}
+
+namespace {
+
+std::vector<std::string> SplitTabs(const std::string& line);
+
+}  // namespace
+
+// Pack de Infinite World: una casilla por personaje de IW con receta oficial (ports_oficiales.toml, fuente iw). Marcar =
+// crearlo con la copia de IW del jugador (importar.py oficial); desmarcar = apartarlo a mods_respaldo/. Sin catalogo:
+// el pack no trae nada del juego, solo las recetas del Kit. Hace falta para cubrir las misiones de IW con personajes
+// que B3 no tiene (Goku GT, Baby, Super 17, Janemba, Pikkon, Vegeta GT, Gran Saiyaman 2, Pan).
+void LauncherDialog::DrawPackIW() {
+  const bool trabajo = mod_pipeline_.IsRunning();
+  if (pack_consulta_ && !trabajo) {   // la consulta acabo: leer sus filas
+    pack_consulta_ = false;
+    pack_gen_ = mod_pipeline_.Generation();
+    pack_filas_.clear();
+    std::istringstream in(mod_pipeline_.Output());
+    for (std::string l; std::getline(in, l);) {
+      if (!l.empty() && l.back() == '\r') l.pop_back();
+      const auto c = SplitTabs(l);   // oficial, id, nombre, fuente, listo|falta, 1|0, preset
+      if (c.size() >= 6 && c[0] == "oficial" && c[3] == "iw") pack_filas_.push_back({c[1], c[2], c[4] == "listo", c[5] == "1"});
+    }
+    pack_quiero_.clear();
+    for (const PackFila& f : pack_filas_) pack_quiero_[f.id] = f.instalado;
+    mods_loaded_ = false;
+    broken_mods_ = -1;
+  }
+  if (!pack_consulta_ && !trabajo && pack_gen_ != mod_pipeline_.Generation()) {   // al entrar y tras cada trabajo
+    pack_consulta_ = true;
+    mod_pipeline_.ImporterQuery({"oficiales", "--mods", ModPipeline::ModsDir().string()});
+  }
+  const bool ocupado = trabajo || pack_consulta_;
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::kCard);
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
+  ImGui::BeginChild("##pack_iw", ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
+  {
+    ui::FontScope f(ui::GetFonts().bold);
+    ImGui::TextColored(kGold, "%s", i18n::T("Pack Infinite World", "Infinite World pack"));
+  }
+  ImGui::SameLine();
+  ui::Pill(nullptr, "BETA", ui::kBlue);
+  ImGui::PushTextWrapPos(0.0f);
+  ImGui::TextDisabled("%s", i18n::T(
+      "Los personajes de Infinite World que piden sus misiones. Se crean aquí con TU copia de Infinite World (Juego > "
+      "Elegir ISO): el pack no trae nada del juego. Marca los que quieras y pulsa Aplicar.",
+      "The Infinite World characters its missions need. They are built here from YOUR Infinite World copy (Game > Pick "
+      "ISO): the pack ships nothing from the game. Tick the ones you want and press Apply."));
+  ImGui::PopTextWrapPos();
+  if (pack_filas_.empty() && !ocupado)
+    ImGui::TextDisabled("%s", i18n::T("No hay recetas de Infinite World en este Kit.", "No Infinite World recipes in this Kit."));
+  if (ocupado) ImGui::BeginDisabled();
+  for (const PackFila& f : pack_filas_) {
+    ImGui::PushID(f.id.c_str());
+    bool quiero = pack_quiero_[f.id];
+    if (ImGui::Checkbox(f.nombre.c_str(), &quiero)) pack_quiero_[f.id] = quiero;
+    ImGui::SameLine(260.0f);
+    if (f.instalado) ui::Pill(ICON_OK, i18n::T("Instalado", "Installed"), kOk);
+    else ui::Pill(nullptr, i18n::T("No instalado", "Not installed"), kTextDim);
+    if (!f.listo) {
+      ImGui::SameLine();
+      ImGui::TextColored(kGold, "%s", i18n::T("Falta tu copia de Infinite World", "Your Infinite World copy is missing"));
+    }
+    ImGui::PopID();
+  }
+  auto aplicar = [this](int todos) {   // -1 lo marcado, 1 todos, 0 ninguno
+    std::vector<std::string> instalar, quitar;
+    for (const PackFila& f : pack_filas_) {
+      const bool q = todos < 0 ? pack_quiero_[f.id] : todos == 1;
+      if (q && !f.instalado && f.listo) instalar.push_back(f.id);
+      if (!q && f.instalado) quitar.push_back(f.id);
+    }
+    if (instalar.empty() && quitar.empty()) {
+      pack_msg_ = i18n::T("Nada que cambiar.", "Nothing to change.");
+      return;
+    }
+    pack_msg_ = i18n::T("Aplicando los cambios... (se montan al pulsar JUGAR)", "Applying changes... (built when you press PLAY)");
+    mod_pipeline_.RunOfficialPorts(instalar, quitar);
+  };
+  if (ImGui::Button(i18n::T("Aplicar", "Apply"), ImVec2(160.0f, 34.0f))) aplicar(-1);
+  ImGui::SameLine();
+  if (ImGui::Button(i18n::T("Instalar todos", "Install all"), ImVec2(180.0f, 34.0f))) aplicar(1);
+  ImGui::SameLine();
+  if (ImGui::Button(i18n::T("Quitar todos", "Remove all"), ImVec2(180.0f, 34.0f))) aplicar(0);
+  if (ocupado) ImGui::EndDisabled();
+  if (trabajo && !pack_msg_.empty()) {
+    std::string ultima;
+    std::istringstream in(mod_pipeline_.Output());
+    for (std::string l; std::getline(in, l);)
+      if (!l.empty()) ultima = l;
+    ImGui::TextColored(kInfo, "%s %s", ICON_DOWNLOAD, ultima.c_str());
+  } else if (!pack_msg_.empty()) {
+    ImGui::TextDisabled("%s", pack_msg_.c_str());
+  }
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+  ImGui::Spacing();
 }
 
 namespace {

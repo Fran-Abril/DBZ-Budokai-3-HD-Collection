@@ -11,6 +11,7 @@
 #include <toml++/toml.hpp>
 
 #include "../mods.h"
+#include "settings.h"
 
 #include <algorithm>
 #include <cctype>
@@ -605,6 +606,29 @@ static const Entry kTable[] = {
       {"automatico", "automatico", "automatisch", "automatique"},
       {"Algo ha fallado. Abre 'Detalles tecnicos' para ver el motivo (puedes copiarlo para pedir ayuda).", "Qualcosa è andato storto. Apri 'Dettagli tecnici' per vedere il motivo (puoi copiarlo per chiedere aiuto).", "Etwas ist schiefgelaufen. Öffne 'Technische Details', um den Grund zu sehen (du kannst ihn kopieren, um Hilfe zu bitten).", "Une erreur s'est produite. Ouvrez 'Détails techniques' pour voir la cause (vous pouvez la copier pour demander de l'aide)."},
       {"Detalles tecnicos", "Dettagli tecnici", "Technische Details", "Détails techniques"},
+      {"Pack Infinite World", "Pack Infinite World", "Infinite-World-Paket", "Pack Infinite World"},
+      {"Los personajes de Infinite World que piden sus misiones. Se crean aquí con TU copia de Infinite World (Juego > Elegir ISO): el pack no trae nada del juego. Marca los que quieras y pulsa Aplicar.", "I personaggi di Infinite World richiesti dalle sue missioni. Si creano qui con LA TUA copia di Infinite World (Gioco > Scegli ISO): il pack non contiene nulla del gioco. Spunta quelli che vuoi e premi Applica.", "Die Infinite-World-Charaktere, die seine Missionen brauchen. Sie werden hier aus DEINER Infinite-World-Kopie erstellt (Spiel > ISO wählen): das Paket enthält nichts aus dem Spiel. Hake die gewünschten an und drücke Anwenden.", "Les personnages d'Infinite World dont ses missions ont besoin. Ils sont créés ici avec TA copie d'Infinite World (Jeu > Choisir l'ISO) : le pack ne contient rien du jeu. Coche ceux que tu veux et appuie sur Appliquer."},
+      {"No hay recetas de Infinite World en este Kit.", "Nessuna ricetta di Infinite World in questo Kit.", "Keine Infinite-World-Rezepte in diesem Kit.", "Aucune recette d'Infinite World dans ce Kit."},
+      {"Falta tu copia de Infinite World", "Manca la tua copia di Infinite World", "Deine Infinite-World-Kopie fehlt", "Ta copie d'Infinite World manque"},
+      {"Aplicar", "Applica", "Anwenden", "Appliquer"},
+      {"Instalar todos", "Installa tutti", "Alle installieren", "Tout installer"},
+      {"Quitar todos", "Rimuovi tutti", "Alle entfernen", "Tout retirer"},
+      {"Nada que cambiar.", "Niente da cambiare.", "Nichts zu ändern.", "Rien à changer."},
+      {"Aplicando los cambios... (se montan al pulsar JUGAR)", "Applicazione delle modifiche... (si montano premendo GIOCA)", "Änderungen werden angewendet... (beim Drücken von SPIELEN eingebaut)", "Application des changements... (montés en appuyant sur JOUER)"},
+      {"Budokai 2 (experimental)", "Budokai 2 (sperimentale)", "Budokai 2 (experimentell)", "Budokai 2 (expérimental)"},
+      {"El Mundo Dragón arranca con su intro y las charlas del original; los Saibaman brotan del suelo y suena su música.", "Il Mondo del Drago parte con la sua intro e i dialoghi originali; i Saibaman spuntano dal terreno e suona la sua musica.", "Die Drachenwelt beginnt mit ihrem Intro und den Original-Dialogen; Saibaman wachsen aus dem Boden und ihre Musik läuft.", "Le Monde du Dragon démarre avec son intro et les dialogues d'origine ; les Saibaman sortent du sol et sa musique joue."},
+      {"Saibaman de colores: cada combate del tablero contra uno sale de un color.", "Saibaman colorati: ogni combattimento sul tabellone contro uno ha un colore diverso.", "Bunte Saibaman: jeder Brettkampf gegen einen hat eine andere Farbe.", "Saibaman colorés : chaque combat du plateau contre l'un d'eux a une couleur différente."},
+      {"Infinite World (experimental)", "Infinite World (sperimentale)", "Infinite World (experimentell)", "Infinite World (expérimental)"},
+      {"El entrenamiento de Goku y Gohan ya no se descoloca, y las misiones dicen qué personaje falta.", "L'allenamento di Goku e Gohan non si scompone più, e le missioni dicono quale personaggio manca.", "Das Training von Goku und Gohan verrutscht nicht mehr, und die Missionen sagen, welcher Charakter fehlt.", "L'entraînement de Goku et Gohan ne se dérègle plus, et les missions indiquent quel personnage manque."},
+      {"Pack Infinite World en Nova's Mods: marca los personajes y se crean con tu copia del juego.", "Pack Infinite World in Nova's Mods: spunta i personaggi e si creano con la tua copia del gioco.", "Infinite-World-Paket in Nova's Mods: hake die Charaktere an und sie werden aus deiner Spielkopie erstellt.", "Pack Infinite World dans Nova's Mods : coche les personnages et ils sont créés avec ta copie du jeu."},
+      {"Arreglado: en algunos equipos no cargaba Nova's Mods ni la comprobación de versión.", "Risolto: su alcuni PC non si caricavano Nova's Mods né il controllo della versione.", "Behoben: auf manchen PCs luden Nova's Mods und die Versionsprüfung nicht.", "Corrigé : sur certains PC, Nova's Mods et la vérification de version ne se chargeaient pas."},
+      {"Placas de rango, fondos y anfitriones nuevos, y marcas BETA / EXPERIMENTAL en lo que está en construcción.", "Targhe di grado, sfondi e presentatori nuovi, e marchi BETA / SPERIMENTALE su ciò che è in costruzione.", "Rangschilder, neue Hintergründe und Gastgeber sowie BETA- / EXPERIMENTELL-Markierungen für Unfertiges.", "Plaques de rang, nouveaux fonds et hôtes, et marques BÊTA / EXPÉRIMENTAL sur ce qui est en construction."},
+      {"Relevos con teletransporte, también entre luchadores del ordenador.", "Cambi con teletrasporto, anche tra combattenti del computer.", "Wechsel per Teleport, auch zwischen Computer-Kämpfern.", "Relais par téléportation, aussi entre combattants de l'ordinateur."},
+      {"Los mods ya funcionan jugando directamente desde la ISO.", "Le mod ora funzionano giocando direttamente dalla ISO.", "Mods funktionieren jetzt auch direkt von der ISO.", "Les mods fonctionnent désormais en jouant directement depuis l'ISO."},
+      {"Modos nuevos", "Nuove modalità", "Neue Modi", "Nouveaux modes"},
+      {"Misión 100, Modo Héroe (beta), Leyenda de Mr. Satán (beta) y las campañas de Infinite World y Budokai 2 (experimental): elige tu ISO de PS2 en la pestaña Juego.", "Missione 100, modalità Eroe (beta), Leggenda di Mr. Satan (beta) e le campagne di Infinite World e Budokai 2 (sperimentali): scegli la tua ISO PS2 nella scheda Gioco.", "Mission 100, Heldenmodus (Beta), Mr.-Satan-Legende (Beta) und die Kampagnen von Infinite World und Budokai 2 (experimentell): wähle deine PS2-ISO im Tab Spiel.", "Mission 100, mode Héros (bêta), Légende de Mr. Satan (bêta) et les campagnes d'Infinite World et Budokai 2 (expérimentales) : choisis ton ISO PS2 dans l'onglet Jeu."},
+      {"Lanzador y menú F1 renovados, y todo traducido a cinco idiomas.", "Launcher e menu F1 rinnovati, e tutto tradotto in cinque lingue.", "Neuer Launcher und neues F1-Menü, alles in fünf Sprachen übersetzt.", "Launcher et menu F1 repensés, et tout traduit en cinq langues."},
+      {"Detalle tecnico: %s", "Dettaglio tecnico: %s", "Technisches Detail: %s", "Détail technique : %s"},
       {"Esta vacio: no hace nada.", "È vuoto: non fa nulla.", "Es ist leer: es tut nichts.", "Il est vide : il ne fait rien."},
       {"Esta metido dentro de otra carpeta ('", "È dentro un'altra cartella ('", "Es liegt in einem zusätzlichen Ordner ('", "Il se trouve dans un dossier supplémentaire ('"},
       {"'), asi el juego no lo ve. Pulsa 'Arreglar'.", "'), quindi il gioco non lo vede. Premi 'Correggi'.", "'), daher sieht das Spiel es nicht. Drücke 'Reparieren'.", "'), donc le jeu ne le voit pas. Appuyez sur 'Réparer'."},
@@ -1077,7 +1101,14 @@ static const Entry kTable[] = {
     {"Apagado: no se usa. Marca la casilla para activarlo.", "Spento: non viene usato. Spunta la casella per attivarlo.", "Aus: wird nicht verwendet. Setze das Häkchen, um es zu aktivieren.", "Désactivé : non utilisé. Coche la case pour l'activer."},
     // i18n sweep 2026-10-17 (trans3): textos que caian al ingles en fr/de/it
     {"Comprobando ", "Verifica di ", "Prüfe ", "Vérification de "},
-    {"la descarga no coincide con el catalogo (archivo danado o alterado); no se instala", "il download non corrisponde al catalogo (file danneggiato o alterato); non viene installato", "der Download stimmt nicht mit dem Katalog überein (Datei beschädigt oder verändert); wird nicht installiert", "le téléchargement ne correspond pas au catalogue (fichier endommagé ou altéré) ; non installé"},
+    {"la descarga no coincide con el catalogo (archivo danado o alterado); no se instala", "il download non corrisponde al catalogo (file danneggiato o alterato); non si installa", "der Download stimmt nicht mit dem Katalog überein (beschädigte oder veränderte Datei); wird nicht installiert", "le téléchargement ne correspond pas au catalogue (fichier endommagé ou altéré) ; il n'est pas installé"},
+    // Encargo 13 (mods opcionales de B2/IW): seccion de la pestana Mods
+    {"Mods opcionales (Budokai 2 / Infinite World)", "Mod opzionali (Budokai 2 / Infinite World)", "Optionale Mods (Budokai 2 / Infinite World)", "Mods facultatifs (Budokai 2 / Infinite World)"},
+    {"Añaden música, vídeos y sonidos originales de tus juegos de PS2, apagados hasta que los marques. Cada uno necesita la ISO del juego que dice (pestaña Juego).", "Aggiungono musica, video e suoni originali dei tuoi giochi PS2, spenti finché non li attivi. Ognuno richiede la ISO del gioco indicato (scheda Gioco).", "Sie fügen originale Musik, Videos und Sounds aus deinen PS2-Spielen hinzu, ausgeschaltet bis du sie markierst. Jeder braucht die ISO des genannten Spiels (Tab Spiel).", "Ils ajoutent la musique, les vidéos et les sons originaux de tes jeux PS2, éteints jusqu'à ce que tu les coches. Chacun a besoin de l'ISO du jeu indiqué (onglet Jeu)."},
+    {"Necesita tu ISO de Budokai 2.", "Richiede la tua ISO di Budokai 2.", "Braucht deine Budokai-2-ISO.", "Nécessite ton ISO de Budokai 2."},
+    {"Necesita tu ISO de Infinite World.", "Richiede la tua ISO di Infinite World.", "Braucht deine Infinite-World-ISO.", "Nécessite ton ISO d'Infinite World."},
+    {"Mod opcional activado: ", "Mod opzionale attivato: ", "Optionaler Mod aktiviert: ", "Mod facultatif activé : "},
+    {"Mod opcional desactivado: ", "Mod opzionale disattivato: ", "Optionaler Mod deaktiviert: ", "Mod facultatif désactivé : "},
   };
 
 // Indice por texto (antes, ~800 strcmp por llamada: ~1 ms por frame en italiano/aleman/frances).
@@ -1243,25 +1274,28 @@ const char* Espanol(const char* es) {
 }  // namespace
 
 const char* LangCode() {
-  return g_ui_lang == 5 ? "es" : g_ui_lang == 6 ? "it" : g_ui_lang == 3 ? "de" : g_ui_lang == 4 ? "fr" : "en";
+  return g_ui_lang == 5 ? "es" : g_ui_lang == 6 ? "it" : g_ui_lang == 3 ? "de" : g_ui_lang == 4 ? "fr"
+       : g_ui_lang == 9 ? "pt" : g_ui_lang == 2 ? "ja" : "en";
 }
 
 void SetLanguage(int32_t xbox_language_id) {
-  g_ui_lang = xbox_language_id;
+  // portugues (9) no es idioma del juego: lo marca dbz3_ui_language con el juego en ingles
+  g_ui_lang = xbox_language_id == 1 && dbz3::settings::UiLanguage() == 9 ? 9 : xbox_language_id;
 }
 
-// Textos de los modos nuevos que no estan en kTable: ingame_ui/i18n_modos.toml, clave = el texto ingles, con fr/de/it
-// (ronda 4, 2026-10-16). Se lee una vez; sin el archivo queda el ingles como antes.
+// Textos de los modos nuevos que no estan en kTable: ingame_ui/i18n_modos.toml, clave = el texto ingles, con
+// fr/de/it/pt/ja (pt y ja: todos los textos propios, 2026-10-17). Se lee una vez; sin el archivo queda el ingles.
 const char* Extra(const char* en, int idioma) {
   static const auto tabla = [] {
-    std::unordered_map<std::string, std::array<std::string, 3>> t;
+    std::unordered_map<std::string, std::array<std::string, 5>> t;
     try {
       const toml::table doc = toml::parse_file((dbz3::ModsRoot().parent_path() / "ingame_ui" / "i18n_modos.toml").string());
       for (const auto& [k, v] : doc)
-        if (const toml::table* e = v.as_table())
-          t[std::string(k.str())] = {e->get("fr") ? (*e)["fr"].value_or(std::string()) : std::string(),
-                                     e->get("de") ? (*e)["de"].value_or(std::string()) : std::string(),
-                                     e->get("it") ? (*e)["it"].value_or(std::string()) : std::string()};
+        if (const toml::table* e = v.as_table()) {
+          auto& fila = t[std::string(k.str())];
+          int i = 0;
+          for (const char* l : {"fr", "de", "it", "pt", "ja"}) fila[i++] = (*e)[l].value_or(std::string());
+        }
     } catch (...) {
     }
     return t;
@@ -1290,7 +1324,12 @@ const char* T(const char* es, const char* en) {
   }
   if (g_ui_lang == 4 || g_ui_lang == 3 || g_ui_lang == 6)
     if (const char* x = Extra(en, g_ui_lang == 4 ? 0 : g_ui_lang == 3 ? 1 : 2)) return x;
-  return en;  // English (and unsupported languages such as Japanese)
+  if (const char* x = Otro(en)) return x;
+  return en;  // English (y lo que falte por traducir)
+}
+
+const char* Otro(const char* en) {
+  return g_ui_lang == 9 ? Extra(en, 3) : g_ui_lang == 2 ? Extra(en, 4) : nullptr;
 }
 
 }  // namespace dbz3::i18n

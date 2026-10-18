@@ -268,13 +268,27 @@ def pad4(rgba):
 
 
 def encode_dxt3(rgba):
+    """Todos los bloques a la vez con numpy, byte a byte igual que _encode_block bloque a bloque (el bucle en
+    Python era casi todo el tiempo de montar el roster: 6,4 millones de bloques, ~400 s)."""
     h, w = rgba.shape[:2]
     assert w % 4 == 0 and h % 4 == 0, "dimensiones deben ser multiplo de 4"
-    out = bytearray()
-    for by in range(0, h, 4):
-        for bx in range(0, w, 4):
-            out += _encode_block(rgba[by:by + 4, bx:bx + 4])
-    return bytes(out)
+    if not h or not w:
+        return b""
+    b = np.asarray(rgba)[:, :, :4].reshape(h // 4, 4, w // 4, 4, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 16, 4)
+    a = np.minimum(15, (b[:, :, 3].astype(np.int32) + 8) // 16)          # = min(15, int(a / 16 + 0.5))
+    alpha = (a[:, 0::2] | (a[:, 1::2] << 4)).astype(np.uint8)            # 8 bytes por bloque
+    rgb = b[:, :, :3].astype(np.int32)
+    cmax, cmin = rgb.max(axis=1), rgb.min(axis=1)
+    to565 = lambda c: ((c[:, 0] >> 3) << 11) | ((c[:, 1] >> 2) << 5) | (c[:, 2] >> 3)  # noqa: E731
+    c0, c1 = to565(cmax), to565(cmin)
+    c0, c1 = np.maximum(c0, c1), np.minimum(c0, c1)
+    fr = lambda v: np.stack([((v >> 11) & 0x1F) << 3, ((v >> 5) & 0x3F) << 2, (v & 0x1F) << 3], 1)  # noqa: E731
+    p0, p1 = fr(c0), fr(c1)
+    pal = np.stack([p0, p1, (2 * p0 + p1) // 3, (p0 + 2 * p1) // 3], 1)  # (n, 4, 3)
+    idx = ((rgb[:, :, None, :] - pal[:, None, :, :]) ** 2).sum(axis=3).argmin(axis=2)   # (n, 16)
+    ind = (idx[:, 0::4] | (idx[:, 1::4] << 2) | (idx[:, 2::4] << 4) | (idx[:, 3::4] << 6)).astype(np.uint8)
+    col = np.stack([c0 & 0xFF, c0 >> 8, c1 & 0xFF, c1 >> 8], 1).astype(np.uint8)
+    return np.concatenate([alpha, col, ind], axis=1).tobytes()
 
 
 def decode_dxt3_bitmap(bitmap, w, h):

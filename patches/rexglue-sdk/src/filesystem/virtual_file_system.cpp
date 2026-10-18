@@ -235,6 +235,13 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view p
 
     auto file_name = rex::string::utf8_find_name_from_guest_path(path);
     entry = parent_entry->GetChild(file_name);
+    // dbz3 ISO + mods: el hijo del padre es el del disco; solo ResolvePath(ruta completa) de RegionDiscDevice sirve
+    // la copia iso_datos con los overrides. En carpeta extraida devuelve la misma entrada.
+    if (!root_entry && creation_disposition == FileDisposition::kOpen) {
+      if (Entry* full = ResolvePath(path); full && full != entry && !(full->attributes() & kFileAttributeDirectory)) {
+        entry = full;
+      }
+    }
   } else {
     entry = !root_entry ? ResolvePath(path) : root_entry->GetChild(path);
   }

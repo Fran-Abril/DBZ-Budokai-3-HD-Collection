@@ -47,6 +47,21 @@ struct Anim {
   std::vector<std::string> sufijos;               // huesos de su #AMM sin el prefijo (GOK_WAIST -> WAIST)
   uint32_t bloque[11] = {};                       // los 11 u32 del sub-bloque del #BSK de IW (sin lineas AP)
   std::vector<std::array<uint32_t, 2>> pistas;    // pistas ya copiadas al juego (direccion; 0 = sin pista)
+  // 06: eventos por cuadro de la animacion (las "lineas AP" del bloque: bloque[9] = n lineas,
+  // bloque[10] = offset en el #BSK). Cada linea: [u16 gestor][u16 n][u32 offset de registros];
+  // cada registro (16 B): [u16 cuadro][u16 interno][u32 tipo][u32 valor]. Solo valen las lineas
+  // de gestor 7 = Anim_ProcessEventTrack (iw_sles55347.c:253899-253998; tipo -> consumidor en
+  // Animations2 214601-214760). El id de gestor sale de la tabla de B2, mismo motor: b2.c
+  // FUN_001fd0d0 (switch de los 8 gestores) con los cuerpos b2.c:157008-157350, uno a uno con
+  // los de IW (0 cabecera, 1 hitboxes, 2 flag 0x40, 3 valor 1B8, 4 valor 1B4, 5 flags set/clear,
+  // 6 manos, 7 eventos). Los tipos: 0 efecto/ki (PlayerVsCpuGeneralScene3), 1 y 2 sonido de
+  // golpe (canal SE 1 y canal del personaje), 3 voz (GenericCharacterVoiceGruntingMidBattle),
+  // 4 efecto Super/Ult, 5 sin consumidor, 6 parametro de escena, 7 audio de ki, 8 boca, 9 valor.
+  struct Evento {
+    float cuadro;
+    uint32_t tipo, valor;
+  };
+  std::vector<Evento> eventos;
 };
 
 // leido una vez (hilo del juego)
@@ -102,6 +117,9 @@ constexpr QteAnim kQte[] = {
     // Trunks (NB013 rival)
     {928, 0x569}, {928, 0x579}, {928, 0x583}, {928, 0x584}, {928, 0x586}, {928, 0x587}, {928, 0x589}, {928, 0x58A},
     {928, 0x58C}, {928, 0x58D}, {928, 0x596}, {928, 0x599}, {928, 0x59C}, {928, 0x59F}, {928, 0x5BF}, {928, 0x5C1},
+    // 05_iw_minijuegos_pendientes: poses del choque de NB013 (Mg_StartClashSequence pone 0x11 jugador / 0x21 rival;
+    // tablas 0x49A5B0 / 0x499F30 del ELF USA: 0x11 -> 0x543, 0x21 -> 0x552)
+    {931, 0x543}, {928, 0x552},
     // Gohan nino (NB006 jugador)
     {921, 0x2AD}, {921, 0x258}, {921, 0x262}, {921, 0x278}, {921, 0x277}, {921, 0x265}, {921, 0x27B}, {921, 0x27A},
     {921, 0x268}, {921, 0x27E}, {921, 0x27D}, {921, 0x26B}, {921, 0x281}, {921, 0x280}, {921, 0x285}, {921, 0x286},
@@ -328,6 +346,24 @@ bool Copiar(uint8_t* base, Anim& an, const std::vector<uint8_t>& bsk, uint32_t c
   if (k >= n_anim || nb == 0 || nb > 128 || nombres + 32 * nb > a.size()) return false;
   an.codigo = codigo;
   for (uint32_t w = 0; w < 11; ++w) an.bloque[w] = Le32(bsk, blk + 4 + 4 * w);
+  // 06: eventos por cuadro (lineas AP), antes de anularlas para el #CSK de B3. Formato y
+  // gestores: ver `struct Anim`. Solo el gestor 7 (Anim_ProcessEventTrack).
+  {
+    const uint32_t n_lin = an.bloque[9], off = an.bloque[10];
+    if (n_lin <= 64 && off && off + 8 * n_lin <= bsk.size())
+      for (uint32_t j = 0; j < n_lin; ++j) {
+        const uint32_t eo = off + 8 * j;
+        if (Le16(bsk, eo) != 7) continue;
+        const uint32_t n = Le16(bsk, eo + 2), regs = Le32(bsk, eo + 4);
+        if (n == 0 || n > 64 || !regs || regs + 16 * n > bsk.size()) continue;
+        for (uint32_t q = 0; q < n; ++q) {
+          const uint32_t r = regs + 16 * q;
+          an.eventos.push_back({float(Le16(bsk, r)), Le32(bsk, r + 4), Le32(bsk, r + 8)});
+        }
+      }
+    std::sort(an.eventos.begin(), an.eventos.end(),
+              [](const Anim::Evento& x, const Anim::Evento& y) { return x.cuadro < y.cuadro; });
+  }
   an.bloque[9] = an.bloque[10] = 0;   // sin lineas AP (sonidos/efectos de IW)
   const size_t e = tbl + 16 * k;
   an.flags = Le32(a, e) & ~0x10u;
@@ -366,8 +402,107 @@ bool Copiar(uint8_t* base, Anim& an, const std::vector<uint8_t>& bsk, uint32_t c
 // al pasar de una animacion de IW a otra se pone una de transicion de kMezcla cuadros con dos claves por hueso, la pose
 // actual de la de antes y la del primer cuadro de la nueva, y despues la nueva. Las pistas de la transicion son fijas
 // (las enlaza Instalar una vez) y se reescriben en cada cambio. Huesos: todos los de las animaciones leidas.
-constexpr uint32_t kTransicion = 0x7FE, kMezcla = 8;
-// Una pista en el cuadro f (angular: claves [cuadro u16, x, y, z u16]; posicional: [cuadro u32, x, y, z f32])
+// R7 (re_anim_bordes.md): IW no funde siempre en 8 cuadros. CharModel_SetAnimBlend (iw_sles55347.c 282349) pone una tasa
+// por cuadro (peso += tasa, FuncToDefine 282238) y la anim nueva AVANZA mientras sube el peso, contra la pose que tenia la
+// de antes. Tasas leidas (Viewer_StateFlyUpdate0, 431615-431800): al reposo 0x800 1/10; 0x329/0x32A 1/15; 0x328 1/20;
+// 0x324 1/18; desde 0x330 siempre 1/15; el resto de llamadas usa 1/15 (o 1/5). La transicion lleva una clave por cuadro.
+constexpr uint32_t kTransicion = 0x7FE, kMaxMezcla = 20;
+// 06: tasas de IW (peso += 1/n por cuadro; 1 = corte seco, sin rampa). Del visor de vuelo
+// (iw_sles55347.c): ->0x800 1/10 (Viewer_StateFlyUpdate0 431700-431705); ->0x329/0x32A 1/15
+// (431708, 431713); ->0x328 1/20 (431717-431725); ->0x324 1/18 (431735-431741); ->0x32D 1/10
+// (431744-431750); ->0x32C 1/5 (Viewer_StatePoseBank5/6 430600, 430671) o 1/15 desde 0x330;
+// ->0x323 1/5 (Viewer_StatePoseDive 430795-430800); ->0x321 1/10 (Viewer_StatePoseTurn
+// 430742-430749); desde 0x330 SIEMPRE 1/15 (los `if (iVar1 == 0x330) f = 15` de todos).
+uint32_t CuadrosMezcla(uint32_t de, uint32_t a) {
+  if (de == 0x330) return 15;
+  switch (a) {
+    case 0x800: return 10;
+    case 0x329:
+    case 0x32A: return 15;
+    case 0x328: return 20;
+    case 0x324: return 18;
+    case 0x32D: return 10;
+    case 0x32C: return 5;
+    case 0x323: return 5;
+    case 0x321: return 10;
+    default: return 15;
+  }
+}
+// 06: transiciones que IW corta (CharModel_SetAnimBlend(1.0f, ...): el peso llega a 1 en el
+// mismo cuadro) o que no funde (el codigo de la animacion se escribe directo):
+//  * Poses de los minijuegos (alias >= kQteBase): IW las cambia escribiendo el codigo en el
+//    modelo (+0xb60 = modelo+0x520, leido por Animations 214945) y llamando a su tick, sin
+//    mezcla. Los 41 CharModel_SetAnimBlend del decomp estan TODOS fuera de los modulos de
+//    minijuegos (ninguno entre 0x400000 y 0x480000) y los gestores de pose escriben +0xb60
+//    directo: Char_EnterPoseState0x11/0x12/0x14/0x15 (424575, 425639, 425511, 425450), la
+//    familia NB014 0x35b200-0x35c500 (estados 0x0..0xf -> 0x569..0x58d, 0x541..0x547...), y
+//    el choque Mg_SetClashStepPoses/Mg_SetClashResultPoses (443219, 443063) via
+//    Char_EnterPoseStateByIndex / Char_EnterPoseByTable_49ad90.
+//  * Visor de vuelo: ->0x32F corta salvo desde 0x330 (Viewer_StateEnterFinalPose 430509-430513),
+//    ->0x32B corta salvo desde 0x330 (FlyingMinigameCharacterHeightPosition 431978-431982) y el
+//    guion corta a cualquier codigo (Cutscene_GotoLine 432595). ->0x322 y ->0x32C tienen
+//    llamadas de las dos clases (430734-430738 y 431990-431994 cortan; 430719, 431370 y
+//    Viewer_StatePoseBank5/6 430600/430671 funden) [H]: no se cortan.
+bool CorteMezcla(uint32_t de, uint32_t a) {
+  if (std::getenv("DBZ3_MEZCLA_FORZADA")) return false;   // prueba: fundir aunque IW corte
+  if (de == 0x330) return false;                          // de 0x330 siempre hay rampa (1/15)
+  if (de >= kQteBase || a >= kQteBase) return true;       // poses de los minijuegos: corte
+  return a == 0x32F || a == 0x32B;
+}
+// 06: sonidos de los eventos. Los valores de IW son ids de su banco de efectos del IOP
+// (AMSOUND, muestras en la SPU2: Hits_TransformationSounds -> FUN_0013f570 -> rpc 0xF), que no
+// esta en el AFS (los ADX del juego son voces/musica): no hay fichero que decodificar. Se
+// suenan los equivalentes de B3 que ya usa el port con sub_820922A0 (medidos en un combate:
+// banco 2 id 2 = impacto; banco 4 ids 19/20/25 = quejido de golpe). [H] en la equivalencia.
+struct SeB3 {
+  int banco = 0, id = 0;
+  bool son = false;
+};
+SeB3 SeB3DeEvento(uint32_t tipo) {
+  switch (tipo) {
+    case 1:
+    case 2:
+    case 7: return {2, 2, true};   // sonido de golpe / audio de ki
+    case 3: return {4, 19, true};  // voz del personaje (el valor de IW no se traduce)
+    default: return {};            // efecto/escena/boca/valor: no portado (ver DBZ3_IW_EVENTOS_LOG)
+  }
+}
+// 06: "ha sonado un evento hace poco" por luchador: el respaldo de los minijuegos (retardos
+// fijos, SeGolpe de iw_mini_botones.cpp) lo consulta para no doblar el sonido cuando la
+// animacion ya traia el suyo. Tick escribe (hilo del juego); el minijuego lee (interfaz).
+constexpr int kEventoSonando = 30;   // cuadros
+std::atomic<uint32_t> g_ev_x[2];
+std::atomic<int> g_ev_ticks[2];
+void MarcarEventoSonoro(uint32_t x) {
+  for (int i = 0; i < 2; ++i)
+    if (g_ev_x[i].load() == x || g_ev_ticks[i].load() <= 0) {
+      g_ev_x[i].store(x);
+      g_ev_ticks[i].store(kEventoSonando);
+      return;
+    }
+  g_ev_x[0].store(x);
+  g_ev_ticks[0].store(kEventoSonando);
+}
+void DispararEvento(PPCContext& ctx, uint8_t* base, uint32_t x, uint32_t codigo, const Anim::Evento& ev) {
+  static const bool log = std::getenv("DBZ3_IW_EVENTOS_LOG") != nullptr;
+  const SeB3 se = SeB3DeEvento(ev.tipo);
+  if (se.son && !std::getenv("DBZ3_IW_EVENTOS_OFF")) {
+    const PPCContext guardado = ctx;
+    ctx.r3.u64 = uint64_t(uint32_t(se.banco));
+    ctx.r4.u64 = 0;
+    ctx.r5.u64 = uint64_t(uint32_t(se.id));
+    ctx.r6.u64 = 0;
+    sub_820922A0(ctx, base);   // el gestor de efectos de B3 (iw_minijuegos.cpp SeBotones)
+    ctx = guardado;
+    MarcarEventoSonoro(x);
+  }
+  if (log)
+    REXLOG_INFO("dbz3 anim: evento de IW: luchador 0x{:08X} 0x{:X} cuadro {} tipo {} valor {} ({})", x, codigo, ev.cuadro,
+                ev.tipo, ev.valor, se.son ? "suena" : "sin equivalente (no portado)");
+}
+uint32_t g_mezcla = 15;   // la de la transicion en curso (Tick mira cuando acaba)
+// Una pista en el cuadro f (angular: claves [cuadro u16, x, y, z u16]; posicional: [cuadro u32, x, y, z f32]). Sin claves
+// deja `out` como esta (el que llama pone antes la pose de la otra animacion: nunca ceros).
 void Muestra(uint8_t* base, uint32_t trk, bool angular, float f, float out[3]) {
   const uint32_t nk = trk ? REX_LOAD_U32(trk + 8) : 0, paso = angular ? 8 : 16;
   if (!nk) return;
@@ -402,7 +537,7 @@ void CrearTransicion(uint8_t* base) {
   Anim t;
   t.codigo = kTransicion;
   t.flags = 0x9;
-  t.cuadros = kMezcla + 1;
+  t.cuadros = kMaxMezcla + 1;
   if (const Anim* q = AnimDe(kQuieto)) std::copy(q->bloque, q->bloque + 11, t.bloque);
   for (uint32_t c = 0; c < Total(); ++c) {
     const Anim& a = AnimN(c);
@@ -410,12 +545,12 @@ void CrearTransicion(uint8_t* base) {
       if (std::find(t.sufijos.begin(), t.sufijos.end(), a.sufijos[w]) != t.sufijos.end()) continue;
       std::array<uint32_t, 2> pj{0, 0};
       for (uint32_t i = 0; i < 2; ++i) {
-        const uint32_t src = a.pistas[w][i], tam = 12 + 2 * (i == 0 ? 8 : 16);
+        const uint32_t src = a.pistas[w][i], tam = 12 + (kMaxMezcla + 1) * (i == 0 ? 8 : 16);
         if (!src) continue;
         const uint32_t g = dbz3::roster::GuestAlloc(tam);
         if (!g) return;
         for (uint32_t q = 0; q < 8; q += 4) REX_STORE_U32(g + q, REX_LOAD_U32(src + q));   // cabecera de la pista
-        REX_STORE_U32(g + 8, 2);
+        REX_STORE_U32(g + 8, kMaxMezcla + 1);
         for (uint32_t q = 12; q < tam; ++q) REX_STORE_U8(g + q, REX_LOAD_U8(src + 12 + (q - 12) % (i == 0 ? 8 : 16)));
         pj[i] = g;
       }
@@ -425,10 +560,95 @@ void CrearTransicion(uint8_t* base) {
   }
   g_ex.push_back(std::move(t));
 }
+// 06: mezcla de giros por cuaternion (slerp) para la pista de transicion, en vez de interpolar
+// los tres angulos Euler por separado. Medido con los datos reales (datos/analizar_mezcla.py):
+// la interpolacion por componentes se desvia hasta 180 grados de la mezcla directa de las dos
+// orientaciones en pares que el port usa (p. ej. NB014 0x59D -> 0x582, hueso GOK_LLEG2, con el
+// giro pasando por 179.99 grados; 915 0x32D -> 0x32F, GOK_WAIST; 921 0x258 -> 0x262,
+// GHS_RFOOT2). El slerp no depende de la representacion Euler de cada pose. Las claves siguen
+// siendo Euler u16 (R = Rz Ry Rx, la convencion del port) y se escriben con continuidad entre
+// claves vecinas (sin saltos de +/-65536, que la interpolacion del motor no sabe deshacer).
+struct Mat3 {
+  double m[3][3];
+};
+Mat3 MatrizDeEuler(const double v[3]) {
+  constexpr double kU = 3.14159265358979323846 / 32768.0;
+  const double ax = v[0] * kU, ay = v[1] * kU, az = v[2] * kU;
+  const double cx = std::cos(ax), sx = std::sin(ax), cy = std::cos(ay), sy = std::sin(ay), cz = std::cos(az),
+               sz = std::sin(az);
+  return {{{cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx},
+           {sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx},
+           {-sy, cy * sx, cy * cx}}};
+}
+void CuaternionDeMatriz(const Mat3& R, double q[4]) {
+  const double t = R.m[0][0] + R.m[1][1] + R.m[2][2];
+  if (t > 0) {
+    const double s = std::sqrt(t + 1.0) * 2;
+    q[0] = 0.25 * s;
+    q[1] = (R.m[2][1] - R.m[1][2]) / s;
+    q[2] = (R.m[0][2] - R.m[2][0]) / s;
+    q[3] = (R.m[1][0] - R.m[0][1]) / s;
+  } else if (R.m[0][0] > R.m[1][1] && R.m[0][0] > R.m[2][2]) {
+    const double s = std::sqrt(1.0 + R.m[0][0] - R.m[1][1] - R.m[2][2]) * 2;
+    q[0] = (R.m[2][1] - R.m[1][2]) / s;
+    q[1] = 0.25 * s;
+    q[2] = (R.m[0][1] + R.m[1][0]) / s;
+    q[3] = (R.m[0][2] + R.m[2][0]) / s;
+  } else if (R.m[1][1] > R.m[2][2]) {
+    const double s = std::sqrt(1.0 + R.m[1][1] - R.m[0][0] - R.m[2][2]) * 2;
+    q[0] = (R.m[0][2] - R.m[2][0]) / s;
+    q[1] = (R.m[0][1] + R.m[1][0]) / s;
+    q[2] = 0.25 * s;
+    q[3] = (R.m[1][2] + R.m[2][1]) / s;
+  } else {
+    const double s = std::sqrt(1.0 + R.m[2][2] - R.m[0][0] - R.m[1][1]) * 2;
+    q[0] = (R.m[1][0] - R.m[0][1]) / s;
+    q[1] = (R.m[0][2] + R.m[2][0]) / s;
+    q[2] = (R.m[1][2] + R.m[2][1]) / s;
+    q[3] = 0.25 * s;
+  }
+}
+void Slerp(const double q0[4], const double q1[4], double t, double out[4]) {
+  double b[4];
+  std::copy(q1, q1 + 4, b);
+  double d = q0[0] * b[0] + q0[1] * b[1] + q0[2] * b[2] + q0[3] * b[3];
+  if (d < 0) {
+    for (double& x : b) x = -x;
+    d = -d;
+  }
+  if (d > 0.9995) {
+    std::copy(q0, q0 + 4, out);
+    return;
+  }
+  const double th0 = std::acos(std::clamp(d, -1.0, 1.0)), th = th0 * t;
+  const double s0 = std::sin(th0 - th) / std::sin(th0), s1 = std::sin(th) / std::sin(th0);
+  for (int i = 0; i < 4; ++i) out[i] = s0 * q0[i] + s1 * b[i];
+}
+void MatrizDeCuaternion(const double q[4], Mat3& R) {
+  const double w = q[0], x = q[1], y = q[2], z = q[3];
+  R.m[0][0] = 1 - 2 * (y * y + z * z);
+  R.m[0][1] = 2 * (x * y - w * z);
+  R.m[0][2] = 2 * (x * z + w * y);
+  R.m[1][0] = 2 * (x * y + w * z);
+  R.m[1][1] = 1 - 2 * (x * x + z * z);
+  R.m[1][2] = 2 * (y * z - w * x);
+  R.m[2][0] = 2 * (x * z - w * y);
+  R.m[2][1] = 2 * (y * z + w * x);
+  R.m[2][2] = 1 - 2 * (x * x + y * y);
+}
+void EulerDeMatriz(const Mat3& R, double out[3]) {
+  constexpr double kU = 3.14159265358979323846 / 32768.0;
+  out[1] = std::asin(std::clamp(-R.m[2][0], -1.0, 1.0)) / kU;
+  out[0] = std::atan2(R.m[2][1], R.m[2][2]) / kU;
+  out[2] = std::atan2(R.m[1][0], R.m[0][0]) / kU;
+}
+
 // Rellena la transicion: de `de` en su cuadro `f` a `a` en su cuadro 0. false si alguna no es de IW.
 bool PrepararTransicion(uint8_t* base, uint32_t de, float f, uint32_t a) {
   const Anim *A = AnimDe(de), *B = AnimDe(a), *T = AnimDe(kTransicion);
   if (!A || !B || !T) return false;
+  const uint32_t n = CuadrosMezcla(de, a);
+  g_mezcla = n;
   for (size_t w = 0; w < T->sufijos.size(); ++w) {
     auto pista = [&](const Anim* x, uint32_t i) -> uint32_t {
       for (size_t k = 0; k < x->sufijos.size(); ++k)
@@ -439,20 +659,74 @@ bool PrepararTransicion(uint8_t* base, uint32_t de, float f, uint32_t a) {
       const uint32_t dst = T->pistas[w][i];
       if (!dst) continue;
       const bool ang = i == 0;
-      float va[3] = {}, vb[3] = {};
       const uint32_t pa = pista(A, i), pb = pista(B, i);
       if (!pa && !pb) continue;   // ninguna la mueve: se queda como estaba
-      Muestra(base, pa ? pa : pb, ang, pa ? f : 0.0f, va);
-      Muestra(base, pb ? pb : pa, ang, pb ? 0.0f : f, vb);
+      // pose de partida: A en su cuadro f (sin pista o sin claves en A: la de B, nunca ceros)
+      float va[3] = {}, vb0[3] = {};
+      Muestra(base, pb ? pb : pa, ang, pb ? 0.0f : f, vb0);
+      std::copy(vb0, vb0 + 3, va);
+      Muestra(base, pa, ang, f, va);
       const uint32_t paso = ang ? 8 : 16;
-      for (uint32_t k = 0; k < 2; ++k) {
+      REX_STORE_U32(dst + 8, n + 1);
+      // 06: la pista angular va por slerp (mezcla de las dos orientaciones), no por Euler por
+      // componentes; `qa` = giro de la pose de partida y `prev` = ultima clave escrita (para
+      // dar continuidad a la representacion Euler entre claves vecinas).
+      double qa[4] = {}, prev[3] = {};
+      if (ang) {
+        const double ve[3] = {double(va[0]), double(va[1]), double(va[2])};
+        const Mat3 ra = MatrizDeEuler(ve);
+        CuaternionDeMatriz(ra, qa);
+        std::copy(va, va + 3, prev);
+      }
+      for (uint32_t k = 0; k <= n; ++k) {   // clave por cuadro: B avanza (su cuadro k) y el peso sube k/n
+        float vb[3];
+        std::copy(va, va + 3, vb);
+        if (pb) Muestra(base, pb, ang, float(k), vb);
+        const float w = float(k) / float(n);
         const uint32_t e = dst + 12 + paso * k;
-        const float* v = k == 0 ? va : vb;
-        if (ang) {
-          REX_STORE_U16(e, uint16_t(k == 0 ? 0 : kMezcla));
-          for (int c = 0; c < 3; ++c) REX_STORE_U16(e + 2 + 2 * uint32_t(c), uint16_t(int32_t(std::lround(v[c])) & 0xFFFF));
+        if (ang && k > 0) {
+          double qb[4] = {}, qm[4] = {}, v[3] = {};
+          const double vb2[3] = {double(vb[0]), double(vb[1]), double(vb[2])};
+          const Mat3 rb = MatrizDeEuler(vb2);
+          CuaternionDeMatriz(rb, qb);
+          Slerp(qa, qb, double(w), qm);
+          Mat3 rm;
+          MatrizDeCuaternion(qm, rm);
+          EulerDeMatriz(rm, v);
+          // El giro R = Rz Ry Rx tiene DOS representaciones: (x, y, z) y (x+180, 180-y, z+180)
+          // (en unidades u16, 180 = 32768). Se elige la mas cercana a la clave anterior y se
+          // pasa a la unidad mas cercana: el motor interpola las claves en linea recta y un
+          // cambio de rama del Euler (p. ej. cerca de y = 180) daria un salto de 180 grados en
+          // un cuadro; medido en probar_mezcla.py (los dos candidatos y su continuidad).
+          const double cand[2][3] = {{v[0], v[1], v[2]}, {v[0] + 32768.0, 32768.0 - v[1], v[2] + 32768.0}};
+          double mejor[3] = {}, coste_mejor = 1e30;
+          for (int b = 0; b < 2; ++b) {
+            double x[3] = {}, coste = 0;
+            for (int c = 0; c < 3; ++c) {
+              double u = cand[b][c];
+              while (u - prev[c] > 32768.0) u -= 65536.0;
+              while (prev[c] - u > 32768.0) u += 65536.0;
+              x[c] = u;
+              coste = std::max(coste, std::fabs(u - prev[c]));
+            }
+            if (coste < coste_mejor) {
+              coste_mejor = coste;
+              std::copy(x, x + 3, mejor);
+            }
+          }
+          REX_STORE_U16(e, uint16_t(k));
+          for (int c = 0; c < 3; ++c) {
+            prev[c] = mejor[c];
+            REX_STORE_U16(e + 2 + 2 * uint32_t(c), uint16_t(int64_t(std::llround(mejor[c])) & 0xFFFF));
+          }
+        } else if (ang) {
+          REX_STORE_U16(e, uint16_t(k));
+          for (int c = 0; c < 3; ++c)
+            REX_STORE_U16(e + 2 + 2 * uint32_t(c), uint16_t(int32_t(std::lround(va[c])) & 0xFFFF));
         } else {
-          REX_STORE_U32(e, k == 0 ? 0 : kMezcla);
+          float v[3];
+          for (int c = 0; c < 3; ++c) v[c] = va[c] + w * (vb[c] - va[c]);
+          REX_STORE_U32(e, k);
           for (int c = 0; c < 3; ++c) {
             uint32_t u;
             std::memcpy(&u, &v[c], 4);
@@ -461,6 +735,21 @@ bool PrepararTransicion(uint8_t* base, uint32_t de, float f, uint32_t a) {
         }
       }
     }
+  }
+  // R6 (NB014): la transicion llevaba el bloque y las banderas del reposo comun (0x800); con las poses de los minijuegos de
+  // botones (raiz absoluta, en el aire a y ~40) el juego la leia como la del reposo y el luchador caia al suelo los 8
+  // cuadros de la mezcla (Gohan parpadeaba abajo, rafaga 2026-10-17). Ahora toma los de la animacion a la que va.
+  if (g_csk && g_acm) {
+    const uint32_t bt = REX_LOAD_U32(g_csk + 0x20 + 4 * kTransicion);
+    if (bt)
+      for (uint32_t w = 0; w < 11; ++w) REX_STORE_U32(bt + 4 + 4 * w, B->bloque[w]);
+    for (uint32_t c = 0; c < Total(); ++c)
+      if (AnimN(c).codigo == kTransicion) {
+        const uint32_t e = Abs(g_tabla, g_acm) + 16 * (g_base_idx + c);
+        REX_STORE_U32(e, B->flags);
+        REX_STORE_U32(e + 4, B->var);
+        REX_STORE_U32(e + 8, n + 1);   // cuadros de esta mezcla
+      }
   }
   return true;
 }
@@ -547,7 +836,9 @@ bool Leer(uint8_t* base) {
       if (familiaB) SinOrigenXZ(base, an);   // familia B: sin la posicion absoluta del escenario de IW
       // los reposos (en bucle) no deben derivar: la cadera volveria a saltar al empezar otra vuelta
       if (q.codigo == 0x4B0 || q.codigo == 0x2BC || q.codigo == 0x76C || q.codigo == 0x76E || q.codigo == 0x770 ||
-          q.codigo == 0x7BC || q.codigo == 0x578 || q.codigo == 0x579 || q.codigo == 0x57A || q.codigo == 0x57B || q.codigo == 0x258 ||
+          // (0x578 / 0x579, el READY de NB013 / NB014, no son reposos: suben al aire de y 6-10 a ~44 y se ponen una vez; con
+          // la rampa quitada Gohan se quedaba en el suelo, fuera del plano de la camara de IW. R6, 2026-10-17)
+          q.codigo == 0x7BC || q.codigo == 0x57A || q.codigo == 0x57B || q.codigo == 0x258 ||
           q.codigo == 0x259 || q.codigo == 0x5C8 || q.codigo == 0x5CD)
         CerrarRaiz(base, an);
       g_ex.push_back(std::move(an));
@@ -701,6 +992,7 @@ struct Luchador {
   bool sujetar = false;
   uint32_t tope = 0;
   uint32_t luego = 0;
+  float cuadro_ev = -1.0f;   // 06: ultimo cuadro mirado de los eventos (lineas AP) de la animacion en curso
 };
 std::mutex g_mu;
 std::vector<Pedido> g_pedidos;
@@ -786,12 +1078,19 @@ uint32_t CodigoQte(uint32_t cmn, uint32_t codigo) {
     if (q.cmn == cmn && q.codigo == codigo) return AliasQte(cmn, codigo);
   return 0;
 }
+// 06: true si un evento de sonido de cualquier luchador sono hace menos de kEventoSonando
+// cuadros (lo consulta iw_mini_botones.cpp para no doblar el sonido con sus retardos fijos).
+bool EventosSonandoReciente() { return g_ev_ticks[0].load() > 0 || g_ev_ticks[1].load() > 0; }
 int EstadoPose() { return g_pose.load(); }
 Fase FaseScatto() { return Fase(g_vista.load()); }
 
 // Hilo del juego, con contexto (gancho de abajo): aplica los pedidos y hace avanzar las fases.
 void Tick(PPCContext& ctx, uint8_t* base) {
   Prueba(base);
+  for (int i = 0; i < 2; ++i) {   // 06: la marca de "evento sonoro reciente" se gasta por tick
+    const int t = g_ev_ticks[i].load();
+    if (t > 0) g_ev_ticks[i].store(t - 1);
+  }
   if (g_hay.exchange(false)) {
     std::vector<Pedido> ps;
     {
@@ -846,21 +1145,41 @@ void Tick(PPCContext& ctx, uint8_t* base) {
                             : l.modo == kModoPose     ? l.codigo
                                                       : (l.fase == 1 ? 0x805u : 0x806u);
     const uint32_t ahora = REX_LOAD_U32(l.x + kCodigo) & 0xFFF;
+    if (static const bool traza = std::getenv("DBZ3_ANIM_TRAZA") != nullptr; traza && ahora != codigo && ahora != kTransicion) {
+      static int n = 0;   // PRUEBA: quien pisa la animacion de IW (codigo de B3 que se ve en vez del nuestro)
+      if (n++ < 200)
+        REXLOG_INFO("dbz3 anim: traza: luchador 0x{:08X} ve 0x{:X} (puesto 0x{:X}, quiere 0x{:X}, modo {})", l.x, ahora,
+                    l.puesto, codigo, l.modo);
+    }
     if (ahora == kTransicion && l.destino == codigo) {   // mezcla en curso hacia la que toca
       // por su propio cuadro (A+0x608): Tick va una vez por mando (4 por cuadro, sub_8208FD58) y contar Ticks la
       // dejaba en 2 cuadros (registro: 7FE dura 33 ms; auditoria10/D); el tope de Ticks por si el cuadro no avanza
       const uint32_t cm = REX_LOAD_U32(l.x + kAnimObj + 0x608);
       float fm;
       std::memcpy(&fm, &cm, 4);
-      if (fm + 0.5f < float(kMezcla) && ++l.t_mezcla < 4 * int(kMezcla) + 8) continue;
+      if (fm + 0.5f < float(g_mezcla) && ++l.t_mezcla < 4 * int(g_mezcla) + 8) continue;
       l.destino = 0;
       Arrancar(ctx, base, l.x, codigo, false);
       l.cuadro = 0;
+      if (const Anim* b = AnimDe(codigo); b && b->cuadros > g_mezcla) {   // B ya avanzo g_mezcla cuadros en la mezcla
+        const float sigue = float(g_mezcla);
+        uint32_t u;
+        std::memcpy(&u, &sigue, 4);
+        REX_STORE_U32(l.x + kAnimObj + 0x608, u);
+      }
       l.puesto = codigo;
+      l.cuadro_ev = float(g_mezcla);   // 06: B ya avanzo g_mezcla cuadros en la mezcla: sin repetir sus eventos
       continue;
     }
     // de una animacion de IW (la que se ve) a otra: primero la transicion (no en el scatto, que va por cuadros)
     if (ahora != codigo && ahora == (l.puesto & 0xFFF) && l.modo != kModoScatto && !std::getenv("DBZ3_SIN_MEZCLA")) {
+      if (CorteMezcla(ahora, codigo)) {   // 06: IW cambia esta animacion sin rampa (ver CorteMezcla)
+        Arrancar(ctx, base, l.x, codigo, false);
+        l.cuadro = 0;
+        l.puesto = codigo;
+        l.cuadro_ev = -1.0f;
+        continue;
+      }
       const uint32_t cu = REX_LOAD_U32(l.x + kAnimObj + 0x608);
       float f;
       std::memcpy(&f, &cu, 4);
@@ -877,6 +1196,7 @@ void Tick(PPCContext& ctx, uint8_t* base) {
       // si el juego la piso (la IA de P4 reentra en andar cada pocos cuadros), sigue por el cuadro en que iba
       if (l.puesto == codigo) REX_STORE_U32(l.x + kAnimObj + 0x608, l.cuadro);
       else l.cuadro = 0;
+      if (l.puesto != codigo) l.cuadro_ev = -1.0f;   // 06: animacion nueva: los eventos, desde su cuadro 0
       l.puesto = codigo;
       if (l.modo == kModoScatto) g_vista = l.fase;
       static int avisos = 0;
@@ -889,6 +1209,16 @@ void Tick(PPCContext& ctx, uint8_t* base) {
     l.cuadro = cu;
     float cuadro;
     std::memcpy(&cuadro, &cu, 4);
+    // 06: eventos por cuadro de las lineas AP del #BSK (tipo 1/2/7 sonido, 3 voz): se disparan
+    // al cruzar su cuadro, como IW en Char_HandleAnimEvent/Animations2 (recorrido cuadro viejo ->
+    // cuadro nuevo; si la animacion da la vuelta, desde el principio). El respaldo de los
+    // minijuegos (retardos fijos) se calla mientras suene uno reciente (EventosSonandoReciente).
+    if (const Anim* ae = AnimDe(codigo); ae && !ae->eventos.empty()) {
+      if (l.cuadro_ev > cuadro + 0.5f) l.cuadro_ev = -1.0f;   // volvio al cuadro 0
+      for (const Anim::Evento& ev : ae->eventos)
+        if (ev.cuadro > l.cuadro_ev && ev.cuadro <= cuadro + 0.5f) DispararEvento(ctx, base, l.x, codigo, ev);
+    }
+    l.cuadro_ev = cuadro;
     const float total = float(int32_t(REX_LOAD_U32(l.x + kAnimObj + 0x60C)));
     if (l.modo == kModoPose && l.tope > 0 && cuadro >= float(l.tope)) {   // quieta en su cuadro tope
       const float u = float(l.tope);

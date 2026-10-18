@@ -22,7 +22,11 @@ void SetLanguage(int32_t xbox_language_id);
 // checks them against the format specifiers without -Wformat-security noise.
 [[gnu::format_arg(1)]] const char* T(const char* es, const char* en);
 
-// UI language as "es", "it", "de", "fr" or "en" (for data that carries its own texts).
+// UI language as "es", "it", "de", "fr", "pt", "ja" or "en" (for data that carries its own texts).
 const char* LangCode();
+
+// Portugues / japones: la traduccion del texto ingles `en` (ingame_ui/i18n_modos.toml), o nullptr si no la hay o el
+// idioma es otro. Para las tablas propias de 5 idiomas (es, en, fr, de, it), que no tienen columna pt/ja.
+const char* Otro(const char* en);
 
 }  // namespace dbz3::i18n

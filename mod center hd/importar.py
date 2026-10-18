@@ -1528,10 +1528,13 @@ def oficial(a):
     import roster_build as rb  # noqa: PLC0415
     cat = oficiales()
     mods = a.mods or rb.default_mods()
-    if not a.todos and a.mod not in cat:
-        raise SystemExit("no hay receta oficial '%s' (hay: %s)" % (a.mod, ", ".join(cat)))
+    pedidos = list(cat) if a.todos else list(a.mod)   # uno o varios ids (el pack de IW del lanzador pide varios)
+    for mod in pedidos:
+        if mod not in cat:
+            raise SystemExit("no hay receta oficial '%s' (hay: %s)" % (mod, ", ".join(cat)))
+    varios = a.todos or len(pedidos) > 1                # con varios, uno que falle no para a los demas
     hechos, fallos = [], []
-    for mod in (list(cat) if a.todos else [a.mod]):
+    for mod in pedidos:
         r = cat[mod]
         if not source_path(r["fuente"]):
             rb.log("%s: falta el juego de origen (%s); se salta" % (mod, r["fuente"]))
@@ -1552,7 +1555,7 @@ def oficial(a):
                         fh.write("\n[[capsula]]\n" + "".join("%s = %s\n" % (k, toml_value(v)) for k, v in cap.items()))
             hechos.append(mod)
         except (Exception, SystemExit) as ex:  # noqa: BLE001
-            if not a.todos:
+            if not varios:
                 raise
             rb.log("%s: no se pudo crear (%s)" % (mod, ex))
             fallos.append(mod)
@@ -1687,7 +1690,7 @@ def main():
     t.add_argument("--us")
     o = sub.add_parser("oficial", help="crea o rehace un port oficial desde tus discos")
     o.add_argument("--recetas", help="otro catalogo de recetas (p. ej. ports_vision.toml)")
-    o.add_argument("mod", nargs="?")
+    o.add_argument("mod", nargs="*", help="uno o varios ids de receta")
     o.add_argument("--todos", action="store_true")
     o.add_argument("--mods")
     o.add_argument("--us")
@@ -1709,8 +1712,9 @@ def main():
         mods = a.mods or rb.default_mods()
         for mod, r in oficiales().items():
             # mod, nombre, fuente, listo|falta (juego de origen), instalado 1|0, preset
+            d = os.path.join(mods, mod)   # desactivado (.disabled) tambien cuenta como instalado
             emit("oficial", mod, r["nombre"], r["fuente"], "listo" if source_path(r["fuente"]) else "falta",
-                 1 if os.path.isdir(os.path.join(mods, mod)) else 0, "%s.%s" % (r["fuente"], r.get("preset", "")))
+                 1 if os.path.isdir(d) or os.path.isdir(d + ".disabled") else 0, "%s.%s" % (r["fuente"], r.get("preset", "")))
         return 0
     if a.cmd == "presets":
         for nm, pre in presets(a.fuente).items():

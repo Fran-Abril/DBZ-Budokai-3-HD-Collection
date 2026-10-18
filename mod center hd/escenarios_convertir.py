@@ -9,8 +9,13 @@ ni reparte geometria de otro juego.
 Uso (desde la carpeta del proyecto):
   python tools\escenarios_convertir.py lista [--juego b1]          # escenarios de la ISO (B2 por defecto)
   python tools\escenarios_convertir.py mod 7 --nombre "Montanas nevadas" --rotulo "Montañas nevadas"
+  python tools\escenarios_convertir.py mod 7 --zona b --nombre "Montanas nevadas B"
+      la variante B (la otra zona del escenario; solo los grupos con 2 variantes: 0, 4, 7 y 8). El mod
+      instalado lleva 'zona_b = 5007' en su stage.toml: con la cvar dbz3_escenarios_zonas_b activada
+      (src/escenarios.cpp), al caer por el borde el juego pasa a esta zona.
   python tools\escenarios_convertir.py mod 3 --juego b1 --nombre "Paramo al atardecer"
-      crea mods\<nombre>: entrada 5000+grupo (B1: 5020+grupo) y sus imagenes del selector en entrada+100
+      crea mods\<nombre>: entrada 5000+grupo (B1: 5020+grupo; B2 zona B: 5040+grupo) y sus imagenes del
+      selector en entrada+100
       (--mods otra carpeta mods, --entrada N, --bin cache del bin convertido, --foto captura para la casilla)
   python tools\escenarios_convertir.py comprobar                   # autocomprobacion con los 13 pares B3 PS2/HD
 
@@ -505,12 +510,200 @@ def hd_nativo(i):
 # ---------------------------------------------------------------------------------------------------------
 # Montaje
 # ---------------------------------------------------------------------------------------------------------
-def escenario_b2(fuente, grupo, donante=44):
+SUCESO_B2 = ("KEMURI", "BAKU", "NULL", "HAKAI", "BOM", "KAMINARI")   # humo, explosion, cascotes, rotura, bombas, rayo
+
+
+def raices_quietas_b2(mdd):
+    """B2: las animaciones de las raices del escenario (#MDD +0x08 n, +0x24 lista; raiz +0 n, +0xC entradas de 16 B
+    [tipo, #AMM, parametros, 0]) son TODAS de destruccion (medido en los 9 grupos por los nombres de hueso: TOWER y
+    NADARE en la nieve, HAKAI, BAKUHATU, KEMURI, HBILL...). B2 las dispara en un suceso del combate; B3 repite en bucle
+    desde el principio toda animacion de raiz (las suyas son adornos ciclicos): la torre de la nieve caia sin parar.
+    Sin ese suceso en B3: las raices del estado destruido (BB<esc>B..) y las de humo/cascotes (SUCESO_B2) se quitan de
+    la lista; las demas se quedan en su cuadro 0, antes del suceso (todas las claves = la del cuadro 0; la torre en pie:
+    su giro x pasa de 0 a ~92 grados entre los cuadros 153 y 256). Con cuadros -> 1 el juego la pintaba caida. Devuelve (mdd, quitadas, quietas)."""
+    import re  # noqa: PLC0415
+    out = bytearray(mdd)
+    rl, n_raiz = le(mdd, 0x24), le(mdd, 8)
+    if not rl:
+        return mdd, 0, 0
+    quedan, quietas = [], 0
+    for k in range(n_raiz):
+        s = le(mdd, rl + 4 * k)
+        nombres = []
+        for j in range(le(mdd, s)):
+            blk = le(mdd, le(mdd, s + 12) + 16 * j + 4)
+            if mdd[blk:blk + 4] != b"#AMM":
+                continue
+            n_anim, t, nb, no = struct.unpack_from("<4I", mdd, blk + 0x10)
+            nombres += [mdd[blk + no + 32 * b:blk + no + 32 * b + 32].split(b"\0")[0].decode("latin1") for b in range(nb)]
+            for a in range(n_anim):   # cada pista (giro: claves de 8 B [cuadro u16, 3 u16]; posicion y escala:
+                fl, _v, _nf, off = struct.unpack_from("<4I", mdd, blk + t + 16 * a)   # 16 B [cuadro u32, 3 f32])
+                per = 3 if fl & 0x10 else 2
+                for b in range(nb if off else 0):
+                    for i in range(per):
+                        pista = le(mdd, blk + off + 4 * (per * b + i))
+                        if not pista:
+                            continue
+                        q, n_c = blk + pista, le(mdd, blk + pista + 8)
+                        paso, ini = (8, 2) if i == 0 else (16, 4)
+                        v0 = mdd[q + 12 + ini:q + 12 + paso]   # valores de la clave del cuadro 0
+                        for c in range(1, n_c):
+                            out[q + 12 + paso * c + ini:q + 12 + paso * (c + 1)] = v0
+        suceso = any(re.match(r"BB[A-Z]{3}B\d", nm) for nm in nombres) or             any(w in nm.upper() for nm in nombres for w in SUCESO_B2)
+        if suceso:
+            continue
+        quietas += bool(nombres)
+        quedan.append(s)
+    for k, s in enumerate(quedan):
+        struct.pack_into("<I", out, rl + 4 * k, s)
+    struct.pack_into("<I", out, 8, len(quedan))
+    return bytes(out), n_raiz - len(quedan), quietas
+
+
+def sin_camaras_suceso(mdd):
+    """B2: los #AMC del objeto 0 NO son la presentacion: son las camaras de la destruccion. Sus clips duran lo mismo
+    que las animaciones de las raices (medido en los 9 grupos: nieve 420/270/98/282, base 604/211, ciudad 120/160,
+    grupo 2 300, grupo 4 170/210); los grupos sin destruccion (1, 3, 5, 6) no traen ninguno. Con el guion del donante
+    esos clips metian la camara en la montana o tras los edificios. Se quita la lista del objeto 0 (+0xD4 n, +0xD8)
+    y mdd_a_zdd le pone las camaras de presentacion del donante, como a B1. Devuelve (mdd, n quitadas)."""
+    ob = le(mdd, le(mdd, 0x20)) if le(mdd, 4) else 0
+    n = le(mdd, ob + 0xD4) if ob else 0
+    if not n or n == 0xFCFCFCFC:
+        return mdd, 0
+    out = bytearray(mdd)
+    struct.pack_into("<II", out, ob + 0xD4, 0, 0)
+    return bytes(out), n
+
+
+def variante_raiz(mdd, s):
+    """Variante (0 = A, 1 = B) de una raiz del #MDD por el nombre de su primer hueso: 'BB<esc><V>nn...'
+    (BBSNWA02 = A, BBSNWB03 = B, BBLNDC01 = C). El #MDD declara cuantas variantes tiene en +4 (1 o 2);
+    medido 2026-10-18: los 4 grupos con +4=2 (Base 0, grupos 4, 7 y 8) son tambien los 4 cuyo guion de
+    escenario (#SPX) llama a FUN_001b95b0 (el cambio de zona A->B; opcode 0x80 = 'call_ext', indice 0x40).
+    Devuelve None si la raiz esta vacia o su #AMM no tiene huesos."""
+    if not le(mdd, s):
+        return None
+    blk = le(mdd, le(mdd, s + 12) + 4)
+    if mdd[blk:blk + 4] != b"#AMM":
+        return None
+    _n_anim, _t, nb, no = struct.unpack_from("<4I", mdd, blk + 0x10)
+    if not nb:
+        return None
+    nm = mdd[blk + no:blk + no + 32].split(b"\0")[0].decode("latin1")
+    return 1 if len(nm) > 5 and nm[5] == "B" else 0
+
+
+def raices_zona_b(mdd):
+    """B2 zona B (variante 1): al reves que raices_quietas_b2. Se quitan de la lista las raices de la variante
+    A (y las vacias) y las de la variante B se quedan quietas en su cuadro 0: B3 repite en bucle toda animacion
+    de raiz y el cuadro 0 es el estado inicial de la zona B (como en la zona A con raices_quietas_b2).
+    Devuelve (mdd, quitadas, quietas)."""
+    out = bytearray(mdd)
+    rl, n_raiz = le(mdd, 0x24), le(mdd, 8)
+    if not rl:
+        return mdd, 0, 0
+    quedan, quietas = [], 0
+    for k in range(n_raiz):
+        s = le(mdd, rl + 4 * k)
+        if variante_raiz(mdd, s) != 1:
+            continue
+        nombres = 0
+        for j in range(le(mdd, s)):
+            blk = le(mdd, le(mdd, s + 12) + 16 * j + 4)
+            if mdd[blk:blk + 4] != b"#AMM":
+                continue
+            n_anim, t, nb, no = struct.unpack_from("<4I", mdd, blk + 0x10)
+            nombres += nb
+            for a in range(n_anim):   # mismo recorrido de pistas que raices_quietas_b2
+                fl, _v, _nf, off = struct.unpack_from("<4I", mdd, blk + t + 16 * a)
+                per = 3 if fl & 0x10 else 2
+                for b in range(nb if off else 0):
+                    for i in range(per):
+                        pista = le(mdd, blk + off + 4 * (per * b + i))
+                        if not pista:
+                            continue
+                        q, n_c = blk + pista, le(mdd, blk + pista + 8)
+                        paso, ini = (8, 2) if i == 0 else (16, 4)
+                        v0 = mdd[q + 12 + ini:q + 12 + paso]
+                        for c in range(1, n_c):
+                            out[q + 12 + paso * c + ini:q + 12 + paso * (c + 1)] = v0
+        quietas += bool(nombres)
+        quedan.append(s)
+    for k, s in enumerate(quedan):
+        struct.pack_into("<I", out, rl + 4 * k, s)
+    struct.pack_into("<I", out, 8, len(quedan))
+    return bytes(out), n_raiz - len(quedan), quietas
+
+
+def camaras_transicion(mdd):
+    """Bloques #AMC (PS2) del objeto de la variante 0 de un #MDD de B2: las camaras del suceso con el que el
+    juego pasa de la zona A a la B (la destruccion; nieve 420/270/98/282, base 604/211, grupo 4 70/170/210,
+    ciudad 120/160; sus clips duran lo mismo que las animaciones de las raices de ese mismo escenario, medido
+    en R7). Van al objeto 0 del bin de la zona B para que el guion del donante las reproduzca."""
+    ob = le(mdd, le(mdd, 0x20)) if le(mdd, 4) else 0
+    n = le(mdd, ob + 0xD4) if ob else 0
+    if not n or n == 0xFCFCFCFC:
+        return []
+    d8 = le(mdd, ob + 0xD8)
+    out = []
+    for k in range(n):
+        o = le(mdd, d8 + 4 * k)
+        if mdd[o:o + 4] != b"#AMC":
+            continue
+        sig = min((i for i in (mdd.find(m, o + 4) for m in MAGICS_MDD) if i > o), default=len(mdd))
+        out.append(mdd[o:sig])
+    return out
+
+
+def objetos_zona_b(mdd):
+    """Zona B: el objeto de la variante 1 pasa a ser el objeto 0 del #ZDD (el juego dibuja el objeto 0; la
+    variante 1 es la otra zona del escenario). Intercambia las dos primeras entradas de la lista de objetos
+    (+0x20 del #MDD). Devuelve (mdd, ok)."""
+    n, lp = le(mdd, 4), le(mdd, 0x20)
+    if n < 2 or not lp:
+        return mdd, False
+    out = bytearray(mdd)
+    struct.pack_into("<II", out, lp, le(mdd, lp + 4), le(mdd, lp))
+    return bytes(out), True
+
+
+def escenario_b2(fuente, grupo, donante=44, zona=0):
     """Bin HD de un escenario de B2 (o B1): geometria, grafo, colision y camaras del juego de origen; script
     (#SPX) y registro de efectos (#AMB de 641 casillas) del escenario nativo `donante` de la HD del jugador. El
     registro de B2 (25-37 hijos sin indices fijos) no encaja en la tabla de 641 casillas que el juego indexa por
-    numero fijo. B1 no trae camaras de presentacion en el objeto 0: van las del donante."""
+    numero fijo. B1 no trae camaras de presentacion en el objeto 0: van las del donante.
+    zona=0 (A, por defecto): variante inicial (torre en pie), camaras de presentacion del donante.
+    zona=1 (B): la otra zona (objeto de la variante 1 como objeto 0, sus raices quietas) y las camaras de la
+    transicion de B2 (las del objeto de la variante 0) en el objeto 0."""
     mdd, mad, mas, _spx = fuente.piezas(grupo)
+    if zona:
+        transicion = camaras_transicion(mdd)
+        mdd, ok = objetos_zona_b(mdd)
+        if not ok:
+            raise SystemExit("el grupo %d de %s no tiene variante B (un solo objeto)" % (grupo, fuente.juego))
+        mdd, quitadas, quietas = raices_zona_b(mdd)
+        mdd, sucesos = sin_camaras_suceso(mdd)
+        print("arreglos B2 zona B: %d raices de la variante A fuera, %d de la B quietas en su cuadro 0, "
+              "%d camaras del objeto de la variante B fuera, %d camaras de transicion" %
+              (quitadas, quietas, sucesos, len(transicion)))
+        nat = hd_nativo(donante)
+        k = hijos_amb(nat, ">")
+        spx = nat[k[3][0]:k[3][0] + k[3][1]]
+        reg = nat[k[4][0]:k[4][0] + k[4][1]]
+        camaras = []
+        for b in transicion:
+            try:
+                hd = ps2hd.convert_block(b)
+            except ps2hd.Unsupported:
+                continue
+            if ps2hd.MAGIC.get(b[:4], b[:4]) == b"#ACC":
+                camaras.append(hd)
+        return amb_hd([(mdd_a_zdd(mdd, pistas_min=3, camaras=camaras), 0xFFFFFFFF), (camara(mad, b"#CAD"), 0xFFFFFFFF),
+                       (camara(mas, b"#CAS"), 0xFFFFFFFF), (spx, 8), (reg, 0xFFFFFFFF)])
+    mdd, quitadas, quietas = raices_quietas_b2(mdd)
+    mdd, sucesos = sin_camaras_suceso(mdd)
+    print("arreglos B2: %d piezas de destruccion quitadas, %d quietas en su cuadro 0, %d camaras de suceso fuera"
+          % (quitadas, quietas, sucesos))
     nat = hd_nativo(donante)
     k = hijos_amb(nat, ">")
     spx = nat[k[3][0]:k[3][0] + k[3][1]]
@@ -538,7 +731,8 @@ entrada = {entrada}    # data_cmn.afs: geometria (entrada nueva)
 menu = {menu}       # data_cmn.afs: imagenes de la casilla (circulo, vista y rotulo)
 id_se = {id_se}       # data_cmn.afs: sonido/ambiente (del escenario nativo donante)
 tema = {tema}          # luz y cielo: funcion de tema del registro {tema} (generica)
-"""
+{zona_b_linea}"""
+ZONA_B_LINEA = "zona_b = {entrada_a}     # MOD OPCIONAL (dbz3_escenarios_zonas_b): esta variante es la zona B de la entrada {entrada_a} (al caer por el borde se pasa a ella)\n"
 
 # ---------------------------------------------------------------------------------------------------------
 # Imagenes de la casilla del selector (#AZT propio: 0 circulo, 1 vista, 2 rotulo, 3 bola), con las medidas de las
@@ -774,7 +968,7 @@ def plantilla_menu():
     return lzx(d, False) if d[:4] == b"\x0f\xf5\x12\xee" else d
 
 
-def instalar(datos, mods, nombre, entrada, juego, id_se=45, tema=16, foto=None, rotulo_txt=None):
+def instalar(datos, mods, nombre, entrada, juego, id_se=45, tema=16, foto=None, rotulo_txt=None, zona_b=0):
     from PIL import Image
     carpeta = Path(mods) / nombre
     menu = entrada + 100
@@ -791,7 +985,9 @@ def instalar(datos, mods, nombre, entrada, juego, id_se=45, tema=16, foto=None, 
         (dst / "geom.bin").write_bytes(comp + bytes(align(len(comp), 0x800) - len(comp)))
     (carpeta / "stage.toml").write_text(STAGE_TOML.format(juego=juego, nombre=nombre.upper()[:15], titulo=rotulo_txt or nombre,
                                                           entrada=entrada,
-                                                          menu=menu, id_se=id_se, tema=tema), encoding="utf-8")
+                                                          menu=menu, id_se=id_se, tema=tema,
+                                                          zona_b_linea=ZONA_B_LINEA.format(entrada_a=zona_b) if zona_b else ""),
+                                        encoding="utf-8")
     (carpeta / "manifest.txt").write_text(
         "name=%s\ndescription=Escenario de %s convertido desde tu ISO (casilla nueva, no sustituye nada)\n"
         "type=stage\nversion=1\n" % (nombre, juego), encoding="utf-8")
@@ -972,11 +1168,13 @@ def cmd_mod(a):
     if a.bin and Path(a.bin).exists():          # bin ya convertido (rehacer solo las imagenes)
         datos = Path(a.bin).read_bytes()
     else:
-        datos = escenario_b2(IsoB2(a.iso, a.juego), a.grupo, a.donante)
-    entrada = a.entrada if a.entrada is not None else ENTRADA_BASE + (20 if a.juego == "b1" else 0) + a.grupo   # menu = entrada + 100
-    nombre = a.nombre or "%s ESCENARIO %d" % (a.juego.upper(), a.grupo)
+        datos = escenario_b2(IsoB2(a.iso, a.juego), a.grupo, a.donante, zona=1 if a.zona == "b" else 0)
+    base = ENTRADA_BASE + (20 if a.juego == "b1" else 0)
+    entrada = a.entrada if a.entrada is not None else base + (40 + a.grupo if a.zona == "b" else a.grupo)   # menu = entrada + 100
+    nombre = a.nombre or "%s ESCENARIO %d%s" % (a.juego.upper(), a.grupo, " ZONA B" if a.zona == "b" else "")
+    zona_b = base + a.grupo if a.zona == "b" else 0      # la entrada de la variante A (la de enfrente)
     carpeta = instalar(datos, a.mods or (RAIZ / "mods"), nombre, entrada, JUEGOS[a.juego][0], id_se=a.donante + 1,
-                       tema=a.tema, foto=a.foto, rotulo_txt=a.rotulo)
+                       tema=a.tema, foto=a.foto, rotulo_txt=a.rotulo, zona_b=zona_b)
     print("mod '%s' -> %s (entradas %d y %d, %d B)" % (nombre, carpeta, entrada, entrada + 100, len(datos)))
     if a.bin and not Path(a.bin).exists():
         Path(a.bin).write_bytes(datos)
@@ -1001,6 +1199,9 @@ def main():
     s.add_argument("--bin", help="bin sin comprimir: si existe se usa (no reconvierte), si no se guarda")
     s.add_argument("--foto", help="imagen del escenario (captura) para el circulo y la vista del selector")
     s.add_argument("--rotulo", help="texto del rotulo del selector (por defecto --nombre)")
+    s.add_argument("--zona", choices=("a", "b"), default="a",
+                   help="variante del escenario de B2: a (por defecto, la inicial) o b (la otra zona: el objeto "
+                        "de la variante 1, sus raices y las camaras de la transicion; solo grupos con 2 variantes)")
     s.set_defaults(fn=cmd_mod)
     s = sp.add_parser("comprobar")
     s.add_argument("escenarios", nargs="*", type=int)

@@ -6,6 +6,16 @@ are summarized at the end; the full history (in Spanish) is in
 
 Downloads: [latest release](../../releases/latest).
 
+## v1.5.1 (2026-10-18)
+- Budokai 2 campaign (EXPERIMENTAL): red cursor arrow, life column, portraits, event sounds, music and Budokai 2 stages on every board tile; Saibamen sprout from the ground; Babidi's Ship (beta) screens and trials closer to the original.
+- Infinite World campaign (EXPERIMENTAL): map borders, music per area, smoother animation blending; training and mission fixes.
+- Hero mode (beta): change your hero's moveset inside the game.
+- New languages: Portuguese (Brazil) and Japanese (launcher and menus).
+- Nova's Mods: Janemba and the Ginyu Force with their own voices; character slots kept between versions.
+- Stage select: the Infinite World minigame fields are no longer listed, so every new stage fits (Snowy Mountains was missing).
+- Faster: character icons and portraits are cached, so updates no longer redraw them all on the first launch.
+- Fixed: on some PCs Nova's Mods and the update check did not load.
+
 ## v1.5.0 (2026-10-17)
 - Dragon HUB: rank plates, new backgrounds/hosts, fly-in fighters, save icon, BETA/EXPERIMENTAL labels.
 - Tag Team (beta): teleport relays, COM vs COM included.

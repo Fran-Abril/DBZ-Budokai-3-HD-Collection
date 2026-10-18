@@ -43,7 +43,9 @@ void Mando(uint8_t* base, uint32_t usuario, bool leido);
 void PadPrueba(int dir);
 // net/netplay_hooks.cpp sub_8221C178 (XInput del usuario 0) mientras Activo(): la palanca derecha (x, s16) para la
 // camara; alli se le quita al juego (en la HD lanza tecnicas).
-void PalancaDerecha(int16_t x);
+void PalancaDerecha(int16_t x, int16_t y = 0);
+// Y de la palanca derecha (XInput s16, arriba +): cabeceo de la camara del vuelo.
+int PalancaDerechaY();
 
 // ---- Minijuegos de otros frentes (R12 vuelo 7/17, R13 disparo 3/8/9/15, R14 botones 5/6/11/12/13/18) ----
 // Registro (en la inicializacion estatica de su archivo, p. ej.

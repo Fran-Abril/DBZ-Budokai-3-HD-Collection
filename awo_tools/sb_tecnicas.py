@@ -245,7 +245,7 @@ RECETAS = {
         # ast_nativo = (ID, codigo #AST) de una tecnica nativa de B3: su energia con sus efectos
         # (2026-10-08, pruebas en juego: la bola de SB salia como un destello morado sin rayo y
         # el proyectil de la Z Sword no se veia ni golpeaba)
-        0x488: dict(nombre="Spirit Shot", ast_nativo=(39, 0), dano=250, ki=10, equipada=False),  # bola: Riot Javelin
+        0x488: dict(nombre="Spirit Shot", ast_nativo=(39, 0), tono=52, dano=250, ki=10, equipada=False),  # bola: Riot Javelin
         0x48B: dict(nombre="Evasive Kick", dano_golpe=250, ki=10, equipada=False),
         0x491: dict(nombre="Masenko", tipo=0, tono=52, dano=250, ki=10, equipada=False),     # rayo amarillo
         # Z Sword: lanza la espada. El Kienzan nativo (tipo 3) es un MODELO (#AMO del BSP de
@@ -1016,6 +1016,20 @@ def set_ap7(aps, lines):
     return sorted([(t, ls) for t, ls in aps if t != 7] + [(7, lines)], key=lambda e: e[0])
 
 
+def bs_lines(main_aps, var_aps):
+    """La entrada del BCM (compartido por las formas) lleva beam struggle (0x2000): la variante de
+    otra forma necesita su c0 0x68, a la misma distancia de su congelacion 0x66 que en la principal."""
+    def c0(aps, v):
+        return [struct.unpack_from("<H", x, 0)[0] for t, ls in aps if t == 7 for x in ls
+                if struct.unpack_from("<I", x, 4)[0] == 0 and struct.unpack_from("<I", x, 8)[0] == v]
+    m68, m66, v66 = c0(main_aps, 0x68), c0(main_aps, 0x66), c0(var_aps, 0x66)
+    if not m68 or c0(var_aps, 0x68):
+        return var_aps
+    f = max(0, (v66[0] if v66 and m66 else m68[0]) + (m68[0] - m66[0] if v66 and m66 else 0))
+    old = [x for t, ls in var_aps if t == 7 for x in ls]
+    return set_ap7(var_aps, ap7_sorted(old + [ap7_line(f, 0, 0x68)]))
+
+
 def waist_hold(amm, anim, frame):
     """Pista de posicion de la cintura (WAIST, la que mueve al personaje) de la animacion `anim`
     del AMM (PS2): desde `frame` se queda donde estaba (sin el retroceso de SB al disparar).
@@ -1297,7 +1311,10 @@ def aplicar(anm, cam, info, code, game="sb2", donor=4, receta=None, mapas=None, 
                 continue
             src = [x for x in final[v["codigo"]] if x is not None]
             for i, dst in enumerate(x for x in final[m["codigo"]] if x is not None):
-                it[dst] = block(src[i] if i < len(src) else src[0])
+                hdr, aps = block(src[i] if i < len(src) else src[0])
+                if receta[m["codigo"]].get("beam_struggle"):
+                    aps = bs_lines(block(dst)[1], aps)
+                it[dst] = (hdr, aps)
         anms.append(bp.amb_build([(bsk_put(bsk, it, new_hr), ak[0][1]), (bytes(amm), ak[1][1])] + ak[2:]))
     return anms[0], cam2, rep, anms[1:]
 

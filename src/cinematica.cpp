@@ -18,6 +18,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -90,6 +91,17 @@ V3 Unit(V3 a) {
 float Suave(float t) {
   t = std::clamp(t, 0.0f, 1.0f);
   return t * t * (3.0f - 2.0f * t);
+}
+// Valor de una pista de camara {cuadro, v...} en el cuadro f (lineal, como el juego; 1 clave por cuadro).
+template <size_t N>
+bool MuestraCam(const std::vector<std::array<float, N>>& k, float f, float* out) {
+  if (k.empty()) return false;
+  size_t i = 0;
+  while (i + 1 < k.size() && k[i + 1][0] <= f) ++i;
+  const size_t j = std::min(i + 1, k.size() - 1);
+  const float d = k[j][0] - k[i][0], t = d > 0 ? std::clamp((f - k[i][0]) / d, 0.0f, 1.0f) : 0.0f;
+  for (size_t c = 1; c < N; ++c) out[c - 1] = k[i][c] + (k[j][c] - k[i][c]) * t;
+  return true;
 }
 void PonV(uint8_t* base, uint32_t x, V3 p) {   // la posicion va tres veces (X+48/+64/+80; tagteam.cpp StepSlide)
   for (uint32_t o : {48u, 64u, 80u}) {
@@ -400,12 +412,16 @@ void Fotograma(uint8_t* base, uint32_t estado) {
   int k = g_paso.load();
   // A pasa al paso siguiente (como mucho uno cada 0,4 s: la voz nueva corta la anterior, PlaySound)
   const bool adelante = AhoraMs() - g_t0_paso > 400 && g_siguiente.exchange(false);   // antes: se aplaza, no se pierde
-  if (adelante || float(AhoraMs() - g_t0_paso) >= e->pasos[size_t(k)].segundos * 1000.0f) {
+  // Duracion del paso: si la escena de motor trae los cuadros reales (tabla de clips de su banco), manda el
+  // frame a 60 Hz; si no, los segundos del respaldo.
+  const Paso& paso_antes = e->pasos[size_t(k)];
+  const float seg_paso = paso_antes.cuadros > 0 ? float(paso_antes.cuadros) / 60.0f : paso_antes.segundos;
+  if (adelante || float(AhoraMs() - g_t0_paso) >= seg_paso * 1000.0f) {
     if (++k >= int(e->pasos.size())) return Terminar(base, "terminada");
     EmpezarPaso(k, *e);
   }
+  const Paso& p = e->pasos[size_t(k)];   // el paso que se ve AHORA (pudo avanzar arriba)
   {   // botones del paso en el mando virtual de cada lado; si lo comparten, los del lado del plano
-    const Paso& p = e->pasos[size_t(k)];
     const uint16_t b0 = p.botones[0], b1 = p.botones[1];
     if (g_usuario[0] >= 0 && g_usuario[0] == g_usuario[1])
       dbz3::net::InyectarPad(uint32_t(g_usuario[0]), p.plano == kLado1 ? b0 : p.plano == kLado2 ? b1 : (b0 | b1));
@@ -440,14 +456,33 @@ void Fotograma(uint8_t* base, uint32_t estado) {
   }
   float oj[3], ob[3];
   const bool ultimo = k + 1 == int(e->pasos.size());
-  const float queda = e->pasos[size_t(k)].segundos - t;
+  // Camara del clip de la linea (escenas de MOTOR de IW): ojo/objetivo/fov/roll por cuadro, 60 Hz. Tiene
+  // prioridad sobre el plano del respaldo (Encuadre); el fundido al final sigue mezclando con la del combate.
+  float roll = 0.0f;
+  {
+    const float tf = t * 60.0f;
+    float co[3], cb[3];
+    if (MuestraCam(p.cam_ojo, tf, co) && MuestraCam(p.cam_obj, tf, cb)) {
+      ojo = V3{co[0], co[1], co[2]};
+      obj = V3{cb[0], cb[1], cb[2]};
+      float fov = 0.6f;
+      if (MuestraCam(p.cam_fov, tf, &fov)) {
+        fov = std::clamp(fov, 0.2f, 1.3f);
+        uint32_t u;
+        std::memcpy(&u, &fov, 4);
+        REX_STORE_U32(mgr + 0x1C4, u);   // fov vertical (cine.cpp)
+      }
+      MuestraCam(p.cam_roll, tf, &roll);
+    }
+  }
+  const float queda = p.segundos - t;
   if (ultimo && queda < kFundido && cine::LeerCamara(base, oj, ob)) {
     const float v = Suave(1.0f - queda / kFundido);
     ojo = Mezcla(ojo, V3{oj[0], oj[1], oj[2]}, v);
     obj = Mezcla(obj, V3{ob[0], ob[1], ob[2]}, v);
   }
   const float eo[3] = {ojo.x, ojo.y, ojo.z}, eb[3] = {obj.x, obj.y, obj.z};
-  cine::Camara(base, eo, eb);
+  cine::Camara(base, eo, eb, roll);
   g_abre = std::min({1.0f, float(AhoraMs() - g_t0) / 500.0f, ultimo ? queda / 0.5f : 1.0f});
   ++g_frame;
 }

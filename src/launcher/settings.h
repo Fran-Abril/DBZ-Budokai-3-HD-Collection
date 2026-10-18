@@ -73,6 +73,9 @@ void SetResolutionScale(int32_t scale);
 // Game text language (affects the data_XX.afs text pack). Values map to Xbox
 // 360 XGetLanguage ids: 1=EN, 2=JP, 3=DE, 4=FR, 5=ES, 6=IT.
 int32_t Language();
+// Idioma de la interfaz: el de Language() o 9 = portugues de Brasil (dbz3_ui_language; el juego sigue en ingles).
+int32_t UiLanguage();
+// 9 = portugues: dbz3_language 1 + dbz3_ui_language "pt"; el resto lo limpia.
 void SetLanguage(int32_t xbox_language_id);
 // Human-readable language name for a given Xbox language id.
 const char* LanguageName(int32_t xbox_language_id);

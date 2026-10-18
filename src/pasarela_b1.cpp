@@ -24,6 +24,7 @@
 #include <mutex>
 #include <system_error>
 #include <thread>
+#include <tuple>
 
 #include <rex/logging.h>
 #include <rex/platform.h>
@@ -394,7 +395,7 @@ bool LeerLeyendaSatan(const std::filesystem::path& path, const std::string& lang
 
 // ---- Voces de B1 (ADX_JP.AFS): ADX de CRI (4 bits, mono o estereo; como "mod center hd/gritos.py" adx_decode) ----
 namespace {
-std::vector<int16_t> Adx(const std::vector<uint8_t>& b, int& hz) {
+std::vector<int16_t> Adx(const std::vector<uint8_t>& b, int& hz, bool estereo = false) {
   if (b.size() < 32 || b[0] != 0x80) return {};
   auto be32 = [&](size_t o) { return uint32_t(b[o]) << 24 | uint32_t(b[o + 1]) << 16 | uint32_t(b[o + 2]) << 8 | b[o + 3]; };
   const size_t off = size_t(b[2] << 8 | b[3]) + 4, bs = b[5], ch = b[7];
@@ -406,10 +407,11 @@ std::vector<int16_t> Adx(const std::vector<uint8_t>& b, int& hz) {
   const int c1 = int(std::floor(c * 8192)), c2 = int(std::floor(c * c * -4096));
   const size_t spb = (bs - 2) * 2;
   std::vector<int16_t> out;
-  out.reserve(total);
+  const size_t meta = estereo ? 2 * size_t(total) : total;
+  out.reserve(meta);
   int hist[2][2] = {};
   std::vector<int> s(spb * 2);
-  for (size_t o = off; out.size() < total && o + bs * ch <= b.size(); o += bs * ch) {
+  for (size_t o = off; out.size() < meta && o + bs * ch <= b.size(); o += bs * ch) {
     for (size_t k = 0; k < ch; ++k) {
       const uint8_t* fr = &b[o + k * bs];
       const int scale = (fr[0] << 8 | fr[1]) + 1;
@@ -424,8 +426,13 @@ std::vector<int16_t> Adx(const std::vector<uint8_t>& b, int& hz) {
         h1 = v;
       }
     }
-    for (size_t i = 0; i < spb && out.size() < total; ++i) {
-      out.push_back(int16_t(ch == 2 ? (s[i] + s[spb + i]) / 2 : s[i]));
+    for (size_t i = 0; i < spb && out.size() < meta; ++i) {
+      if (estereo) {   // intercalado L R (mono: el mismo en los dos)
+        out.push_back(int16_t(s[i]));
+        out.push_back(int16_t(ch == 2 ? s[spb + i] : s[i]));
+      } else {
+        out.push_back(int16_t(ch == 2 ? (s[i] + s[spb + i]) / 2 : s[i]));
+      }
     }
   }
   return out;
@@ -543,6 +550,148 @@ void OirAdxPs2(const std::filesystem::path& juego, const std::string& afs, int e
   }).detach();
 }
 void CallarAdxPs2() { ++g_adx_gen; }
+
+// Musica de los modos de PS2: la pista ADX entera en estereo y en bucle (WHDR_BEGINLOOP/ENDLOOP) hasta CallarMusicaPs2 o
+// la siguiente. ponytail: bucle de la pista entera (sin los puntos de bucle de la cabecera ADX); add when one sounds wrong.
+std::atomic<uint32_t> g_mus_gen{0};
+void OirMusicaPs2(const std::filesystem::path& juego, const std::string& afs, int entrada, float volumen) {
+  const uint32_t gen = ++g_mus_gen;
+  if (volumen <= 0) return;
+  std::thread([juego, afs, entrada, volumen, gen] {
+    AfsPs2 a;
+    int hz = 0;
+    std::vector<int16_t> pcm = a.Abrir(juego, afs) ? Adx(a.Entrada(size_t(entrada)), hz, true) : std::vector<int16_t>();
+    REXLOG_INFO("dbz3 pasarela: musica {} {}: {:.1f} s", afs, entrada, hz ? double(pcm.size()) / 2 / hz : 0.0);
+    if (pcm.empty() || gen != g_mus_gen.load()) return;
+    for (int16_t& x : pcm) x = int16_t(std::clamp(int(float(x) * volumen), -32768, 32767));
+#if REX_PLATFORM_WIN32
+    WAVEFORMATEX f{};
+    f.wFormatTag = WAVE_FORMAT_PCM;
+    f.nChannels = 2;
+    f.nSamplesPerSec = DWORD(hz);
+    f.wBitsPerSample = 16;
+    f.nBlockAlign = 4;
+    f.nAvgBytesPerSec = DWORD(hz) * 4;
+    HWAVEOUT wo = nullptr;
+    if (waveOutOpen(&wo, WAVE_MAPPER, &f, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) return;
+    WAVEHDR h{};
+    h.lpData = reinterpret_cast<LPSTR>(pcm.data());
+    h.dwBufferLength = DWORD(pcm.size() * 2);
+    h.dwFlags = WHDR_BEGINLOOP | WHDR_ENDLOOP;
+    h.dwLoops = 0xFFFFFFFFu;
+    if (waveOutPrepareHeader(wo, &h, sizeof(h)) == MMSYSERR_NOERROR) {
+      if (waveOutWrite(wo, &h, sizeof(h)) == MMSYSERR_NOERROR)
+        while (!(h.dwFlags & WHDR_DONE) && gen == g_mus_gen.load()) Sleep(30);
+      waveOutReset(wo);
+      waveOutUnprepareHeader(wo, &h, sizeof(h));
+    }
+    waveOutClose(wo);
+#endif
+  }).detach();
+}
+void CallarMusicaPs2() { ++g_mus_gen; }
+
+// Efectos cortos de PS2 (R7 b2_sonido): banco Sony HD/BD. `cuerpo` = entrada del cuerpo PS-ADPCM (bloques VAG de 16 B), la
+// siguiente = indice IECS ("VagiCEI": tabla de desplazamientos -> registros {inicio, 0xFF000000|frecuencia}). Un sonido por
+// id; los de un mismo `tipo` se cortan entre si (la orden 75/76 de B2 manda el mensaje 9 antes del 7). ponytail: sin
+// bucles VAG (flag 4) ni tono/volumen del chunk SetbCEI; add when un efecto suene mal.
+namespace {
+struct SonidoPs2 {
+  std::vector<int16_t> pcm;
+  int hz = 0;
+};
+std::mutex g_snd_mx;
+std::map<std::tuple<std::string, std::string, int, int>, SonidoPs2> g_snd_cache;
+std::atomic<uint32_t> g_snd_gen[8];   // por tipo
+std::atomic<uint32_t> g_snd_todo{0};
+
+std::vector<int16_t> Vag(const std::vector<uint8_t>& d, size_t ini, size_t tope) {
+  static const int K[5][2] = {{0, 0}, {60, 0}, {115, -52}, {98, -55}, {122, -60}};
+  std::vector<int16_t> out;
+  int s1 = 0, s2 = 0;
+  for (size_t o = ini; o + 16 <= std::min(tope, d.size()); o += 16) {
+    const int pr = std::min<int>(d[o] >> 4, 4), sh = d[o] & 15;
+    for (size_t j = 2; j < 16; ++j)
+      for (int nib : {d[o + j] & 15, d[o + j] >> 4}) {
+        int v = int16_t(nib << 12) >> sh;
+        v = std::clamp(v + ((s1 * K[pr][0] + s2 * K[pr][1] + 32) >> 6), -32768, 32767);
+        s2 = s1;
+        s1 = v;
+        out.push_back(int16_t(v));
+      }
+    if (d[o + 1] & 1) break;   // fin del sonido
+  }
+  return out;
+}
+
+bool CargarSonido(const std::filesystem::path& juego, const std::string& afs, int cuerpo, int id, SonidoPs2& r) {
+  std::lock_guard<std::mutex> lk(g_snd_mx);
+  const auto k = std::make_tuple(juego.string(), afs, cuerpo, id);
+  if (auto it = g_snd_cache.find(k); it != g_snd_cache.end()) { r = it->second; return !r.pcm.empty(); }
+  AfsPs2 a;
+  if (!a.Abrir(juego, afs) || cuerpo < 0 || size_t(cuerpo) + 1 >= a.Cuantas()) return false;
+  const std::vector<uint8_t> body = a.Entrada(size_t(cuerpo)), x = a.Entrada(size_t(cuerpo) + 1);
+  auto u32 = [&](size_t o) { uint32_t v = 0; if (o + 4 <= x.size()) std::memcpy(&v, &x[o], 4); return v; };
+  size_t vi = 0;
+  while (vi + 16 < x.size() && std::memcmp(&x[vi], "IECSigaV", 8) != 0) vi += 4;   // "VagiCEI" al reves
+  SonidoPs2 s;
+  if (vi + 16 < x.size() && id >= 0 && uint32_t(id) < u32(vi + 12)) {
+    const size_t rec = vi + u32(vi + 16 + 4 * size_t(id));   // desplazamiento relativo al chunk
+    const uint32_t ini = u32(rec), hz = u32(rec + 4) & 0xFFFF;
+    size_t fin = body.size();   // hasta el siguiente inicio de la tabla
+    for (uint32_t j = 0; j < u32(vi + 12); ++j) {
+      const uint32_t e = u32(vi + u32(vi + 16 + 4 * size_t(j)));
+      if (e > ini) fin = std::min<size_t>(fin, e);
+    }
+    s.pcm = Vag(body, ini, fin);
+    s.hz = int(hz);
+    REXLOG_INFO("dbz3 pasarela: sonido {} cuerpo {} id {}: {} Hz, {:.2f} s", afs, cuerpo, id, s.hz,
+                s.hz ? double(s.pcm.size()) / s.hz : 0.0);
+  }
+  g_snd_cache[k] = s;
+  r = std::move(s);
+  return !r.pcm.empty() && r.hz > 0;
+}
+}  // namespace
+
+void OirSonidoPs2(const std::filesystem::path& juego, const std::string& afs, int cuerpo, int id, int tipo, float volumen,
+                  int periodo_ms, bool solo_decodificar) {
+  tipo = std::clamp(tipo, 0, 7);
+  const uint32_t gen = ++g_snd_gen[tipo], todo = g_snd_todo.load();
+  std::thread([=] {
+    SonidoPs2 s;
+    if (!CargarSonido(juego, afs, cuerpo, id, s) || s.pcm.size() < 64 || volumen <= 0) return;   // 56 muestras = hueco
+    if (solo_decodificar) return;   // prueba: decodifica y registra, sin abrir waveOut
+    for (int16_t& x : s.pcm) x = int16_t(std::clamp(int(float(x) * volumen), -32768, 32767));
+#if REX_PLATFORM_WIN32
+    auto vivo = [&] { return gen == g_snd_gen[tipo].load() && todo == g_snd_todo.load(); };
+    do {
+      const DWORD t0 = GetTickCount();
+      WAVEFORMATEX f{};
+      f.wFormatTag = WAVE_FORMAT_PCM;
+      f.nChannels = 1;
+      f.nSamplesPerSec = DWORD(s.hz);
+      f.wBitsPerSample = 16;
+      f.nBlockAlign = 2;
+      f.nAvgBytesPerSec = DWORD(s.hz) * 2;
+      HWAVEOUT wo = nullptr;
+      if (waveOutOpen(&wo, WAVE_MAPPER, &f, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) return;
+      WAVEHDR h{};
+      h.lpData = reinterpret_cast<LPSTR>(s.pcm.data());
+      h.dwBufferLength = DWORD(s.pcm.size() * 2);
+      if (waveOutPrepareHeader(wo, &h, sizeof(h)) == MMSYSERR_NOERROR) {
+        if (waveOutWrite(wo, &h, sizeof(h)) == MMSYSERR_NOERROR)
+          while (!(h.dwFlags & WHDR_DONE) && vivo()) Sleep(10);
+        waveOutReset(wo);
+        waveOutUnprepareHeader(wo, &h, sizeof(h));
+      }
+      waveOutClose(wo);
+      while (periodo_ms > 0 && vivo() && int(GetTickCount() - t0) < periodo_ms) Sleep(10);
+    } while (periodo_ms > 0 && vivo());
+#endif
+  }).detach();
+}
+void CallarSonidosPs2() { ++g_snd_todo; }
 
 // ---- Infinite World (ficha 02 C): textos de las misiones ----
 // DATA_USA.AFS de IW (USA): desde la entrada 132, un #AMB por mision [#AMT descripcion, #AMT titulo] en el orden del

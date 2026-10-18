@@ -96,12 +96,17 @@ def _kv(x):
     return k.strip(), v
 
 
+# La arena de memoria del juego no siempre cae en la misma direccion (log: "Guest memory arena mapped: virtual base
+# 0x...", antes siempre 0x200000000 = GBASE). DESPL = base real - GBASE; lo fija Juego.base_real() al arrancar.
+DESPL = 0
+
+
 def leer(h, addr, n):
     if not h:
         return None
     buf = ctypes.create_string_buffer(n)
     got = ctypes.c_size_t()
-    if not K32.ReadProcessMemory(ctypes.c_void_p(h), ctypes.c_void_p(addr), buf, n, ctypes.byref(got)):
+    if not K32.ReadProcessMemory(ctypes.c_void_p(h), ctypes.c_void_p(addr + DESPL), buf, n, ctypes.byref(got)):
         return None
     return buf.raw[:got.value]
 
@@ -350,6 +355,21 @@ class Juego:
         self.h = K32.OpenProcess(0x0410, False, self.proc.pid)     # QUERY_INFORMATION | VM_READ
         if not self.h:
             raise Fallo("no pude leer la memoria del juego")
+        self.base_real()
+
+    def base_real(self, seg=20):
+        """Fija DESPL con la base de la arena que dice el log de esta partida (espera hasta seg)."""
+        global DESPL
+        fin = time.time() + seg
+        while time.time() < fin:
+            m = re.search(r"Guest memory arena mapped: virtual base 0x([0-9A-Fa-f]+)", self.texto_log())
+            if m:
+                DESPL = int(m.group(1), 16) - GBASE
+                if DESPL:
+                    self.info(f"arena de memoria en 0x{int(m.group(1), 16):X} (no en 0x{GBASE:X}): ajustado")
+                return
+            time.sleep(0.2)
+        DESPL = 0
 
     def vivo(self):
         return self.proc is not None and self.proc.poll() is None
@@ -542,7 +562,7 @@ class Juego:
                 data = f.read_bytes()
                 for s in ESTRUCTAS:
                     n = ctypes.c_size_t()
-                    dir_s = GBASE + s + 336 + BLOQUE * RANURA
+                    dir_s = GBASE + DESPL + s + 336 + BLOQUE * RANURA
                     if not K32.WriteProcessMemory(ctypes.c_void_p(h), ctypes.c_void_p(dir_s), data, len(data),
                                                   ctypes.byref(n)):
                         raise Fallo(f"write en {hex(s)} fallo")
@@ -1142,6 +1162,21 @@ def _tablero(j, par):
     time.sleep(3)
     j.captura("a_preparacion")
     j.tecla("Space", 2500)
+    # R7: la intro del Mundo Dragon (DATA_<idioma> 155) tapa el tablero: B la salta; luego los guiones del turno 1
+    # (sus ventanas se cierran solas a los 3 s) tienen que acabar antes de poder mover
+    j.log(r"tablero b2: escena T155", 15)
+    j.tecla("Backspace", 1500)
+    j.captura("a1_llegada")   # R7: efectos del banco 343 (capsulas de Raditz y Nappa)
+    j.log(r"tablero b2: escena M207", 30)
+    time.sleep(1.5)
+    j.captura("a1b_charla")   # cabezas de B2 (CMN 1196)
+    # orden 69 del guion 301: eleccion de 1 aliado (2 en las fases IV, V y IX); Space elige el primero
+    j.log(r"tablero b2: script 301: eleccion de 1 aliado", 60)
+    time.sleep(1)
+    j.captura("a2_aliado")
+    j.tecla_hasta_log("Space", r"tablero b2: aliado elegido", intentos=3, seg=3)
+    j.log(r"tablero b2: guiones terminados", 60)
+    time.sleep(1)
     j.captura("b_tablero")
     j.tecla("W", 900)
     j.captura("c_destino")
@@ -1156,11 +1191,10 @@ def _tablero(j, par):
     j.captura("d3_si_no")
     j.tecla("P", 600)
     j.tecla("P", 900)
-    j.tecla("Backspace", 1200)   # B = pasar
-    j.tecla("S", 900)
-    j.tecla("Space", 400)
+    # R7: los Saibaman de la fase I salen ahora de sus guiones (ya no hay uno fijo en la casilla 3); Raditz (movimiento
+    # 5 = sigue a la pieza 1, Goku) viene hacia Goku: se pasa turno (B) hasta el contacto
+    j.tecla_hasta_log("Backspace", r"tablero b2: combate:", intentos=12, seg=5)
     j.captura("e_contacto")
-    j.log(r"tablero b2: combate:", 10)
     time.sleep(2)
     j.captura("f_tarjeta")
     j.tecla("Space", 1000)

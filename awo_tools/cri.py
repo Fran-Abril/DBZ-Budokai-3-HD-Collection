@@ -17,6 +17,7 @@ No hay codificador ni descompresor CRILAYLA: los .acb/.awb de las voces no viene
 """
 import os
 import shutil
+import re
 import struct
 import subprocess
 import tempfile
@@ -173,7 +174,8 @@ def voces_sdbh(cpks, clave):
             continue
         waves, used = awb_split(awb), set()
         for cue, wid in acb_waves(files[name]):
-            if cue.upper().startswith(want) and cue not in seen and wid in waves and wid not in used:
+            # BGRDa_003_0 (Guldo, Burter, Jeice) o BKMS_003_0 (Roshi): letra de variante opcional
+            if re.match(re.escape(want[:-1]) + r"[a-z]?_", cue, re.I) and cue not in seen and wid in waves and wid not in used:
                 seen.add(cue)
                 used.add(wid)   # BKMS_003_0 y BKMS_003_1 suenan con la misma onda
                 out.append((cue, hca_pcm(waves[wid])))

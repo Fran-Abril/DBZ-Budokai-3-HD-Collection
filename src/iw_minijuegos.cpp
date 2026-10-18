@@ -1283,7 +1283,12 @@ bool AnularAndar(uint8_t* base, uint32_t x, uint32_t accion) {
 
 void Dificultad(int ficha) { g_dificultad = std::clamp(ficha, 0, 5); }   // F5: la de la ficha, tal cual
 
-void PalancaDerecha(int16_t x) { g_rx = x; }
+std::atomic<int> g_ry{0};
+void PalancaDerecha(int16_t x, int16_t y) {
+  g_rx = x;
+  g_ry = y;
+}
+int PalancaDerechaY() { return g_ry.load(); }
 
 bool TomarResultado(Resultado& r) {
   if (g_estado.load() != 3) return false;
@@ -1943,7 +1948,11 @@ void Mando(uint8_t* base, uint32_t usuario, bool leido) {
 namespace dbz3::iwmini {
 bool SeBotones(int* banco, int* id);   // iw_mini_botones.cpp
 }
+namespace dbz3::escenarios {
+void ComprobarZonaB(PPCContext& ctx, uint8_t* base);   // escenarios.cpp: ring out a la zona B (mod opcional)
+}
 DBZ3_HOOK_EU(sub_82114910) {
+  dbz3::escenarios::ComprobarZonaB(ctx, base);
   if (!dbz3::iwmini::Activo()) return orig(ctx, base);
   if (int banco = 0, id = 0; dbz3::iwmini::SeBotones(&banco, &id)) {   // R14: el sonido de golpe que pidio el minijuego
     const PPCContext guardado_se = ctx;

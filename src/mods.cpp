@@ -246,6 +246,13 @@ void CheckProblems(const std::filesystem::path& dir, ModInfo& info) {
       info.problems.emplace_back(ModInfo::kBadToml, std::string(tn) + ": " + std::string(e.description()));
     }
   }
+  // avisos del ultimo montaje (roster_build.py): ID ocupado, sin IDs, sin casilla, traje roto...
+  std::ifstream avisos(dir.parent_path() / "roster_avisos.txt");
+  for (std::string line; std::getline(avisos, line);) {
+    const size_t tab = line.find('\t');
+    if (info.enabled && tab == info.name.size() && line.compare(0, tab, info.name) == 0)
+      info.problems.emplace_back(ModInfo::kRoster, line.substr(tab + 1));
+  }
   // Pack de texturas: nombres que el juego no reconoce y tamanos que el runtime descarta (no son
   // un multiplo entero del original, igual en ancho y alto, o pasan de 16384; texture_cache.cpp y
   // dbz3_texture_pack.cpp del SDK).
@@ -1025,7 +1032,9 @@ std::vector<ModConflict> FindConflicts() {
   namespace fs = std::filesystem;
   std::vector<std::string> mods;
   for (const ModInfo& m : ListMods(false)) {
-    if (m.enabled && m.name != "_roster") mods.push_back(m.name);   // _roster lo genera el kit
+    // _roster tambien: si otro mod sustituye una entrada que el montaje usa (rueda del select, poses,
+    // modelos nuevos), el jugador tiene que saber cual se ve.
+    if (m.enabled) mods.push_back(m.name);
   }
   // mismo orden que ScanModDirs del runtime (ruta de carpeta, alfabetico)
   std::sort(mods.begin(), mods.end(), [](const std::string& a, const std::string& b) {

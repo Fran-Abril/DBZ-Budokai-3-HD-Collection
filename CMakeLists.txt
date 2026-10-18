@@ -19,6 +19,7 @@ set(DBZ3_SOURCES
     src/select_ext.cpp
     src/stage_ext.cpp
     src/mods.cpp
+    src/mods_opcionales.cpp
     src/native_mods.cpp
     src/region.cpp
     src/launcher/settings.cpp

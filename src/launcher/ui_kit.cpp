@@ -1,11 +1,16 @@
 // dbz3 - Launcher visual kit (see ui_kit.h).
 
 #include "ui_kit.h"
+#include "settings.h"
+#include "../mods.h"
 
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <set>
+#include <vector>
 #include <string>
 
 #include <rex/logging.h>
@@ -19,6 +24,10 @@ namespace dbz3::launcher::ui {
 namespace {
 
 Fonts g_fonts;
+// Japones: fuente del sistema y SOLO los caracteres que usan los textos (el atlas se hornea entero; las ~3000 del
+// rango japones de ImGui en 8 fuentes no caben). Con otro idioma, solo "日本語" del selector.
+std::string g_jp_path;
+std::vector<ImWchar> g_jp_ranges;
 
 // Latin (Spanish/French/German/Italian accents), punctuation and arrows. The
 // SDK's ImGui backend bakes the whole atlas up front, so the ranges stay small.
@@ -63,6 +72,13 @@ ImFont* AddFont(ImFontAtlas* atlas, const std::string& path, float size,
   cfg.OversampleV = 1;
   cfg.RasterizerDensity = density;
   ImFont* f = atlas->AddFontFromFileTTF(path.c_str(), size, &cfg, kTextRanges);
+  if (f && !g_jp_path.empty()) {   // kana/kanji (Segoe no los tiene): se mezclan justo detras de su fuente
+    ImFontConfig jc;
+    jc.MergeMode = true;
+    jc.OversampleH = 2;
+    jc.RasterizerDensity = density;
+    atlas->AddFontFromFileTTF(g_jp_path.c_str(), size, &jc, g_jp_ranges.data());
+  }
   if (f && !icons.empty()) {
     ImFontConfig ic;
     ic.MergeMode = true;
@@ -107,6 +123,26 @@ void LoadFonts(ImFontAtlas* atlas) {
       "C:\\Windows\\Fonts\\segmdl2.ttf",
   });
   const std::string bold_path = semibold.empty() ? regular : semibold;
+  g_jp_path = FirstExisting({"C:\\Windows\\Fonts\\YuGothM.ttc", "C:\\Windows\\Fonts\\meiryo.ttc",
+                             "C:\\Windows\\Fonts\\msgothic.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"});
+  {
+    std::set<uint32_t> cps = {0x65E5, 0x672C, 0x8A9E};
+    if (dbz3::settings::Language() == 2) {
+      std::ifstream in(dbz3::ModsRoot().parent_path() / "ingame_ui" / "i18n_modos.toml", std::ios::binary);
+      const std::string t((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      for (size_t k = 0; k < t.size();) {   // UTF-8 -> puntos de codigo >= U+3000 (kana, kanji, signos japoneses)
+        const unsigned char c = t[k];
+        const int n = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1;
+        uint32_t cp = n == 1 ? c : c & (0xFF >> (n + 1));
+        for (int m = 1; m < n && k + m < t.size(); ++m) cp = (cp << 6) | (t[k + m] & 0x3F);
+        if (cp >= 0x3000 && cp <= 0xFFEF) cps.insert(cp);
+        k += n;
+      }
+    }
+    g_jp_ranges.clear();
+    for (uint32_t cp : cps) g_jp_ranges.insert(g_jp_ranges.end(), {ImWchar(cp), ImWchar(cp)});
+    g_jp_ranges.push_back(0);
+  }
   const float density = SystemDpiScale();
   g_fonts.body = AddFont(atlas, regular, 16.0f, icons, density);
   g_fonts.bold = AddFont(atlas, bold_path, 16.0f, icons, density);

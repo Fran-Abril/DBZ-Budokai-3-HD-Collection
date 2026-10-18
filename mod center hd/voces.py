@@ -26,6 +26,7 @@ En personaje.toml (fuente):
                              # las que falten, las del donante
     voces = "donante"        # las del donante (por defecto)
     voces = "ninguna"        # sin voz
+    voces = "iw:JANENBA|ninguna"   # alternativas en orden: la primera que se pueda leer
 """
 import os
 import struct
@@ -324,6 +325,18 @@ def resolve(spec, writer, iw=None, log=print, donor=None, base=None):
     """voces de personaje.toml -> (lineas de roster.toml, nota). `donor` (ID) solo hace falta
     para las de Shin Budokai: las situaciones sin frase propia se quedan con las suyas."""
     spec = (spec or "donante").strip() if isinstance(spec, str) else spec
+    if isinstance(spec, str) and "|" in spec:
+        # "iw:JANENBA|ninguna": la primera alternativa que se pueda leer (sin Infinite World, mejor mudo que el donante)
+        err = None
+        for alt in spec.split("|"):
+            try:
+                lines, note = resolve(alt, writer, iw, log, donor, base)
+            except Exception as e:  # noqa: BLE001
+                err = e
+                continue
+            if lines or alt.strip().lower() in ("donante", "", "auto"):
+                return lines, note
+        raise ValueError("ninguna alternativa de voces sirve (%s): %s" % (spec, err))
     if isinstance(spec, list):
         vals = [int(v) for v in spec][:SLOTS]
         return ["voces = [%s]" % ", ".join(map(str, vals))], "voces propias (%d)" % sum(v >= 0 for v in vals)
@@ -395,6 +408,8 @@ def prueba_wav():
     for data in e.datos:
         y, _ = gritos.adx_decode(data)
         assert abs(len(y) - 24000) < 64 and np.abs(y.astype(np.float64)).max() > 4000
+    # alternativas: una fuente que no sirve (nombre que IW no tiene, o sin IW) pasa a la siguiente, no al donante
+    assert resolve("iw:NO_EXISTE|ninguna", e)[1] == "sin voz"
     print("prueba OK:", note)
 
 

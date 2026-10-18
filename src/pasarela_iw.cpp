@@ -129,6 +129,9 @@ std::vector<MisionTablaIW> LeerTablaIW(const std::filesystem::path& iw, std::str
 int IWaB3(int id_iw) {
   if (id_iw >= 0 && id_iw <= 43 && id_iw != 1) return id_iw;
   if (id_iw == 64 || id_iw == 74) return id_iw;
+  // Gogeta SS4 (IW 70), R7: el registro 70 de B3 se llama "GOGITA SS4 (GOKOU)", pero pedido con forma 0 sale Goku
+  // normal (D:/DBZ3HD/_pruebas/20261017-171216_iw_fix_gogeta77): la fusion de B3 se hace en pleno combate (fusion.cpp,
+  // tag::Fuse). Sigue en gris hasta empezar ya fusionado.
   if (id_iw == 78 || id_iw == 79 || id_iw == 84) return 35;
   static const std::pair<int, const char*> kPorts[] = {{44, "c:goku (gt)"}, {45, "c:super baby vegeta 2"},
                                                        {46, "c:super 17"},   {47, "c:janemba"},
@@ -191,20 +194,16 @@ Imagen Escala2x(const Imagen& s) {
   return d;
 }
 bool (*g_minijuego)(int clave, int fila) = nullptr;   // frente P4
-// Insignia "VS" (textura de 334/5) de cada valor +0x10 del #DMD (30..87). ponytail: emparejada a ojo con el rival de
-// cada mision (E:/DBZ3HD_trabajo/P1/badges.png, dmd.py); la tabla real del juego esta en el #AMA 334/4 (190 objetos,
-// sin descifrar). Las 30-34 y 78-87 siguen el orden de las texturas; las de en medio no.
+int g_mini_clave = 0;   // R7: el ultimo minijuego empezado desde el mapa (su musica)
+// Insignia "VS" (textura de 334/5) de cada valor +0x10 del #DMD (30..87). R7 quinta tanda: leida del #AMA 334/4 (sus
+// texturas son las de 334/5): el objeto 40 + 2 (v - 30) lleva en la clave 0 de su pista de cuadros (registro +8: +4
+// cuantas claves, +0x14 claves de 0x20 B, u16 +0 = textura; SprAnim_SampleFrameTrack_ EU L150910) la insignia; los
+// pares 40-155 dan justo 58 (los 30-37 coinciden con lo medido a ojo antes). E:\DBZ3HD_trabajo\R7\iw\s5/ama2.py.
+// ponytail: que +0x10 del #DMD elige el objeto 40 + 2 (v - 30) se deduce del orden, no de la llamada del juego.
 constexpr int kInsignia[58] = {
-    4,  9,  10, 11, 12,                       // 30 Raditz, Piccolo, Nappa, Vegeta, Saibaman
-    83, 84, 81,                               // 35 Ten Shin Han, Yamcha, Krilin
-    31, 24, 25, 28, 27, 29,                   // 38 Goku, Ginyu, Freezer 1, Freezer 2, Recoome, Freezer 3
-    32, 31, 49, 33, 34, 35, 36,               // 44 Gohan nino, Goku, Gohan, Trunks, Freezer metalico, Gero, C17
-    37, 38, 39, 40,                           // 51 Cell 1, 2, perfecto, a tope
-    49, 50, 51, 52, 53, 54, 55, 57, 56,       // 55 Gohan, Videl, Goten, Trunks nino, Satan, Dabura, Bu, Super Bu, Bu nino
-    62, 61, 63, 64, 65,                       // 64 dragon de una estrella (2), Baby, Pan, Super 17
-    75, 67, 68, 69, 66, 82,                   // 69 Cooler, Janemba, Broly, Pikkon, Cooler final, Bardock
-    87, 85, 86,                               // 75 Gran Saiyaman, Vegeta GT, Goku GT
-    95, 96, 97, 98, 99, 100, 101, 102, 103, 104};   // 78..87
+    4,  9,  10, 11, 12, 83, 84, 81, 74, 24, 25, 26, 27, 28, 29, 31, 32, 33, 34, 35,    // 30..49
+    36, 37, 38, 39, 40, 49, 50, 51, 52, 53, 54, 55, 56, 57, 62, 61, 63, 64, 65, 66,    // 50..69
+    67, 68, 69, 75, 82, 87, 85, 86, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104};      // 70..87
 struct TextoSaga {
   const char *es, *en;
 };
@@ -235,6 +234,9 @@ void Encajar(float w, float h, float x, float y, float cw, float ch, float max, 
 
 }  // namespace
 
+// Musica del minijuego (R7): LoadWaitPlayerFlyingMinigame toca Audio_GetFilteredTableEntry(0x6b, 3) = fila 0x12 de la
+// tabla EU 0x4803B0 (USA 0x47FB50: 63..71, 49..52, 72) -> ADX_CMN 66; las demas no tienen indice leido (-1: silencio).
+int PistaMinijuegoIW() { return g_mini_clave == 0x7D6 || g_mini_clave == 0x7E0 ? 66 : -1; }
 int MapaDeSaga(int saga) {
   constexpr int k[6] = {0, 1, 0, 0, 2, 3};   // Tierra, Namek, Tierra, Tierra, GT sepia, Otra historia (espacio)
   return saga >= 0 && saga < 6 ? k[saga] : 0;
@@ -586,6 +588,17 @@ bool DibGokuMapa(ImDrawList* dl, ImVec2 pie, float alto_px, float t, bool anda, 
 }
 }  // namespace
 
+// Musica del mapa (R7): DragonMissionMiscPlayerFuncs (EU, iw_sles55347.c l. 385748) toca la pista de banco 2 (ADX_CMN)
+// de la tabla EU 0x47DC80 (Dragon Mission) o 0x47DCA0 (Fighter's Road, mgr+0x4AC = 1) por el indice mgr[0xE6], que es
+// la posicion del area del mapa en DAT_0049C348 (4 mapas: Tierra, Namek, GT, espacio) o DAT_0049C350 (4 tramos del
+// Road). Valores leidos del ELF USA (0x47D680 = 35..41, 0x47D6A0 = 49..55; areas 0x49BD88 / 0x49BD90).
+int PantallaDM::Pista(const InfoDM& in) const {
+  const auto& cas = Cas(in);
+  if (sel_ < 0 || sel_ >= int(cas.size())) return -1;
+  const int saga = cas[size_t(sel_)].saga;
+  return in.road ? 49 + std::clamp(saga, 0, 3) : 35 + MapaDeSaga(saga);
+}
+
 // Mapa de la saga de la casilla elegida (640 x 480 px del mapa en la pantalla, como en la PS2) con la camara siguiendo
 // al Goku del mapa, que anda hasta la casilla; insignias de las misiones abiertas y dibujos de los minijuegos.
 void PantallaDM::DibujarFondo(ImDrawList* dl, const ImGuiIO& io, float t, const InfoDM& in) {
@@ -599,21 +612,35 @@ void PantallaDM::DibujarFondo(ImDrawList* dl, const ImGuiIO& io, float t, const 
     mx_ = cx_ = c.x;
     my_ = cy_ = c.y;
   }
-  const float k1 = 1.0f - std::exp(-dt * 6.0f), k2 = 1.0f - std::exp(-dt * 4.0f);
+  const float k1 = 1.0f - std::exp(-dt * 6.0f);
   mx_ += (c.x - mx_) * k1;
   my_ += (c.y - my_) * k1;
-  cx_ += (mx_ - cx_) * k2;
-  cy_ += (my_ - cy_) * k2;
+  // aplicar_estudios (entrega 16 P4), Story_MapScrollToTargetTick (EU 0x2F8390, L384840-384937): objetivo = Goku del
+  // mapa (+0x1D0) limitado a x [300, 980] e y [225, 735]; camara += (objetivo - camara) * t, t += 0,01 por cuadro y
+  // vuelve a 0 al pasar de 1; a menos de 2 px, la camara salta al objetivo con t = 1; despues se limita igual.
+  constexpr float kX0 = 300, kX1 = 980, kY0 = 225, kY1 = 735;
+  const float ox = std::clamp(mx_, kX0, kX1), oy = std::clamp(my_, kY0, kY1);
+  if (std::hypot(ox - cx_, oy - cy_) < 2.0f) {
+    cx_ = ox, cy_ = oy, tcam_ = 1.0f;
+  } else {
+    cx_ += (ox - cx_) * tcam_;
+    cy_ += (oy - cy_) * tcam_;
+  }
+  if ((tcam_ += 0.01f * dt * 60.0f) > 1.0f) tcam_ = 0;
+  cx_ = std::clamp(cx_, kX0, kX1), cy_ = std::clamp(cy_, kY0, kY1);
   const ImVec2 D = io.DisplaySize;
   // ponytail: zoom medido en las capturas del original (iconos y Goku 1,6-2 veces mas grandes que con 640x480 a la vista)
   constexpr float kZoom = 1.7f;
   const float s = D.y / 480.0f * kZoom, vw = D.x / s, vh = 480.0f / kZoom;
-  const float camx = vw >= 1280 ? 640.0f : std::clamp(cx_, vw * 0.5f, 1280 - vw * 0.5f);
-  const float camy = std::clamp(cy_, vh * 0.5f, 960 - vh * 0.5f);
-  flechas_[0] = camy > vh * 0.5f + 1;
-  flechas_[1] = camy < 960 - vh * 0.5f - 1;
-  flechas_[2] = vw < 1280 && camx > vw * 0.5f + 1;
-  flechas_[3] = vw < 1280 && camx < 1280 - vw * 0.5f - 1;
+  // IW pone la camara en el punto (300, 225) de su pantalla de 640 x 480 (Story_WorldToScreenX/Y): el centro es +20, +15.
+  // Pantallas muy anchas: ademas, sin salirse del mapa de 1280 x 960.
+  const float vx = cx_ + 20, vy = cy_ + 15;
+  const float camx = vw >= 1280 ? 640.0f : std::clamp(vx, vw * 0.5f, 1280 - vw * 0.5f);
+  const float camy = vh >= 960 ? 480.0f : std::clamp(vy, vh * 0.5f, 960 - vh * 0.5f);
+  flechas_[0] = cy_ > kY0 + 1;
+  flechas_[1] = cy_ < kY1 - 1;
+  flechas_[2] = cx_ > kX0 + 1;
+  flechas_[3] = cx_ < kX1 - 1;
   auto P = [&](float x, float y) { return ImVec2(D.x * 0.5f + (x - camx) * s, D.y * 0.5f + (y - camy) * s); };
   dl->AddRectFilled(ImVec2(0, 0), D, IM_COL32(0, 0, 0, 255));
   const int m = MapaDeSaga(c.saga);
@@ -788,10 +815,12 @@ PantallaDM::Accion PantallaDM::Mapa(ImDrawList* dl, const ImGuiIO& io, float t, 
         mini_fila_ = q.fila;
         return kNada;
       }
-      if (g_minijuego && g_minijuego(q.clave, q.fila)) return kMinijuego;
+      if (g_minijuego && g_minijuego(q.clave, q.fila)) return g_mini_clave = q.clave, kMinijuego;
       aviso_ = T::T("Minijuego de Infinite World: aún no disponible.", "Infinite World minigame: not available yet.");
-    } else if (q.mision > 0 && !no_b3) {
+    } else if (q.mision > 0 && q.mision <= in.abiertas && !no_b3) {
       return kElegir;
+    } else if (q.mision > 0 && no_b3) {   // bloqueada: el motivo (p. ej. "Necesita a Super 17...") en el globo
+      aviso_ = in.motivo[size_t(q.mision)];
     }
   }
   return kNada;
@@ -824,7 +853,7 @@ PantallaDM::Accion PantallaDM::Historia(ImDrawList* dl, const ImGuiIO& io, float
     if (mini_clave_ >= 0) {   // la escena era la de antes de un minijuego: ahora, el minijuego
       const int clave = mini_clave_;
       mini_clave_ = -1;
-      if (g_minijuego && g_minijuego(clave, mini_fila_)) return kMinijuego;
+      if (g_minijuego && g_minijuego(clave, mini_fila_)) return g_mini_clave = clave, kMinijuego;
       aviso_ = T::T("Minijuego de Infinite World: aún no disponible.", "Infinite World minigame: not available yet.");
     }
     return kNada;

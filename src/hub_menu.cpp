@@ -363,7 +363,7 @@ void FadeStep(PPCContext& ctx, uint8_t* base, uint32_t obj) {
 // escenarios.cpp: RequestBattle las carga igual que una de serie)
 int Stage(std::mt19937& rng) {
   using dbz3::escenarios::kSerie;
-  const int altas = std::max(0, dbz3::escenarios::Total() - kSerie);
+  const int altas = dbz3::escenarios::Visibles();   // sin los campos de IW (no son escenarios de Duelo)
   const int k = std::uniform_int_distribution<int>(0, 10 + altas)(rng);
   return k <= 10 ? k : kSerie + (k - 11);
 }
@@ -538,6 +538,8 @@ int EntryCount() { return kEntries + Ext().n.load(); }
 
 const char* Tr(const Texts& t) {
   const char* const v[5] = {t.es, t.en, t.fr, t.de, t.it};
+  if (t.en)
+    if (const char* o = dbz3::i18n::Otro(t.en)) return o;   // pt / ja
   const char* s = v[Lang()];
   return s && *s ? s : t.en ? t.en : "";
 }

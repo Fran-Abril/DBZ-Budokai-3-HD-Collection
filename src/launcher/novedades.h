@@ -20,6 +20,55 @@ struct NewsBlock {
   int count;
 };
 
+inline constexpr NewsItem kNews151[] = {
+    {"Budokai 2 (experimental)", "Budokai 2 (experimental)",
+     "El Mundo Dragón arranca con su intro y las charlas del original; los Saibaman brotan del suelo y suena su música.",
+     "Dragon World starts with its intro and the original dialogues; Saibamen sprout from the ground and its music plays."},
+    {nullptr, nullptr, "Saibaman de colores: cada combate del tablero contra uno sale de un color.",
+     "Coloured Saibamen: each board battle against one has a different colour."},
+    {nullptr, nullptr,
+     "Tablero más fiel: flecha roja, columna de vida, retratos, sonidos, música y escenarios de Budokai 2 en cada casilla.",
+     "More faithful board: red arrow, life column, portraits, sounds, music and Budokai 2 stages on every tile."},
+    {nullptr, nullptr, "Nave de Babidi (beta): pantallas y pruebas como en el original.",
+     "Babidi's ship (beta): screens and trials as in the original."},
+    {"Infinite World (experimental)", "Infinite World (experimental)",
+     "El entrenamiento de Goku y Gohan ya no se descoloca, y las misiones dicen qué personaje falta.",
+     "The Goku and Gohan training no longer glitches, and missions tell you which character is missing."},
+    {nullptr, nullptr, "Pack Infinite World en Nova's Mods: marca los personajes y se crean con tu copia del juego.",
+     "Infinite World pack in Nova's Mods: tick the characters and they are built from your game copy."},
+    {nullptr, nullptr, "Mapa con bordes, música por zona y animaciones más suaves.",
+     "Map with borders, music per area and smoother animations."},
+    {"Modo Héroe (beta)", "Hero mode (beta)", "Cambia el moveset de tu héroe dentro del juego.",
+     "Change your hero's moveset inside the game."},
+    {"Mods", "Mods",
+     "Janemba y las Fuerzas Ginyu en Nova's Mods con sus propias voces, y huecos de personaje que se conservan entre versiones.",
+     "Janemba and the Ginyu Force in Nova's Mods with their own voices, and character slots kept between versions."},
+    {"Launcher", "Launcher",
+     "Arreglado: en algunos equipos no cargaba Nova's Mods ni la comprobación de versión.",
+     "Fixed: on some PCs Nova's Mods and the update check did not load."},
+    {nullptr, nullptr, "Nuevos idiomas: portugués (Brasil) y japonés.",
+     "New languages: Portuguese (Brazil) and Japanese."},
+    {nullptr, nullptr, "Arranca antes tras actualizar: los retratos de los personajes ya no se vuelven a dibujar.",
+     "Starts faster after updating: character portraits are no longer redrawn."},
+};
+
+inline constexpr NewsItem kNews150[] = {
+    {"Dragon HUB", "Dragon HUB",
+     "Placas de rango, fondos y anfitriones nuevos, y marcas BETA / EXPERIMENTAL en lo que está en construcción.",
+     "Rank plates, new backgrounds and hosts, and BETA / EXPERIMENTAL labels on what is still being built."},
+    {"Tag Team (beta)", "Tag Team (beta)", "Relevos con teletransporte, también entre luchadores del ordenador.",
+     "Teleport relays, also between computer fighters."},
+    {"Mods", "Mods", "Los mods ya funcionan jugando directamente desde la ISO.",
+     "Mods now work when playing straight from the ISO."},
+    {"Modos nuevos", "New modes",
+     "Misión 100, Modo Héroe (beta), Leyenda de Mr. Satán (beta) y las campañas de Infinite World y Budokai 2 "
+     "(experimental): elige tu ISO de PS2 en la pestaña Juego.",
+     "Mission 100, Hero mode (beta), Mr. Satan legend (beta) and the Infinite World and Budokai 2 campaigns "
+     "(experimental): pick your PS2 ISO in the Game tab."},
+    {"Launcher", "Launcher", "Lanzador y menú F1 renovados, y todo traducido a cinco idiomas.",
+     "Renewed launcher and F1 menu, and everything translated into five languages."},
+};
+
 inline constexpr NewsItem kNews145[] = {
     {"Tag Team (beta)", "Tag Team (beta)",
      "Si te sacan del ring y te queda compañero, entra él y el combate sigue.",
@@ -49,6 +98,8 @@ inline constexpr NewsItem kNews145[] = {
 
 // Del mas nuevo al mas antiguo.
 inline constexpr NewsBlock kNewsBlocks[] = {
+    {"1.5.1", kNews151, int(sizeof(kNews151) / sizeof(kNews151[0]))},
+    {"1.5.0", kNews150, int(sizeof(kNews150) / sizeof(kNews150[0]))},
     {"1.4.5", kNews145, int(sizeof(kNews145) / sizeof(kNews145[0]))},
 };
 

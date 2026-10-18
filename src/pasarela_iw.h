@@ -77,6 +77,7 @@ struct DragonMissionIW {
 };
 bool LeerDragonMission(const std::filesystem::path& iw, DragonMissionIW& out, std::string& error);
 int MapaDeSaga(int saga);   // mapa (indice de piezas) de cada saga
+int PistaMinijuegoIW();     // musica (ADX_CMN) del ultimo minijuego empezado desde el mapa; -1 sin leer
 int VideoIW(const DragonMissionIW& dm, int tipo, int indice, bool despues);   // video de la historia; -1 si no hay
 std::filesystem::path RutaVideoIW(const DragonMissionIW& dm, int video);    // USR/FDxx.SFD; vacio si no esta
 // Minijuegos de IW (frente P4): si se registra, elegir un "?" del mapa lo llama con la clave del #DMD (0x7D0-0x7E1) y su
@@ -118,6 +119,7 @@ class PantallaDM {
   int Mision(const InfoDM& in) const;   // numero de la mision del cursor (0 si no hay)
   void Elegir(const InfoDM& in, int mision);   // pone el cursor (y la camara) en esa mision
   int NivelCom() const;                 // dificultad elegida -> nivel del COM de B3 (0..2)
+  int Pista(const InfoDM& in) const;    // musica del mapa: entrada de ADX_CMN.AFS (-1 sin casilla)
   int Dificultad() const { return dificultad_; }   // 0 Very Easy .. 4 Very Hard (multiplica el Zenie)
   // Escena de la historia sobre el mapa (subtitulos del video de IW en bandas de cine; A pasa de linea, B la salta):
   // la dibuja Mapa() hasta acabar: el video original (SFD, video_sfd.h) y, si falta, sus subtitulos sobre el mapa (sin
@@ -134,6 +136,7 @@ class PantallaDM {
                bool rosa = false);
   int sel_ = -1;                        // casilla del cursor
   float mx_ = -1, my_ = 0, cx_ = -1, cy_ = 0;   // marcador de Goku y camara (px del mapa)
+  float tcam_ = 1;                        // Story_MapScrollToTargetTick +0x4A4: seguimiento 0..1 (+0,01 por cuadro)
   int dificultad_ = 2;                  // 0 Very Easy .. 4 Very Hard (lista de 334/1 t16)
   float t_ultimo_ = 0;
   bool guia_ = true;                    // SELECT: Bulma y su globo

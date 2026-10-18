@@ -644,7 +644,7 @@ class HubPanel : public rex::ui::ImGuiDialog {
       } else if (estado == 2) {   // pegatina de texto (sin pieza propia): ambar, como un aviso de obras
         static const char* const kExp[5] = {"EXPERIMENTAL", "EXPERIMENTAL", "EXPÉRIMENTAL", "EXPERIMENTELL",
                                             "SPERIMENTALE"};
-        const char* tx = kExp[std::clamp(T::LangCode()[0] == 'e' && T::LangCode()[1] == 's' ? 0
+        const char* tx = T::Otro("EXPERIMENTAL") ? T::Otro("EXPERIMENTAL") : kExp[std::clamp(T::LangCode()[0] == 'e' && T::LangCode()[1] == 's' ? 0
                                          : T::LangCode()[0] == 'f' ? 2 : T::LangCode()[0] == 'd' ? 3
                                          : T::LangCode()[0] == 'i' ? 4 : 1, 0, 4)];
         const float fs = 17 * a.s, tw = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0, tx).x;

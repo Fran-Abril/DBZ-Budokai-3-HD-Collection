@@ -14,7 +14,8 @@
 //   T1 casillas de 52 B: x, y (float, px del mapa), 4 vecinas (u16, 0 = ninguna), +0x10 tipo (2 Dende cura, 3 alfombra de
 //      Mr. Popo que lleva a la casilla +0x14, 4 sitio al que lleva), +0x19 condicion del combate en esa casilla (1 empiezan
 //      con media vida, 2 con 0 de ki, 3 la vida se va gastando, 4 el ki se va gastando, 5 sin bloqueo), +0x1C 0x0A =
-//      casilla de combate (boton con el kanji), +0x1F escenario de B2; la 0 nula. Comprobado con los 9 mapas de la guia
+//      casilla de combate (boton con el kanji), +0x18 escenario de B2 del combate (0-12, kEscenarioB2; medido en PCSX2, R7),
+//      +0x1F (17, 1, 4, 6, 20, 21, 7, 15, 22 por fase) NO elige escenario (sin uso conocido); la 0 nula. Comprobado con los 9 mapas de la guia
 //      de PAndrews (GameFAQs, "Maps and Charts"): mismas casillas, caminos, objetos, Dende, Popo y condiciones.
 //   T2 piezas de 40 B: +0 personaje (ID de B2: los 25 primeros = orden de B1), +1 indice de ficha, +2 bando (0 companero
 //      elegible, 4 del jugador, bit 2 rival), +6 barras, +0xB barras maximas, +0xC vida, +0x14 casilla (u16).
@@ -32,6 +33,7 @@
 // Reglas (FAQ de GameFAQs, E:/DBZ3HD_trabajo/estudio_ports/b2_reglas.md): en tu turno cada personaje mueve 1 casilla
 // (la cebolla da +1), buscar gasta el movimiento (una vez por casilla), tocar a un rival = combate 1 contra 1 (el que se
 // movio contra el rival), ganar le quita una barra, la vida se conserva entre combates, Saibaman y Dr. Gero no se mueven.
+#include "escenarios.h"
 #include "pasarela.h"
 #include "ps2_modelo.h"
 
@@ -48,6 +50,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <random>
 #include <string>
@@ -59,6 +62,9 @@
 #include "ingame/game_style.h"
 #include "launcher/i18n.h"
 #include "launcher/launcher_state.h"
+#include "launcher/settings.h"
+#include "mods_opcionales.h"
+#include "video_sfd.h"
 
 namespace dbz3::rpg {
 void Premio(int zeni);   // Zenie al monedero del HUB (modos.h)
@@ -115,8 +121,17 @@ struct Casilla {
   float x = 0, y = 0;
   int vec[4] = {};
   int tipo = 0, destino = 0, condicion = 0;   // ver T1 arriba
+  int escenario = 0;                          // +0x18: escenario de B2 del combate (0-12)
+  int musica = -1;                            // +0x1F: pista del combate de la casilla (M4): 17, 1, 4, 6, 20, 21,
+                                              // 7, 15, 22 por fase I-IX; indice de la lista de PistaCombateB2
   bool lucha = false;
 };
+// Escenario de B2 (T1+0x18 -> 0x699391 -> FUN_001b2790) -> grupo de DATA_CMN que carga (tabla del ELF 0x372AB0 + 0x9C * i:
+// +0 #MDD 8g+7, +4 #MAD, +8 #MAS; 9-12 = 0, 1, 4, 5 en su variante 1) -> carpeta del alta que monta mod center hd/campos_iw.py
+// (B12) desde la ISO. Sin carpeta (grupos 1 y 5 no se instalan, o no esta), el escenario de B3 de la fase (kMapaB3).
+const char* const kEscenarioB2[13] = {"Llanura B2", "Calle de la ciudad B2", nullptr /* g5 */, nullptr /* g1 */,
+                                      "Base Red Ribbon B2", "Montanas nevadas", "Templo de Kami", "Islas B2", "Namek B2",
+                                      "Llanura B2", "Calle de la ciudad B2", "Base Red Ribbon B2", "Montanas nevadas"};
 struct Objeto {
   int casilla = 0, tipo = 0, valor = 0;
   bool visible = false, enterrado = false, hecho = false;
@@ -133,6 +148,17 @@ struct Ficha {
   int mov = -1, mov_p = 0;        // tipo de movimiento (T2 +3/+4, o el que pone la orden 50) y su dato
   int desde = 0;
   float t_mov = -10;              // animacion del ultimo paso
+  // R7 (ELF 0x275EB0, 0x274720, 0x273630): la pieza gira hacia la casilla 0x800/0x10000 por cuadro (11,25 grados), anda
+  // en linea recta a 4 px del mapa por cuadro y, al llegar, vuelve a mirar al frente (angulo 0) al mismo ritmo. La del
+  // jugador se pone mirando sin girar (0x277DD0). giro0 -> giro1 = el angulo al empezar y el del paso (radianes).
+  float giro0 = 0, giro1 = 0, t_giro = 0, t_dur = 0.35f;
+  int acciones = 0;   // rival: acciones que le quedan en la fase enemiga (+2 del registro; 0x278EE0 las recarga a 1)
+  int estado0 = 0;                // +5 del registro: 0 en juego, 1 sembrado (sale con su efecto), 2 y 6 escondido hasta su guion
+  float brote_t = -10;            // cuando aparecio (brota del suelo o se materializa)
+  // columna de vida (FUN_00274210, b2.c:220302): +0x78 barras que se ven (van hacia `barras` de una en una, al acabar la
+  // anim 0x36 ganar / 0x37 perder del #AMA 397) y +0x7C su temporizador (aqui, cuando empezo; < 0 = sin empezar)
+  mutable int barras_vis = -1;
+  mutable float vida_t0 = -1;
 };
 struct Datos {
   int fase = -1;
@@ -143,7 +169,7 @@ struct Datos {
   std::vector<Ficha> piezas;
   // Scripts de la fase (#YDW T3 y T6, interprete del ELF 0x295F20): T3 = disparadores {pieza, otra, turno, script, ?}
   // (-1, 0, N: al empezar el turno N); T6 = scripts: u32 cuantas + ordenes de 24 B {espera, op, 4 datos}.
-  std::vector<std::array<int, 5>> t3;
+  std::vector<std::vector<int>> t3;   // {A, B, C, guion, N banderas, banderas...} (FUN_0027F9A0 / 0027F7E0)
   // T4 (ELF 0x27F510): contactos {pieza A (0 = cualquiera), pieza B, casilla (0 = cualquiera), script, ?, ?, cuantas banderas,
   // banderas...}: vale si los personajes de A y B son los de las dos fichas que se tocan; numero > 0 = encendida,
   // < 0 = apagada (bitfield del ELF 0x699260). T5 (0x27F3A0): {fila de T4 del ultimo contacto, suceso (5 = cualquiera),
@@ -160,6 +186,9 @@ struct Datos {
     float px = 0, py = 0;   // sitio de reposo (ultimo fotograma de la lista A del #AMA, pantalla de 640x448)
     float ex = 1, ey = 1;   // su escala (la caja del menu va a 0,95 x 0,8)
     std::vector<std::array<float, 7>> claves;   // lista A: {cuadro, x, y, alfa, escala x, escala y, giro en grados}
+    float dur = 0;                              // cuadros que dura (FUN_00245C00: max(+0x20, +0x24))
+    struct Recorte { float cuadro; int tex; float u0, v0, u1, v1; };
+    std::vector<Recorte> recortes;   // lista B; usada solo por las piezas nativas del encargo 01
   };
   std::vector<Sprite> sprites;             // #AMA 344+5k: primer cuadro de cada objeto
   std::vector<Sprite> textos;              // #AMA 343+5k: ventanas de mensaje de la fase (texturas de 146+k)
@@ -170,12 +199,16 @@ struct Datos {
   // mensaje (8 piezas: entrar 0x33+3k, reposo +1, salir +2), 87-89 flecha, punto y brillo del radar, 97-120 menu y Si/No.
   std::vector<Imagen> hud;
   std::vector<Sprite> hud_ama;
+  std::vector<Sprite> life_ama;   // CMN 397 (uRam00698dcc): 0x34 celda vacia, 0x35 llena, 0x36 ganar (81), 0x37 perder (41)
+  std::vector<Imagen> aliados;
+  std::vector<Sprite> aliados_ama;   // B2 EU: tabla 0x3A4010 = DATA_<idioma> 184 + CMN 399 (NO 402)
   struct Adorno {
     int obj = 0;
     float x = 0, y = 0;
   };
   std::vector<Adorno> colocados;           // T7 (tipos 0 y 2)
   int stage = -1, objetivo = -1;           // en loc: "Stage N" (240x72) y el objetivo (primer 560x128)
+  int musica0 = -1;                        // primera orden 71 de los guiones (la del guion de inicio, 301)
 };
 
 enum Estado : int { kPrepara, kJuego, kGanada, kPerdida, kDeseo };
@@ -188,6 +221,13 @@ std::vector<Ficha> g_f;
 std::vector<Objeto> g_obj;
 std::vector<bool> g_buscada;
 std::vector<int> g_cand;            // piezas elegibles como companero
+// Orden 69 {cuantos} (ELF 0x2938A0 -> 0x2A3DE0: tarea 0x2A2550 con el contador 0x8F2C = a0): el guion de inicio (301) abre
+// la eleccion de aliados a mitad de la presentacion; cuantos = 1, y 2 en las fases IV, V y IX (medido en los 9 #YDW,
+// igual que la FAQ). El guion espera hasta que se eligen todos.
+int g_elegir = 0;
+// Orden 41 {fase} (0x294660: guarda a0 en la fase de la partida, 0x693A96) = fase superada, la siguiente es a0; orden 42
+// (0x294510) = final del Mundo Dragon (fase IX); orden 43 (0x2944A0) = derrota (p. ej. fase I: Raditz o Nappa en la Bola).
+int g_fase_sig = -1;
 std::string g_msg;
 int g_msg_icono = -1;
 float g_msg_t = -10, g_ahora = 0;
@@ -197,6 +237,15 @@ float g_msg_t = -10, g_ahora = 0;
 std::vector<std::array<int, 2>> g_mensajes;
 // Banderas de la fase (ELF 0x699260; ordenes 1 encender, 2 apagar, 3 cambiar) que piden los disparadores T4/T5.
 std::vector<uint32_t> g_banderas(64, 0);
+// Se guardan con la fase superada (orden 41) y se recuperan al empezar la siguiente; el reinicio y la orden 42 las borran.
+void GuardarBanderas(bool borrar) {
+  for (size_t i = 0; i < g_banderas.size(); ++i)
+    GuardarProgreso("tablero_b2_band" + std::to_string(i), borrar ? 0 : int(g_banderas[i]));
+}
+void LeerBanderas() {
+  for (size_t i = 0; i < g_banderas.size(); ++i)
+    g_banderas[i] = uint32_t(LeerProgreso("tablero_b2_band" + std::to_string(i), 0));
+}
 bool Bandera(int n) { return n >= 0 && n < 2048 && (g_banderas[size_t(n) >> 5] >> (n & 31) & 1u); }
 bool Condiciones(const std::vector<int>& r, size_t desde) {   // todas las banderas de r[desde..] como se piden
   for (size_t k = desde; k < r.size(); ++k)
@@ -219,6 +268,7 @@ bool g_luchando = false;
 // 0x2700E0) y menu del tablero (triangulo/Start, ELF 0x2A35F0: "Salir" y "Reiniciar Mundo Dragon", cada uno con su Si/No
 // de 0x2A2C90; 0 cerrado, 1 menu, 2 Si/No).
 bool g_radar = false, g_hud_oculto = false;
+bool g_shen_no = false;   // el deseo pedido no se puede cumplir en B3 (Shenron dice su frase 537 #3)
 // Cuando entro o salio cada parte del marcador (entradas y salidas animadas de DibHud) y cuando se dibujo por ultima vez
 float g_hud_t = -10, g_radar_t = -10, g_rombo_t = -10, g_hud_visto = -10;
 bool g_radar_visto = false;
@@ -229,8 +279,51 @@ float g_menu_t = 0;
 int g_marca = -1, g_marca_icono = 0;   // "?!" o "!!" sobre una casilla
 float g_marca_t = -10;
 float g_cam_x = 0, g_cam_y = 0, g_auto_t = 0;
+std::string g_iso_b2, g_loc_afs;   // de Cargar: para leer escenas en marcha
+// Musica del tablero (R7, ELF 0x2460D0/0x246190): la pista es la variable 0x6992DB que pone la orden 71 de los guiones
+// (0x293700), no la fase; indice -> tabla .data 0x377E90 (u32 0x20000 | entrada de ADX_US.AFS). Medido en el ELF y en
+// los 9 #YDW: fases I-IX empiezan con 0, 2, 1, 3, 4 (luego 7), 7, 6, 5, 8.
+int g_musica = -1;
+int PistaB2(int i) {
+  // las 19 entradas de la tabla (0x377E90; la 20.a es 0)
+  static const int kTabla[19] = {265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 262, 1158, 1159, 1155, 1133,
+                                 1160, 1134, 1156, 1148};
+  return i >= 0 && i < 19 ? kTabla[i] : -1;
+}
+
+// Audio de eventos del tablero. FUN_002350C0 carga los bancos DATA 185/186/187 (0x10000|185.. en 0x6993A0/A4/A8,
+// b2.c:188732-188742) junto al HUD 397/398; los efectos del tablero se piden por el canal 3 con FUN_00147260(3,0,id,0)
+// y cada uno corta al anterior. [H] el enlace canal 3 -> banco 185 necesita la captura en PCSX2 (runbook en VERIFICACION.md).
+void SonidoEventoB2(const char* evento, int id) {
+  if (g_iso_b2.empty() || id < 0 || id >= 22) return;
+  const bool prueba = std::getenv("DBZ3_TEST_MUSICA") != nullptr;
+  const float vol = dbz3::settings::AudioMute() ? 0.0f : float(dbz3::settings::MasterVolume()) * 0.7f;
+  REXLOG_INFO("dbz3 tablero b2: audio evento {}: IECS cuerpo 185 id {} tipo 5 volumen {:.2f} solo_decodificar {}",
+              evento, id, vol, prueba);
+  OirSonidoPs2(g_iso_b2, g_loc_afs, 185, id, 5, prueba ? 1.0f : vol, 0, prueba);   // tipo 5 = eventos (no corta musica)
+}
+// Cruces de los cuadros de pisada del original (FUN_00275EB0: Goku id 5 en los cuadros 5 y 23; el resto id 6 en el 13).
+// [H] la repeticion del clip en caminos largos (>24 cuadros) puede pedir mas cruces; captura pendiente.
+void SonidosPasosB2(float anterior, float ahora) {
+  if (anterior < 0 || ahora < anterior) return;
+  for (const Ficha& f : g_f) {
+    if (f.fuera || f.oculta || f.desde == f.casilla) continue;
+    const float inicio = f.t_mov + f.t_giro;
+    auto cruce = [&](float cuadro, int id) {
+      const float cuando = inicio + cuadro / 60.0f;
+      if (cuadro / 60.0f < f.t_dur && anterior < cuando && cuando <= ahora) SonidoEventoB2("paso", id);
+    };
+    if (f.c == kGoku) {
+      cruce(5, 5);
+      cruce(23, 5);
+    } else {
+      cruce(13, 6);
+    }
+  }
+}
 
 void DarCapsulaB3(int c);   // abajo (inventario de capsulas de la partida)
+void VarianteGoku();        // orden 82 (abajo): Goku del tablero con CMN 339/340
 void Aviso(const std::string& m, int icono = -1) {
   g_msg = m;
   g_msg_icono = icono;
@@ -280,7 +373,9 @@ bool Cargar(int fase) {
     for (int j = 0; j < 4; ++j) c.vec[j] = u16(o + 8 + 2 * j) < int(n1) ? u16(o + 8 + 2 * j) : 0;
     c.tipo = int(u32(o + 0x10));
     c.destino = int(u32(o + 0x14)) < int(n1) ? int(u32(o + 0x14)) : 0;
+    c.escenario = y[o + 0x18];
     c.condicion = y[o + 0x19];
+    c.musica = y[o + 0x1F];   // M4: la pista del combate de la casilla (ver PistaCombateB2)
     c.lucha = y[o + 0x1C] == 0x0A;
     d.casillas.push_back(c);
   }
@@ -298,6 +393,7 @@ bool Cargar(int fase) {
     // +3/+4: tipo de movimiento inicial y su dato (ELF 0x2791A0 los copia a +0x1C/+0x1D, los mismos que cambia la orden 50)
     f.mov = y[o + 3] <= 8 ? y[o + 3] : 0;
     f.mov_p = y[o + 4];
+    f.estado0 = y[o + 5];
     if (f.casilla <= 0 || f.casilla >= int(n1)) continue;
     f.desde = f.casilla;
     d.piezas.push_back(f);
@@ -320,9 +416,11 @@ bool Cargar(int fase) {
     const uint32_t n3 = u32(0x30), o3 = u32(0x34), n6 = u32(0x48), o6 = u32(0x4C);
     for (uint32_t i = 0; i < n3 && i < 4096; ++i) {
       const size_t q = u32(o3 + 4 * size_t(i));
-      std::array<int, 5> r{};
+      std::vector<int> r(5, 0);
       for (int k = 0; k < 5 && q + 20 <= y.size(); ++k) r[size_t(k)] = int32_t(u32(q + 4 * size_t(k)));
-      d.t3.push_back(r);
+      for (int k = 0; k < r[4] && k < 16 && q + 24 + 4 * size_t(k) <= y.size(); ++k)
+        r.push_back(int32_t(u32(q + 20 + 4 * size_t(k))));
+      d.t3.push_back(std::move(r));
     }
     const uint32_t n4 = u32(0x38), o4 = u32(0x3C);
     for (uint32_t i = 0; i < n4 && i < 4096; ++i) {
@@ -353,6 +451,8 @@ bool Cargar(int fase) {
         for (int k = 0; k < 6; ++k) o[size_t(k)] = int32_t(u32(q + 4 + 24 * size_t(c) + 4 * size_t(k)));
         g.push_back(o);
       }
+      for (const auto& o : g)
+        if (o[1] == 71 && d.musica0 < 0) d.musica0 = o[2];
       d.guiones.push_back(std::move(g));
     }
   }
@@ -391,6 +491,14 @@ bool Cargar(int fase) {
         sp.u1 = af(q + 0x28) + 1;
         sp.v1 = af(q + 0x2C) + 1;
       }
+      const uint32_t nb = a32(o + 0x38);
+      if (nb < 256 && q <= am.size() && size_t(nb) <= (am.size() - q) / 0x30) {
+        for (uint32_t j = 0; j < nb; ++j) {
+          const size_t b = q + 0x30 * size_t(j);
+          sp.recortes.push_back({float(a32(b)), int32_t(a32(b + 4)), af(b + 0x20), af(b + 0x24),
+                                 af(b + 0x28) + 1, af(b + 0x2C) + 1});
+        }
+      }
       const uint32_t na = a32(o + 0x30), oa = a32(o + 0x34);
       if (na > 0 && na < 256 && oa + 0x20 * size_t(na) <= am.size()) {
         sp.px = af(oa + 0x20 * (size_t(na) - 1) + 0x10);
@@ -402,6 +510,11 @@ bool Cargar(int fase) {
           sp.claves.push_back({float(a32(q2)), af(q2 + 0x10), af(q2 + 0x14), af(q2 + 0x1C), af(q2 + 4), af(q2 + 8), af(q2 + 0xC)});
         }
       }
+      auto num = [&](size_t q) {   // float o entero, segun venga
+        const float f = af(q);
+        return f >= 0.5f && f < 100000.0f ? f : float(a32(q) < 100000 ? a32(q) : 0);
+      };
+      sp.dur = std::max(num(o + 0x20), num(o + 0x24));
       out.push_back(sp);
     }
   };
@@ -413,21 +526,46 @@ bool Cargar(int fase) {
                                    : lc == "de" ? "DATA_DU.AFS" : "DATA_UK.AFS"))
     loc.Abrir(iso, "DATA_UK.AFS");
   amt(loc, 146 + size_t(fase), d.loc);
+  amt(loc, 184, d.aliados);
+  leer_ama(399, d.aliados_ama);
+  g_iso_b2 = iso.string();
+  g_loc_afs = lc == "es" ? "DATA_SP.AFS" : lc == "fr" ? "DATA_FR.AFS" : lc == "it" ? "DATA_IT.AFS" : lc == "de" ? "DATA_DU.AFS"
+                                                                                                 : "DATA_UK.AFS";
   // Deseos de Shenron, en el orden de sus archivos: 540 (#0 "Portal de la nave de Babidi", trajes de Bulma), 539
   // (fusion y Pothala) y 538 ("Avance" de cada personaje).
   amt(loc, 540, d.deseos);
   amt(loc, 539, d.deseos);
   amt(loc, 538, d.deseos);
   amt(loc, 537, d.shen_frases);   // "Te concedere un deseo.", "Si, eso es aceptable.", ..., "Ahora debo irme..."
+  amt(loc, 535, d.shen_frases);   // #6: "Tu, que has reunido las 7 Bolas..." (la pide el #SPX 329: builtin 0x157, loc 535)
   amt(cmn, 850, d.shen_marco);
   leer_ama(849, d.shen_ama);
-  for (size_t j = 0; j < d.loc.size(); ++j) {
-    if (d.loc[j].w == 240 && d.loc[j].h == 72) d.stage = int(j);
-    if (d.loc[j].w == 560 && d.loc[j].h == 128 && d.objetivo < 0) d.objetivo = int(j);
-  }
+  // Encargo 03/3: "Stage N" (240x72) y el primer objetivo (560x128) del #AMA 343+5k tienen su textura
+  // en un indice FIJO dentro de DATA_<idioma> 146+k (medido: datos/ama343.json; record 0 = objetivo,
+  // ultimos records = el rotulo de la fase). Antes se elegian por tamano y, con dos imagenes iguales
+  // (fases IV/V/VI/VII tienen varias de 560x128), salia la primera en vez del indice de la fase.
+  static const int kLocStage[kFases] = {35, 16, 22, 36, 16, 9, 7, 7, 31};
+  static const int kLocObjetivo[kFases] = {28, 1, 0, 0, 0, 0, 0, 0, 0};
+  auto elige = [&](int idx, int w, int h) {
+    return idx >= 0 && idx < int(d.loc.size()) && d.loc[size_t(idx)].w == w && d.loc[size_t(idx)].h == h;
+  };
+  d.stage = elige(kLocStage[fase], 240, 72) ? kLocStage[fase] : -1;
+  d.objetivo = elige(kLocObjetivo[fase], 560, 128) ? kLocObjetivo[fase] : -1;
+  REXLOG_INFO("dbz3 tablero b2: fase {}: imagenes de fase: Stage {} (240x72), objetivo {} (560x128)", fase + 1,
+              d.stage, d.objetivo);
+  // M9 (mod opcional b2.goku_variante): con el mod activo, el tablero carga ya la variante de Goku CMN 339/340
+  // (reutiliza VarianteGoku() del encargo 03; la orden 82 de los guiones sigue funcionando igual).
+  if (std::getenv("DBZ3_TEST_B2_VARIANTE") || dbz3::opcional::Activo("b2.goku_variante"))
+    VarianteGoku();   // PRUEBA: fuerza la variante de Goku (orden 82)
+  if (d.stage < 0 || d.objetivo < 0)   // otra ISO/idioma: respaldo por tamano (como antes)
+    for (size_t j = 0; j < d.loc.size(); ++j) {
+      if (d.stage < 0 && d.loc[j].w == 240 && d.loc[j].h == 72) d.stage = int(j);
+      if (d.objetivo < 0 && d.loc[j].w == 560 && d.loc[j].h == 128) d.objetivo = int(j);
+    }
   if (g_d.iconos.empty()) {
     amt(loc, 188, d.hud);
     leer_ama(402, d.hud_ama);
+    leer_ama(397, d.life_ama);
     amt(cmn, 398, d.iconos);
     std::vector<Imagen> v;
     amt(cmn, 404, v);
@@ -447,6 +585,7 @@ bool Cargar(int fase) {
     d.iconos = std::move(g_d.iconos);
     d.hud = std::move(g_d.hud);
     d.hud_ama = std::move(g_d.hud_ama);
+    d.life_ama = std::move(g_d.life_ama);
     d.game_over = std::move(g_d.game_over);
     d.goku = std::move(g_d.goku);
     d.hoyo = std::move(g_d.hoyo);
@@ -457,11 +596,35 @@ bool Cargar(int fase) {
               iso.filename().string(), d.ancho, d.alto, d.mapa.size(), d.cols, d.casillas.size() - 1, d.piezas.size(),
               d.objetos.size(), d.fichas.size(), d.iconos.size(), d.colocados.size(), d.sprites.size(), d.loc.size(), lc,
               d.goku ? "si" : "no");
+  if (std::getenv("DBZ3_TEST_B2_DUMP")) {   // PRUEBA: vuelca piezas, disparadores y guiones de la fase
+    for (const Ficha& f : d.piezas)
+      REXLOG_INFO("dbz3 b2 dump: pieza {} pj {} ficha {} bando {} mov {} ({}) casilla {}", f.n, f.c, f.idx, f.bando,
+                  f.mov, f.mov_p, f.casilla);
+    for (const auto& t : d.t3) REXLOG_INFO("dbz3 b2 dump: t3 {} {} {} {} {}", t[0], t[1], t[2], t[3], t[4]);
+    for (const auto& t : d.t4) {
+      std::string l;
+      for (int v : t) l += std::to_string(v) + " ";
+      REXLOG_INFO("dbz3 b2 dump: t4 {}", l);
+    }
+    for (const auto& t : d.t5) {
+      std::string l;
+      for (int v : t) l += std::to_string(v) + " ";
+      REXLOG_INFO("dbz3 b2 dump: t5 {}", l);
+    }
+    for (size_t k = 0; k < d.guiones.size(); ++k) {
+      std::string l;
+      for (const auto& o : d.guiones[k])
+        l += "[" + std::to_string(o[0]) + ":" + std::to_string(o[1]) + " " + std::to_string(o[2]) + "," +
+             std::to_string(o[3]) + "," + std::to_string(o[4]) + "," + std::to_string(o[5]) + "] ";
+      REXLOG_INFO("dbz3 b2 dump: guion {} {}", k, l);
+    }
+  }
   if (d.mapa.empty() || d.iconos.size() < 30) {
     if (g_d.iconos.empty()) {   // devuelve lo prestado a la fase en curso
       g_d.iconos = std::move(d.iconos);
       g_d.hud = std::move(d.hud);
       g_d.hud_ama = std::move(d.hud_ama);
+      g_d.life_ama = std::move(d.life_ama);
       g_d.game_over = std::move(d.game_over);
       g_d.goku = std::move(d.goku);
       g_d.hoyo = std::move(d.hoyo);
@@ -472,6 +635,37 @@ bool Cargar(int fase) {
   g_d = std::move(d);
   return true;
 }
+
+// ---- Pasos y giros de las piezas (R7) ----
+constexpr float kVelGiro = 0.19635f * 60.0f;   // 0x800 de 0x10000 por cuadro de 60 Hz, en radianes por segundo
+float Dif(float a, float b) { return std::remainder(b - a, 6.2831853f); }
+float GiroDe(const Ficha& f, float t) {
+  const float e = t - f.t_mov;
+  if (e < 0) return f.giro0;
+  if (e < f.t_giro) return f.giro0 + Dif(f.giro0, f.giro1) * (e / f.t_giro);
+  const float vuelta = std::fabs(Dif(f.giro1, 0.0f)) / kVelGiro, b = e - f.t_giro - f.t_dur;
+  if (b <= 0) return f.giro1;
+  return b >= vuelta ? 0.0f : f.giro1 + Dif(f.giro1, 0.0f) * (b / vuelta);
+}
+bool Andando(const Ficha& f, float t) {
+  const float e = t - f.t_mov - f.t_giro;
+  return f.desde != f.casilla && e >= 0 && e < f.t_dur;
+}
+// La pieza empieza a andar de su casilla a `dest`: gira (si no es del jugador) y anda L / 4 cuadros.
+void EmpezarPaso(Ficha& f, int dest, float ahora) {
+  const float g = GiroDe(f, ahora);
+  const auto &a = g_d.casillas[size_t(f.casilla)], &b = g_d.casillas[size_t(dest)];
+  const float dx = b.x - a.x, dy = b.y - a.y;
+  f.giro0 = g;
+  f.giro1 = dx != 0 || dy != 0 ? std::atan2(dx, dy) : 0.0f;
+  f.t_giro = f.jugador ? 0.0f : std::fabs(Dif(g, f.giro1)) / kVelGiro;
+  if (f.jugador) f.giro0 = f.giro1;
+  f.t_dur = std::max(0.1f, std::hypot(dx, dy) / 240.0f);
+  f.t_mov = ahora;
+  f.desde = f.casilla;
+  f.casilla = dest;
+}
+float TiempoPaso(const Ficha& f) { return f.t_giro + f.t_dur; }
 
 // ---- Reglas ----
 bool Activa(const Ficha& f) { return !f.fuera && !f.oculta; }
@@ -505,11 +699,14 @@ void Preparar() {
     if (g_d.piezas[i].bando == 0 && g_d.piezas[i].c != kSaibaman && B2aB3(g_d.piezas[i].c) >= 0) g_cand.push_back(int(i));
   }
   g_comp = g_cand.empty() ? 0 : std::clamp(g_comp, 0, int(g_cand.size()) - 1);
+  g_elegir = 0;
+  g_fase_sig = -1;
   g_pend_j = g_pend_r = -1;
   g_luchando = false;
 }
 
 void Guion(int k, int prof);
+void AbrirEscena(int letra, int n);
 void Empezar() {
   g_f = g_d.piezas;
   g_obj = g_d.objetos;
@@ -517,17 +714,14 @@ void Empezar() {
   g_jefe = -1;
   for (size_t i = 0; i < g_f.size(); ++i) {
     Ficha& f = g_f[i];
-    f.oculta = f.bando == 0 && f.c == kSaibaman;   // ponytail: Saibaman enterrado, sale al buscar en su casilla
     f.rival = (f.bando & 2) != 0;
     f.jugador = f.bando == 4 && !f.rival;
-    if (f.bando == 0 && !f.oculta) f.fuera = true;
-    if (f.rival && !f.oculta && (g_jefe < 0 || f.barras_max >= g_f[size_t(g_jefe)].barras_max)) g_jefe = int(i);
+    // las de estado 1/2/6 no estan en el tablero hasta que su guion las saca (sembrar, orden 32, orden 55)
+    f.oculta = (f.bando == 0 && f.c == kSaibaman) || (f.rival && f.estado0 != 0);
+    if (f.bando == 0 && f.c != kSaibaman) f.fuera = true;
+    if (f.rival && (g_jefe < 0 || f.barras_max >= g_f[size_t(g_jefe)].barras_max)) g_jefe = int(i);
   }
-  if (!g_cand.empty()) {   // ponytail: un companero por fase (la IV lleva dos en el original)
-    Ficha& c = g_f[size_t(g_cand[size_t(g_comp)])];
-    c.fuera = false;
-    c.jugador = true;
-  }
+  // los aliados salen en la orden 69 del guion de inicio (g_elegir), no aqui
   g_sel = 0;
   for (size_t i = 0; i < g_f.size(); ++i) {
     Ficha& f = g_f[i];
@@ -552,23 +746,27 @@ void Empezar() {
   }
   g_turno = 1;
   g_radar = false;
+  // R7: la banda (D_RADARBASE, bit 0x02 de 0x6992DC) no sale sola al empezar: solo si el jugador la dejo puesta con L1
+  // (bit 0x08, guardado con la partida; FUN_0026FFF0 al empezar el turno), al coger una Bola (0x26F340) o el Radar
+  g_hud_oculto = LeerProgreso("tablero_b2_marcador", 0) == 0;
   // PRUEBA: DBZ3_TEST_B2_RADAR=1 empieza con el Radar del Dragon; DBZ3_TEST_B2_BOLAS=N (7 bits) con esas Bolas en la barra
   if (std::getenv("DBZ3_TEST_B2_RADAR")) g_radar = true;
   if (const char* b = std::getenv("DBZ3_TEST_B2_BOLAS")) g_bolas |= std::atoi(b) & 0x7F;
   g_menu = 0;
   g_mensajes.clear();
-  std::fill(g_banderas.begin(), g_banderas.end(), 0u);
+  LeerBanderas();   // R7: las de las fases anteriores siguen (FUN_00238870 copia 0x693A1C -> 0x699260)
+  g_musica = g_d.musica0;
   for (const auto& t : g_d.t3)   // disparadores del turno 1 (al empezar la fase)
-    if (t[0] == -1 && t[1] == 0 && t[2] == 1) Guion(t[3], 0);
+    if (t[0] == -1 && t[1] == 0 && t[2] == 1 && Condiciones(t, 5)) Guion(t[3], 0);
   g_dest = -1;
   g_estado = kJuego;
   g_msg.clear();
+  if (g_d.fase == 0) AbrirEscena('T', 155);   // la intro del Mundo Dragon: Goku se lanza a la batalla
   const Casilla& c = g_d.casillas[size_t(g_f[size_t(g_sel)].casilla)];
   g_cam_x = c.x;
   g_cam_y = c.y;
-  REXLOG_INFO("dbz3 tablero b2: fase {} empieza: {} con {}, jefe {}", g_d.fase + 1, Nombre(g_f[size_t(g_sel)]),
-              g_cand.empty() ? std::string("nadie") : Nombre(g_d.piezas[size_t(g_cand[size_t(g_comp)])]),
-              g_jefe >= 0 ? Nombre(g_f[size_t(g_jefe)]) : std::string("ninguno"));
+  REXLOG_INFO("dbz3 tablero b2: fase {} empieza: {}, {} candidatos a aliado, jefe {}", g_d.fase + 1,
+              Nombre(g_f[size_t(g_sel)]), g_cand.size(), g_jefe >= 0 ? Nombre(g_f[size_t(g_jefe)]) : std::string("ninguno"));
 }
 
 void Guion(int k, int prof);
@@ -580,8 +778,6 @@ int PersonajeDe(int n) {   // personaje (+0 del registro de T2) de la pieza n
   return -1;
 }
 void SucesosDeContacto(const Ficha& a, const Ficha& b) {
-  for (const auto& t : g_d.t3)
-    if (t[2] == 0 && ((t[0] == a.n && t[1] == b.n) || (t[0] == b.n && t[1] == a.n))) Guion(t[3], 0);
   g_suceso = -1;
   for (size_t i = 1; i < g_d.t4.size(); ++i) {   // como el ELF, desde la fila 1
     const auto& r = g_d.t4[i];
@@ -599,11 +795,15 @@ void SucesosDeContacto(const Ficha& a, const Ficha& b) {
     break;
   }
 }
-// Tras el combate del contacto: T5 de esa fila con el suceso (3 gana el jugador, 4 pierde: sin confirmar; 5 cualquiera).
-void SucesosDeCombate(bool gana) {
+// Tras el combate del contacto: T5 de esa fila con el suceso (ELF 0x235410 -> 0x27F3A0). R7: el codigo es 1 gana el
+// jugador, 4 gana y el rival queda fuera (FUN_0027A0D0), 2 gana el rival, 3 gana el rival y la ficha del jugador queda
+// fuera; 5 = cualquiera. Comprobado con los datos: fase IV, T4 #27 Goku contra Cell, suceso 4 -> guion 413 -> 306 (orden
+// 41, fase superada).
+void SucesosDeCombate(bool gana, bool fuera) {
   if (g_suceso < 0) return;
+  const int cod = gana ? (fuera ? 4 : 1) : (fuera ? 3 : 2);
   for (const auto& r : g_d.t5) {
-    if (r[0] != g_suceso || (r[1] != 5 && r[1] != (gana ? 3 : 4)) || !Condiciones(r, 4)) continue;
+    if (r[0] != g_suceso || (r[1] != 5 && r[1] != cod) || !Condiciones(r, 4)) continue;
     REXLOG_INFO("dbz3 tablero b2: tras el suceso {}: script {}", g_suceso, r[2]);
     Guion(r[2], 0);
     break;
@@ -624,6 +824,7 @@ void Contacto(int j, int r) {
                                          " can't fight here (Budokai 2-only character)."));
     return;
   }
+  SonidoEventoB2("contacto", 7);   // FUN_00235780 (b2.c:188927-188928): efecto del contacto antes del combate
   Aviso(Nombre(g_f[size_t(j)]) + T::T(" contra ", " versus ") + Nombre(g_f[size_t(r)]) + "!", 8);
 }
 
@@ -640,6 +841,10 @@ void Coger(Ficha& f, Objeto& o) {
       g_bolas_fase.erase(g_bolas_fase.begin() + b);
       GuardarProgreso("tablero_b2_bolas", g_bolas);
       g_bola_t = g_ahora;   // D_DBGET: sin letrero; la Bola entra en la barra del marcador
+      if (g_hud_oculto) {   // la banda entra con la Bola (0x26F340 -> 0x26FFF0)
+        g_hud_oculto = false;
+        g_hud_t = g_radar_t = g_ahora;
+      }
       REXLOG_INFO("dbz3 tablero b2: ¡Una Bola de Dragón! (bolas {:#x})", g_bolas);
       return;
     }
@@ -737,7 +942,8 @@ int PasoA(int desde, int meta) {
       paso = v;
     }
   }
-  if (paso > 0 && FichaEn(paso, true) >= 0 && FichaEn(paso, false) < 0) return -1;
+  // 0x276B80 solo descarta el paso si en la vecina hay una pieza del mismo bando con +0xC == 1, y FUN_002791A0 deja +0xC a
+  // 0 al cargar: los rivales pueden pasar por donde hay otro (R7; antes un Saibaman sembrado dejaba a Raditz parado)
   return paso;
 }
 
@@ -749,15 +955,16 @@ int PasoA(int desde, int meta) {
 // Script k de la fase: de sus ordenes se portea la 50 (tipo de movimiento de una pieza: pieza, tipo, dato; ELF 0x293EE0)
 // y la 44 (salta a otro script, 0x294450). ponytail: las demas (dialogos, camara, apariciones, combates, objetos) siguen
 // sin portear; su lista y lo que llama cada una: E:/DBZ3HD_trabajo/R2/scr_ops.txt.
-void Guion(int k, int prof) {
-  if (k < 0 || k >= int(g_d.guiones.size()) || prof > 8) return;
-  for (const auto& o : g_d.guiones[size_t(k)]) {
-    if (o[1] == 44) return Guion(o[2], prof + 1);   // salta (no vuelve)
+bool EscenaAbierta();
+float OrdenEscena(int k, const std::array<int, 6>& o);
+float Orden(int k, const std::array<int, 6>& o) {
+  float espera = 0;
+  {
     if (o[1] >= 1 && o[1] <= 3 && o[2] >= 0 && o[2] < 2048) {   // banderas
       uint32_t& w = g_banderas[size_t(o[2]) >> 5];
       const uint32_t b = 1u << (o[2] & 31);
       w = o[1] == 1 ? (w | b) : o[1] == 2 ? (w & ~b) : (w ^ b);
-      continue;
+      return espera;
     }
     // 63/64 {pieza, casilla}: la pieza va andando a esa casilla (ELF 0x277540; -1 = la suya). 58-62 animan el modelo 3D de
     // la pieza (58-60 animacion +0x1C, 61/62 la giran hacia un angulo +0x24 en pasos de 0x800/0x10000) y 65/66 la llevan
@@ -765,12 +972,11 @@ void Guion(int k, int prof) {
     if ((o[1] == 63 || o[1] == 64) && o[3] > 0 && o[3] < int(g_d.casillas.size())) {
       for (Ficha& f : g_f) {
         if (f.n != o[2]) continue;
-        f.desde = f.casilla;
-        f.casilla = o[3];
-        f.t_mov = g_ahora;
+        EmpezarPaso(f, o[3], g_ahora);
         REXLOG_INFO("dbz3 tablero b2: script {}: {} anda a la casilla {}", k, Nombre(f), o[3]);
+        espera = TiempoPaso(f);
       }
-      continue;
+      return espera;
     }
     if (o[1] == 55 || o[1] == 57 || o[1] == 72 || o[1] == 73) {   // colocar pieza / cambiar su ficha (ELF 0x27A370,
       // 0x27A3F0, 0x276B30, 0x276AD0): 55 {pieza, casilla}, 57 {pieza, otra} a la casilla de la otra, 72 {pieza, ficha},
@@ -781,17 +987,13 @@ void Guion(int k, int prof) {
         if (f.n == o[2]) pa = &f;
         if (f.n == o[3]) pb = &f;
       }
-      if (!pa) continue;
+      if (!pa) return espera;
       if (o[1] == 55 && o[3] > 0 && o[3] < int(g_d.casillas.size())) pa->casilla = pa->desde = o[3];
       if (o[1] == 57 && pb) pa->casilla = pa->desde = pb->casilla;
       if (o[1] == 72) pa->idx = o[3];
       if (o[1] == 73 && pb) pa->idx = pb->idx;
       REXLOG_INFO("dbz3 tablero b2: script {}: orden {} ({}, {}) a {}", k, o[1], o[2], o[3], Nombre(*pa));
-      continue;
-    }
-    if (o[1] == 41 || o[1] == 42) {   // pantalla de suceso del original (escena o combate de historia)
-      REXLOG_INFO("dbz3 tablero b2: script {}: suceso {} ({}) sin portear", k, o[1], o[2]);   // ponytail: falta su escena
-      continue;
+      return espera;
     }
     if (o[1] == 38) {
       auto dentro = [](int k) {
@@ -802,52 +1004,329 @@ void Guion(int k, int prof) {
         g_mensajes.push_back({o[2], o[3]});
         REXLOG_INFO("dbz3 tablero b2: script {}: mensaje {} y {}", k, o[2], o[3]);
       }
+      return espera;
+    }
+    if (o[1] == 41 || o[1] == 42 || o[1] == 43) {   // fin de la fase (ver g_fase_sig)
+      if (o[1] == 43) {
+        g_estado = kPerdida;
+        REXLOG_INFO("dbz3 tablero b2: script {}: orden 43, fase {} perdida", k, g_d.fase + 1);
+      } else {
+        g_fase_sig = o[1] == 41 ? std::clamp(o[2], 0, kFases - 1) : -1;
+        g_estado = kGanada;
+        if (o[1] == 41) GuardarProgreso("tablero_b2_fase", g_fase_sig);
+        GuardarBanderas(o[1] == 42);   // 0x238320 las guarda; la 42 borra la partida del Mundo Dragon
+        REXLOG_INFO("dbz3 tablero b2: script {}: orden {}, fase {} completada (siguiente {}, bolas {:#x})", k, o[1],
+                    g_d.fase + 1, g_fase_sig + 1, g_bolas);
+      }
+      return espera;
+    }
+    if (o[1] == 69) {
+      int libres = 0;
+      for (int c : g_cand) libres += g_f[size_t(c)].fuera;
+      g_elegir = std::min(o[2], libres);
+      g_comp = 0;
+      REXLOG_INFO("dbz3 tablero b2: script {}: eleccion de {} aliado(s) entre {}", k, g_elegir, libres);
+      return espera;
+    }
+    if (o[1] >= 74 && o[1] <= 79 && !g_iso_b2.empty()) {   // sonido {id, cuadros}: ELF 0x293630..0x2933B0
+      // 74/75/76 una vez, 77/78/79 en bucle cada a1 cuadros; tipo 0/3/4. Tipo 4 = banco de la fase (DATA_<idioma> 156+3k:
+      // cuerpo, 157+3k indice de 19 sonidos); tipo 3 = banco general (142/143, 26 sonidos; el id 22 de la orden 75 no cabe
+      // en los 19 de la fase). Tipo 0 (nunca aparece) = el de la fase. R7 b2_sonido.
+      const int tipo = (o[1] - 74) % 3 == 1 ? 3 : (o[1] - 74) % 3 == 2 ? 4 : 0;
+      const int cuerpo = tipo == 3 ? 142 : 156 + 3 * std::max(g_d.fase, 0);
+      const float vol = dbz3::settings::AudioMute() ? 0.0f : float(dbz3::settings::MasterVolume()) * 0.7f;
+      REXLOG_INFO("dbz3 tablero b2: script {}: orden {}: sonido tipo {} id {} ({})", k, o[1], tipo, o[2],
+                  o[1] >= 77 ? "bucle" : "una vez");
+      const bool prueba = std::getenv("DBZ3_TEST_MUSICA") != nullptr;
+      OirSonidoPs2(g_iso_b2, g_loc_afs, cuerpo, o[2], tipo, prueba ? 1.0f : vol,
+                   o[1] >= 77 ? std::max(o[3], 1) * 1000 / 60 : 0, prueba);
+      return espera;
+    }
+    if (o[1] == 71) {   // musica (uRam006992DB = a0)
+      g_musica = o[2];
+      REXLOG_INFO("dbz3 tablero b2: script {}: musica {} (ADX_US {})", k, o[2], PistaB2(o[2]));
+      return espera;
+    }
+    if (o[1] == 82) {   // variante del Goku del tablero (ELF 0x293140): CMN 339/340 + bit 0x04 de 0x6992DC
+      VarianteGoku();
+      REXLOG_INFO("dbz3 tablero b2: script {}: orden 82 (variante de Goku)", k);
+      return espera;
+    }
+    if (o[1] == 50) {
+      for (Ficha& f : g_f) {
+        if (f.n != o[2]) continue;
+        f.mov = o[3];
+        f.mov_p = o[4];
+        REXLOG_INFO("dbz3 tablero b2: script {}: {} pasa al movimiento {} ({})", k, Nombre(f), f.mov, f.mov_p);
+      }
+      return espera;
+    }
+    return OrdenEscena(k, o);
+  }
+}
+
+// Los guiones corren como hilos (ELF 0x295F20): las ordenes con el mismo paso (primer campo) a la vez y el paso siguiente
+// cuando acaban las que esperan (orden 7, efectos 28, andar, camara, ventanas). La 44 salta a otro guion sin volver.
+struct Hilo {
+  int guion = 0;
+  size_t i = 0;
+  float hasta = 0;
+};
+std::vector<Hilo> g_hilos;
+void Guion(int k, int prof) {
+  (void)prof;
+  if (k < 0 || k >= int(g_d.guiones.size()) || g_d.guiones[size_t(k)].empty()) return;
+  if (g_hilos.size() < 32) g_hilos.push_back({k, 0, g_ahora});
+}
+bool HilosOcupados() { return !g_hilos.empty(); }
+
+// ---- Escenas, efectos y camara de los guiones (escenas: tras Tex) ----
+void AbrirEscena(int letra, int n);
+void AbrirMensajeSpx(int orden, int a0);
+// Efectos de los guiones (18/27 en una casilla, 19/28 en una pieza: los 29-43 y 59-73 son el Saibaman que brota) y la
+// camara (9, 11: a una pieza). ponytail: los efectos #SPX del original (banco uRam00698DC4) no estan portados; aqui la pieza
+// sembrada sale de su agujero (DibPieza) y las demas aparecen con un destello.
+// Camara de los guiones (ELF: ordenes 9-12 = 0x295BD0.. con paso lineal FUN_0023ACB0, 5 px por cuadro y por eje hasta
+// llegar; 13-16 = suave FUN_0023AF30, 1/12 de la distancia por cuadro, durante a1 cuadros). 9/10/13/14 van a la casilla
+// a0 (la tabla de 0x34 B de la cabecera +0x24 = T1), 11/12/15/16 a la pieza a0. Se queda alli mientras corren los guiones.
+int g_cam_pieza = -1, g_cam_casilla = 0;
+bool g_cam_script = false, g_cam_lineal = false;
+float g_cam_hasta = -10;
+ImVec2 PosFicha(const Ficha& f);
+// R7: ordenes 17/20/23 (en x, y del mapa; a3 = cuadros de retraso), 26/29 (igual, y el guion espera a que acabe), 18/27
+// (en la casilla a1) y 19/28 (en la pieza a1): efecto a0 del banco #AMA 343+5k (la llegada de las capsulas de Raditz y
+// Nappa, el crater, el brote de los Saibaman...), con su animacion y su duracion (FUN_0023B900, pool de 500).
+struct Efecto {
+  int k = 0;
+  float x = 0, y = 0, t0 = 0, dur = 0;
+};
+std::vector<Efecto> g_efectos;
+float PonerEfecto(int k, float x, float y, float retraso) {
+  if (k < 0 || k >= int(g_d.textos.size())) return 0;
+  const float dur = std::max(1.0f, g_d.textos[size_t(k)].dur) / 60.0f;
+  if (g_efectos.size() < 500) g_efectos.push_back({k, x, y, g_ahora + retraso, dur});
+  return retraso + dur;
+}
+void Aparecer(Ficha& f, const char* por) {
+  if (!f.oculta) return;
+  f.oculta = false;
+  f.brote_t = g_ahora;
+  REXLOG_INFO("dbz3 tablero b2: aparece {} en la casilla {} ({})", Nombre(f), f.casilla, por);
+}
+float OrdenEscena(int k, const std::array<int, 6>& o) {
+  (void)k;
+  switch (o[1]) {
+    case 4: case 5: case 6:   // FUN_002929A0: #SPX de CMN 450 / 612 / 943 + a0 = ventana de mensaje M/P/T (AbrirMensajeSpx)
+      // M11 (mod opcional b2.efectos_spx): las ventanas de mensaje de las ordenes 4/5/6 las ensena el port desde
+      // R7/b2/INFORME_shenron.md; el mod solo las enciende o apaga. Sin el mod instalado vale el defecto del port
+      // (salen); con el instalado manda su casilla (activado: salen; desactivado: no, se espera su tiempo).
+      // (Para que el defecto sin mod sea no verlas: cambiar por `if (!dbz3::opcional::Activo("b2.efectos_spx")) return 0.3f;`.)
+      if (dbz3::opcional::Desactivado("b2.efectos_spx")) return 0.3f;
+      AbrirMensajeSpx(o[1], o[2]);
+      return 0.3f;
+    case 7:   // espera (cuadros de 60 Hz)
+      return std::clamp(float(o[2]) / 60.0f, 0.0f, 5.0f);
+    case 9: case 10: case 11: case 12: case 13: case 14: case 15: case 16: {
+      const bool pieza = o[1] == 11 || o[1] == 12 || o[1] == 15 || o[1] == 16;
+      ImVec2 meta(-1, -1);
+      g_cam_pieza = -1;
+      if (pieza) {
+        for (size_t i = 0; i < g_f.size(); ++i)
+          if (g_f[i].n == o[2]) {
+            g_cam_pieza = int(i);
+            meta = PosFicha(g_f[i]);
+          }
+      } else if (o[2] > 0 && o[2] < int(g_d.casillas.size())) {
+        g_cam_casilla = o[2];
+        meta = ImVec2(g_d.casillas[size_t(o[2])].x, g_d.casillas[size_t(o[2])].y);
+      }
+      if (meta.x < 0) return 0;
+      g_cam_script = true;
+      g_cam_lineal = o[1] <= 12;
+      if (g_cam_lineal)   // espera a llegar: 5 px por cuadro en el eje mas largo
+        return std::min(4.0f, std::max(std::fabs(meta.x - g_cam_x), std::fabs(meta.y - g_cam_y)) / 300.0f + 0.05f);
+      return std::clamp(float(o[3]) / 60.0f, 0.0f, 5.0f);
+    }
+    case 17: case 20: case 23: case 26: case 29: {
+      const float d = PonerEfecto(o[2], float(o[3]), float(o[4]), float(std::max(0, o[5])) / 60.0f);
+      return o[1] == 26 || o[1] == 29 ? std::min(d, 6.0f) : 0;
+    }
+    case 18: case 27: {   // efecto en una casilla: siembra lo que espera alli
+      float d = 0;
+      if (o[3] > 0 && o[3] < int(g_d.casillas.size()))
+        d = PonerEfecto(o[2], g_d.casillas[size_t(o[3])].x, g_d.casillas[size_t(o[3])].y, 0);
+      for (Ficha& f : g_f)
+        if (f.oculta && f.estado0 == 1 && f.casilla == o[3]) Aparecer(f, "sembrado");
+      return o[1] == 27 ? std::min(d, 6.0f) : 0;
+    }
+    case 19: case 28: {
+      float d = 0;
+      for (Ficha& f : g_f)
+        if (f.n == o[3]) {
+          Aparecer(f, "brota");
+          d = PonerEfecto(o[2], g_d.casillas[size_t(f.casilla)].x, g_d.casillas[size_t(f.casilla)].y, 0);
+        }
+      return o[1] == 28 ? std::min(d, 6.0f) : 0;
+    }
+    case 32:
+      for (Ficha& f : g_f)
+        if (f.n == o[2]) {
+          Aparecer(f, "orden 32");   // la charla de Raditz y Nappa es la orden 4 siguiente del guion 301 (M001 = loc 207)
+        }
+      return 0.2f;
+  }
+  return 0;
+}
+
+// Disparadores de casilla (T3 {A, B, 0, guion, N, banderas}, ELF 0x27F7E0, tras mover la pieza activa, del jugador o
+// rival): pieza A (0 = cualquiera) en la casilla B (0 = cualquiera). R7: las filas sin banderas tambien (fase I: una pieza
+// del jugador en la casilla 15 de la Bola = guion 303 = orden 41, fase superada; Raditz o Nappa alli = 304, derrota).
+void SucesosDeCasilla(const Ficha& f) {
+  for (const auto& t : g_d.t3) {
+    if (t[2] != 0 || t[0] < 0 || (t[0] != 0 && t[0] != f.n) || (t[1] != 0 && t[1] != f.casilla)) continue;
+    if (!Condiciones(t, 5)) continue;
+    REXLOG_INFO("dbz3 tablero b2: {} en la casilla {}: script {}", Nombre(f), f.casilla, t[3]);
+    Guion(t[3], 0);
+    break;
+  }
+}
+
+
+void CorrerHilos() {
+  struct Fin {   // registro: los guiones acaban (la prueba "tablero" espera a esto para mover)
+    ~Fin() {
+      if (antes && g_hilos.empty()) REXLOG_INFO("dbz3 tablero b2: guiones terminados (turno {})", g_turno);
+    }
+    bool antes = !g_hilos.empty();
+  } fin;
+  for (size_t n = 0; n < g_hilos.size();) {
+    if (g_ahora < g_hilos[n].hasta || !g_mensajes.empty() || EscenaAbierta() || g_elegir > 0) {
+      ++n;
       continue;
     }
-    if (o[1] != 50) continue;
-    for (Ficha& f : g_f) {
-      if (f.n != o[2]) continue;
-      f.mov = o[3];
-      f.mov_p = o[4];
-      REXLOG_INFO("dbz3 tablero b2: script {}: {} pasa al movimiento {} ({})", k, Nombre(f), f.mov, f.mov_p);
+    Hilo h = g_hilos[n];
+    const auto& g = g_d.guiones[size_t(h.guion)];
+    if (h.i >= g.size()) {
+      g_hilos.erase(g_hilos.begin() + std::ptrdiff_t(n));
+      continue;
     }
+    const int paso = g[h.i][0];
+    float espera = 0;
+    for (int vueltas = 0; h.i < g.size() && g[h.i][0] == paso && vueltas < 256; ++vueltas) {
+      const std::array<int, 6> o = g[h.i++];
+      if (o[1] == 44) {   // salta (no vuelve)
+        if (o[2] >= 0 && o[2] < int(g_d.guiones.size())) {
+          h.guion = o[2];
+          h.i = 0;
+        } else {
+          h.i = g.size();
+        }
+        break;
+      }
+      espera = std::max(espera, Orden(h.guion, o));
+      if (g_estado != kJuego) {   // orden 41/42/43: la fase acabo
+        g_hilos.clear();
+        return;
+      }
+      if (g_elegir > 0) break;
+    }
+    h.hasta = g_ahora + espera;
+    g_hilos[n] = h;
+    ++n;
   }
 }
 // Paso de un rival segun su tipo de movimiento (ELF 0x378FE0): 0 quieto, 2 a la casilla mov_p, 3 al azar, 4 (y los
 // demas, ponytail) persigue a la ficha del jugador mas cercana.
+// R7 (ELF 0x274110, 0x273ED0, 0x273E00, 0x273D60, 0x273C30, 0x27CC30; desensamblado): 1 encara (si hay una ficha del
+// jugador en una vecina, va a ella = contacto), 5 sigue a la pieza mov_p (o a la 1 si no esta en juego), 6 va a por la
+// ficha contraria en juego con menos barras (+1 del registro, < 10; si no hay, la pieza 1), 7 va al
+// objeto no enterrado y sin coger mas cercano (sin ninguno, paso al azar), 8 igual pero solo objetos de tipo mov_p y,
+// sin ninguno, persigue a la ficha contraria mas cercana.
+const Ficha* PorN(int n) {
+  for (const Ficha& f : g_f)
+    if (f.n == n) return &f;
+  return nullptr;
+}
+int Marca(int tipo, int desde) {   // FUN_0027CC30: casilla del objeto valido mas cercano, 0 = ninguno
+  const std::vector<int> d = Distancias(desde);
+  int mejor = 0, cota = 255;
+  for (const Objeto& o : g_obj) {
+    if (o.hecho || o.enterrado || (tipo >= 0 && o.tipo != tipo)) continue;
+    if (d[size_t(o.casilla)] < cota) {
+      cota = d[size_t(o.casilla)];
+      mejor = o.casilla;
+    }
+  }
+  return mejor;
+}
+int PasoAlAzar(int desde) {
+  const int v = g_d.casillas[size_t(desde)].vec[size_t(std::rand() & 3)];
+  return v > 0 ? v : -1;
+}
 int PasoRival(const Ficha& r) {
   if (r.mov == 0) return -1;
+  if (r.mov == 1) {
+    for (int v : g_d.casillas[size_t(r.casilla)].vec)
+      if (v > 0 && FichaEn(v, false) >= 0) return v;
+    return -1;
+  }
+  if (r.mov == 5) {
+    const Ficha* o = PorN(r.mov_p);
+    if (!o || !Activa(*o)) o = PorN(1);
+    return o ? PasoA(r.casilla, o->casilla) : -1;
+  }
+  if (r.mov == 6) {
+    const Ficha* best = PorN(1);
+    int cota = 10;
+    for (const Ficha& f : g_f)
+      if (Activa(f) && f.jugador && f.barras < cota) {   // +1 del registro = T2 +6, las barras (FUN_002791A0)
+        cota = f.barras;
+        best = &f;
+      }
+    return best ? PasoA(r.casilla, best->casilla) : -1;
+  }
+  if (r.mov == 7 || r.mov == 8) {
+    if (const int m = Marca(r.mov == 7 ? -1 : r.mov_p, r.casilla); m > 0) return PasoA(r.casilla, m);
+    return r.mov == 7 ? PasoAlAzar(r.casilla) : PasoHacia(r.casilla);
+  }
   if (r.mov == 2) return PasoA(r.casilla, r.mov_p);
   if (r.mov == 3) {
     const int v = g_d.casillas[size_t(r.casilla)].vec[size_t(std::chrono::steady_clock::now().time_since_epoch().count() & 3)];
-    return v > 0 && FichaEn(v, true) < 0 ? v : -1;
+    return v > 0 ? v : -1;
   }
   return PasoHacia(r.casilla);
 }
 
+// Fase enemiga como el original: una pieza rival tras otra, en el orden de sus registros (FUN_00279360/00279E30), la camara
+// la sigue (0x235930 llama cada cuadro a 0x276FF0 = camara suave hacia ella), 25 cuadros mirandola antes de decidir
+// (0x235E70), su paso (0x276B80) y la espera a que acabe de andar; si toca una ficha del jugador, combate y despues sigue
+// con la siguiente. Al acabar, turno nuevo del jugador (0x237F70: contador + disparadores del turno).
+bool g_fase_rival = false;
+size_t g_rival_i = 0;
+float g_rival_espera = 0;
+int g_rival_lucha = -1;   // ficha del jugador en la casilla a la que entra el rival (combate al llegar)   // lo que tarda el paso del rival que se mueve (giro + andar)
+int g_rival_paso = 0;
+float g_rival_t = 0;
+int g_cam_rival = -1;   // pieza que sigue la camara en la fase enemiga
+float g_turno_t = -10;   // empieza el turno del jugador: el rombo entra con su numero y hasta entonces no se juega
 void TurnoRival() {
+  g_fase_rival = true;
+  g_rival_i = 0;
+  g_rival_paso = -1;   // 0x235FD0: la fase enemiga arranca pasados 24 cuadros
+  g_rival_t = g_ahora;
+  for (Ficha& f : g_f)
+    if (f.rival && f.c != kSaibaman) f.acciones = 1;
+  g_dest = -1;
+  REXLOG_INFO("dbz3 tablero b2: fase enemiga del turno {}", g_turno);
+}
+void TurnoJugador() {
+  g_fase_rival = false;
+  g_cam_rival = -1;
   ++g_turno;
+  g_rombo_t = g_turno_t = g_ahora;   // el rombo (D_TURN) vuelve a entrar con el turno nuevo (0x237F70 espera a que acabe)
   REXLOG_INFO("dbz3 tablero b2: turno {}", g_turno);
   for (const auto& t : g_d.t3)   // disparadores del turno (-1, 0, turno, script)
-    if (t[0] == -1 && t[1] == 0 && t[2] == g_turno) Guion(t[3], 0);
-  {
-    for (size_t i = 0; i < g_f.size(); ++i) {
-      Ficha& r = g_f[i];
-      if (!Activa(r) || !r.rival || r.aturdido > 0) continue;
-      // -1 ya no sale (T2 da el tipo de cada pieza); se deja por si un #YDW no lo trae
-      if (r.mov < 0 && (g_turno % 2 == 0 || r.c == kSaibaman || r.c == kGero)) continue;
-      const int p = PasoRival(r);
-      if (p <= 0) continue;
-      if (const int j = FichaEn(p, false); j >= 0) {
-        Contacto(j, int(i));
-        break;
-      }
-      r.desde = r.casilla;
-      r.t_mov = g_ahora;
-      r.casilla = p;
-      REXLOG_INFO("dbz3 tablero b2: {} a la casilla {}", Nombre(r), p);
-    }
-  }
+    if (t[0] == -1 && t[1] == 0 && t[2] == g_turno && Condiciones(t, 5)) Guion(t[3], 0);
   for (Ficha& f : g_f) {
     if (f.jugador) f.movs = f.movs_turno;
     if (f.rival && f.aturdido > 0) --f.aturdido;
@@ -857,8 +1336,57 @@ void TurnoRival() {
   }
   g_dest = -1;
 }
+// Un paso de la fase enemiga (cada cuadro, si no hay guion, escena ni combate pendiente).
+void FaseRival() {
+  // 0x235E70: 25 cuadros siguiendo al que acaba y 25 mas con el nuevo antes de decidir (0x32 en total)
+  constexpr float kMira = 50.0f / 60.0f, kAnda = 0.40f;
+  if (g_rival_paso < 0) {
+    if (g_ahora - g_rival_t < 24.0f / 60.0f) return;
+    g_rival_paso = 0;
+  }
+  for (;;) {
+    if (g_rival_i >= g_f.size()) return TurnoJugador();
+    Ficha& r = g_f[g_rival_i];
+    // actua el rival en juego con acciones (+2 del registro): 0x278EE0 se las recarga a todos al empezar la fase enemiga
+    // menos a los Saibaman (id 0x16), que no actuan (FUN_00279E30 pide estado 2 y +2 != 0)
+    if (!Activa(r) || !r.rival || r.c == kSaibaman || r.acciones <= 0) {
+      ++g_rival_i;
+      continue;
+    }
+    if (g_rival_paso == 0) {   // 0x235E70: 25 cuadros mas en el anterior y luego la camara va a este
+      g_rival_t = g_ahora;
+      g_rival_paso = 1;
+      g_rival_lucha = -1;
+      return;
+    }
+    if (g_rival_paso == 1) {
+      if (g_ahora - g_rival_t >= kMira * 0.5f) g_cam_rival = int(g_rival_i);
+      if (g_ahora - g_rival_t < kMira) return;
+      const int p = PasoRival(r);
+      g_rival_paso = 2;
+      g_rival_t = g_ahora;
+      g_rival_espera = 0;
+      if (p <= 0) return;
+      g_rival_lucha = FichaEn(p, false);   // entra en la casilla y, al llegar, combate
+      EmpezarPaso(r, p, g_ahora);
+      g_rival_espera = TiempoPaso(r);
+      REXLOG_INFO("dbz3 tablero b2: {} a la casilla {}", Nombre(r), p);
+      if (g_rival_lucha < 0) SucesosDeCasilla(r);
+      return;
+    }
+    if (g_ahora - g_rival_t < std::max(kAnda, g_rival_espera)) return;
+    r.acciones = 0;   // 0x27A180: gasta su accion
+    g_rival_paso = 0;
+    ++g_rival_i;
+    if (g_rival_lucha >= 0) {
+      const int j = g_rival_lucha;
+      g_rival_lucha = -1;
+      return Contacto(j, int(&r - g_f.data()));
+    }
+  }
+}
 void FinDeAccion() {
-  if (g_pend_j >= 0 || g_estado != kJuego) return;
+  if (g_pend_j >= 0 || g_estado != kJuego || g_fase_rival) return;
   if (!QuedanMovs()) TurnoRival();
   else if (g_f[size_t(g_sel)].movs <= 0) SiguienteSel();
 }
@@ -868,9 +1396,7 @@ void Mover(int i, int dest) {
   --f.movs;
   g_dest = -1;
   if (const int r = FichaEn(dest, true); r >= 0) return Contacto(i, r);
-  f.desde = f.casilla;
-  f.t_mov = g_ahora;
-  f.casilla = dest;
+  EmpezarPaso(f, dest, g_ahora);
   g_dest = -1;
   REXLOG_INFO("dbz3 tablero b2: turno {}: {} a la casilla {}", g_turno, Nombre(f), dest);
   const Casilla& c = g_d.casillas[size_t(dest)];
@@ -887,6 +1413,7 @@ void Mover(int i, int dest) {
   for (Objeto& o : g_obj) {
     if (EnSuelo(o) && o.casilla == f.casilla) Coger(f, o);
   }
+  SucesosDeCasilla(f);
   FinDeAccion();
 }
 
@@ -897,6 +1424,7 @@ void Buscar(int i) {
   g_marca = f.casilla;
   g_marca_icono = 7;   // "?!"
   g_marca_t = g_ahora;
+  SonidoEventoB2("buscar", f.movs > 0 ? 8 : 20);   // FUN_00277BB0 (b2.c:222476-222495); el 20/9 lo elige +0x69b7a4 [H]
   REXLOG_INFO("dbz3 tablero b2: turno {}: {} busca en la casilla {}", g_turno, Nombre(f), f.casilla);
   for (size_t k = 0; k < g_f.size(); ++k) {
     Ficha& s = g_f[k];
@@ -919,7 +1447,7 @@ void Buscar(int i) {
 // saltan).
 void Auto() {
   if (g_estado == kPrepara) return Empezar();
-  if (g_estado != kJuego || g_pend_j >= 0) return;
+  if (g_estado != kJuego || g_pend_j >= 0 || g_fase_rival || g_elegir > 0) return;
   Ficha& f = g_f[size_t(g_sel)];
   if (!f.jugador || f.movs <= 0 || B2aB3(f.c) < 0) {
     f.movs = 0;
@@ -972,6 +1500,235 @@ struct Tex {
 };
 std::vector<Tex> g_tmapa, g_tfichas, g_ticonos, g_tadornos, g_tloc, g_thud;
 Tex g_tgo, g_tgoku, g_thoyo, g_tcabezas;
+// ---- Escenas, efectos y camara de los guiones ----
+// Escenas de texto de DATA_<idioma>.AFS del jugador (comprobado con la ISO europea): 155 = la intro del Mundo Dragon
+// (narracion, Shenron, el mapa y Goku), 207 = la charla de Nappa y Raditz al llegar (5 lineas). Las ordenes 4/5/6 NO son
+// escenas: FUN_002929A0 carga un efecto #SPX de DATA_CMN (943 / 612 / 450 + id). ponytail: las charlas de las demas fases
+// (visor de sucesos, orden 41, FUN_00270A50) siguen sin su tabla; aqui solo las dos comprobadas.
+struct Escena {
+  bool abierta = false, teatro = false;
+  std::vector<Tex> img;
+  std::vector<int> textos, fondos;   // indices de img: lineas de texto y fondos (teatro)
+  size_t paso = 0;
+  float t0 = 0;
+  int numero = 0;                 // entrada de DATA_<idioma>
+  std::vector<int> hablan;        // charla: ID de B2 de quien dice cada linea (-1 = sin cara)
+} g_esc;
+bool EscenaAbierta() { return g_esc.abierta; }
+
+void AbrirEscena(int letra, int n) {
+  auto* dr = dbz3::launcher::PreviewDrawer();
+  AfsPs2 loc;
+  if (!dr || n <= 0 || g_iso_b2.empty() || !loc.Abrir(g_iso_b2, g_loc_afs)) return;
+  const std::vector<uint8_t> e = loc.Entrada(size_t(n));
+  const int cuantas = CuantasAmt(e);
+  if (cuantas <= 0) {
+    REXLOG_INFO("dbz3 tablero b2: escena {}{}: no es un #AMT (sin poner)", char(letra), n);
+    return;
+  }
+  Escena esc;
+  bool solo_lineas = true;
+  for (int j = 0; j < std::min(cuantas, 64); ++j) {
+    const Imagen im = TexturaAmt(e, j);
+    Tex x;
+    if (im) {
+      x.t = dr->CreateTexture(uint32_t(im.w), uint32_t(im.h), rex::ui::ImmediateTextureFilter::kLinear, false, im.rgba.data());
+      x.w = float(im.w);
+      x.h = float(im.h);
+      size_t opacos = 0;
+      for (size_t q = 3; q < im.rgba.size(); q += 4) opacos += im.rgba[q] > 100;
+      const float cubre = float(opacos) / float(std::max(1, im.w * im.h));
+      // textos: anchos y casi transparentes (letras); fondos: grandes y llenos (Shenron, el mapa, Goku). Las cintas,
+      // el logo y las Bolas (anchos pero bajos, o pequenos) se quedan fuera.
+      if (im.w >= 300 && im.h >= 40 && cubre < 0.45f) esc.textos.push_back(j);
+      else if (im.w * im.h >= 100000 && cubre >= 0.4f) esc.fondos.push_back(j);
+      if (im.h > 130 || im.w > 520) solo_lineas = false;
+    }
+    esc.img.push_back(std::move(x));
+  }
+  esc.teatro = !esc.fondos.empty() && !esc.textos.empty();
+  if (!esc.teatro && !solo_lineas) {
+    REXLOG_INFO("dbz3 tablero b2: escena {}{}: {} imagenes que no son una charla (sin poner)", char(letra), n, cuantas);
+    return;
+  }
+  if (esc.textos.empty()) return;
+  esc.abierta = true;
+  esc.t0 = g_ahora;
+  esc.numero = n;
+  // quien habla en la charla de la llegada (capturas del original: Raditz, Nappa, Nappa, Nappa, Nappa, Raditz)
+  if (n == 207) esc.hablan = {9, 10, 10, 10, 10, 9};   // ID de B2: 9 Raditz, 10 Nappa
+  REXLOG_INFO("dbz3 tablero b2: escena {}{}: {} ({} lineas, {} fondos)", char(letra), n, esc.teatro ? "teatro" : "charla",
+              esc.textos.size(), esc.fondos.size());
+  g_esc = std::move(esc);
+}
+
+// Ordenes 4/5/6 (FUN_002929A0, a1 = 'M'/'P'/'T'): corren el #SPX de DATA_CMN 450/612/943 + a0, que es la ventana de
+// mensaje de la escena M###/P###/T### (rutas /SCR/P_MSG/M001MSG.AMT, voz P_ADX/M001_00.adx). Del bytecode (VM del 05,
+// medido 2026-10-18 en el emulador: M001 = CMN 451 = la charla de Raditz y Nappa) se sacan:
+//  - el texto: `push #id; push #1; mov #343, r2; builtin r2` = builtin 0x157 (FUN_002249A0) de (1 << 16 | id) = la
+//    entrada id del AFS de idioma (#AMT, una imagen por linea; M001 -> 207, M002 -> 208, M155 -> 281, T001 -> 1160);
+//  - quien dice cada linea (solo M; en las P ese `switch` vale 0/1 por linea, el "motion id" de su escena 3D, no una
+//    cara: van sin cara): el `switch` del guion `push #linea ... jz; push #cara; pop r0; mov r0, [r13+4]`
+//    con la cara = ID de B2 de la hoja T_CHARA (CMN 1196): M001 = {9, 10, 10, 10, 10, 9}, M002 = {10}.
+// ponytail: sin las voces (ADX_US.AFS, falta su tabla), sin las animaciones de la ventana (#AMA 790) y sin los modelos
+// 3D de las escenas P ("motion id"); solo el texto con su cara.
+void AbrirMensajeSpx(int orden, int a0) {
+  static std::map<int, std::pair<int, std::vector<int>>> memo;   // CMN -> (texto, caras)
+  const int id = (orden == 4 ? 450 : orden == 5 ? 612 : 943) + a0;
+  auto it = memo.find(id);
+  if (it == memo.end()) {
+    std::pair<int, std::vector<int>> r{-1, {}};
+    AfsPs2 cmn;
+    std::vector<uint8_t> d;
+    if (cmn.Abrir(BuscarJuego("budokai 2"), "DATA_CMN.AFS")) d = cmn.Entrada(size_t(id));
+    if (d.size() > 0x24 && std::memcmp(d.data(), "#SPX", 4) == 0) {
+      static const uint8_t txt[] = {0x08, 0x10, 0x01, 0x01, 0x20, 0x57, 0x01, 0x02, 0x80, 0x02};   // push #1; builtin 0x157
+      static const uint8_t sw[] = {0x0a, 0x01, 0x0a, 0x00, 0x13, 0x01, 0x00, 0x51, 0x00, 0x33, 0x00, 0x08, 0x00, 0x0a,
+                                   0x00, 0x01, 0x30};   // ...linea: comparacion y salto (i32) a la siguiente
+      for (size_t i = 4; i + sizeof(txt) <= d.size() && r.first < 0; ++i)
+        if (d[i - 4] == 0x08 && d[i - 3] == 0x20 && std::memcmp(&d[i], txt, sizeof(txt)) == 0)
+          r.first = d[i - 2] | d[i - 1] << 8;   // push #id (i16)
+      for (size_t i = 3; orden == 4 && i + sizeof(sw) + 14 <= d.size(); ++i) {
+        if (d[i - 3] != 0x08 || d[i - 2] != 0x10 || std::memcmp(&d[i], sw, sizeof(sw)) != 0) continue;
+        const uint8_t* c = &d[i + sizeof(sw) + 4];   // jz r0, r2; push #cara; pop r0
+        if (c[0] == 0x02 && c[1] == 0x72 && c[4] == 0x08 && c[5] == 0x10 && c[7] == 0x0a && d[i - 1] == r.second.size())
+          r.second.push_back(c[6]);
+      }
+    }
+    it = memo.emplace(id, std::move(r)).first;
+  }
+  REXLOG_INFO("dbz3 tablero b2: orden {} ({}): #SPX CMN {} -> mensaje loc {}, {} caras", orden, a0, id, it->second.first,
+              it->second.second.size());
+  if (it->second.first <= 0) return;
+  AbrirEscena("MPT"[orden - 4], it->second.first);
+  if (g_esc.abierta && g_esc.numero == it->second.first) g_esc.hablan = it->second.second;
+}
+
+
+// Cabeza de B2 del personaje `c` (ID de B2): CMN 1196, 55 de 136x136 en el orden de los ID (comprobado con la hoja).
+ImTextureID CabezaB2(int c) {
+  static std::vector<Tex> cabezas;
+  static bool leidas = false;
+  if (!leidas) {
+    auto* dr = dbz3::launcher::PreviewDrawer();
+    AfsPs2 cmn;
+    if (!dr) return ImTextureID{};
+    leidas = true;
+    if (cmn.Abrir(BuscarJuego("budokai 2"), "DATA_CMN.AFS")) {
+      const std::vector<uint8_t> en = cmn.Entrada(1196);
+      for (int j = 0; j < std::min(CuantasAmt(en), 64); ++j) {
+        const Imagen im = TexturaAmt(en, j);
+        Tex x;
+        if (im && im.w > 16) {
+          x.t = dr->CreateTexture(uint32_t(im.w), uint32_t(im.h), rex::ui::ImmediateTextureFilter::kLinear, false, im.rgba.data());
+          x.w = float(im.w);
+          x.h = float(im.h);
+        }
+        cabezas.push_back(std::move(x));
+      }
+    }
+  }
+  return c >= 0 && c < int(cabezas.size()) && cabezas[size_t(c)] ? cabezas[size_t(c)].id() : ImTextureID{};
+}
+void DibEscena(ImDrawList* dl, const S::Area& a, float t, uint16_t& pressed) {
+  if (!g_esc.abierta) return;
+  Escena& e = g_esc;
+  const ImVec2 W = ImGui::GetIO().DisplaySize;
+  const float desde = t - e.t0;
+  // lienzo de 640x448 del original, centrado en el area
+  const float ls = std::min(1200.0f / 640.0f, 900.0f / 448.0f) * a.s;
+  const ImVec2 lo(a.p0.x + (1200.0f * a.s - 640.0f * ls) * 0.5f, a.p0.y + (900.0f * a.s - 448.0f * ls) * 0.5f);
+  auto P = [&](float x, float y) { return ImVec2(lo.x + x * ls, lo.y + y * ls); };
+  auto img = [&](int j, float x, float y, float w, float h, ImU32 col = IM_COL32_WHITE) {
+    if (j < 0 || j >= int(e.img.size()) || !e.img[size_t(j)]) return;
+    dl->AddImage(e.img[size_t(j)].id(), P(x, y), P(x + w, y + h), ImVec2(0, 0), ImVec2(1, 1), col);
+  };
+  const float alfa = std::clamp(desde * 2.0f, 0.0f, 1.0f);
+  const ImU32 blanco = IM_COL32(255, 255, 255, int(255 * alfa));
+  if (e.teatro && e.numero == 155 && e.img.size() >= 18) {
+    // La intro del Mundo Dragon como en B2 (capturas del original): fondo de tablones (1, 640x80 en mosaico), la cinta
+    // morada arriba (0) con "DRAGON" (4) y "BALL Z" (5), un cuadro con marco de madera con Shenron (9) y las Bolas (6-8)
+    // flotando, o el mapa (10) con Goku (12) en la nube (13) y su estela; el ultimo texto con el retrato de Goku (11).
+    dl->AddRectFilled(ImVec2(0, 0), W, IM_COL32(96, 150, 150, 255));
+    for (float y = 0; y < 448; y += 80) img(1, 0, y, 640, 80);
+    const size_t k = e.paso;   // 0-1 Shenron, 2 el mapa con Goku volando, 3 el retrato de Goku
+    const int fondo = k < 2 ? 9 : 10;
+    const float fx = 40, fy = 92, fw = 560, fh = 288;
+    dl->AddRectFilled(P(fx - 8, fy - 8), P(fx + fw + 8, fy + fh + 8), IM_COL32(120, 72, 30, 255), 3 * ls);
+    dl->AddRectFilled(P(fx - 4, fy - 4), P(fx + fw + 4, fy + fh + 4), IM_COL32(176, 112, 48, 255), 2 * ls);
+    dl->AddRectFilled(P(fx, fy), P(fx + fw, fy + fh), IM_COL32(18, 22, 12, 255));   // Shenron va sobre negro
+    img(fondo, fx, fy, fw, fh);
+    if (k < 2) {   // las Bolas flotan sobre Shenron
+      // las tres tiras de Bolas (6-8) con su forma, repartidas por el cuadro
+      const float b[3][2] = {{60, 112}, {400, 300}, {470, 140}};
+      for (int q = 0; q < 3; ++q) {
+        const Tex& x = e.img[size_t(6 + q)];
+        const float d = std::sin(t * 1.3f + float(q)) * 6.0f;
+        if (x) img(6 + q, b[q][0], b[q][1] + d, x.w * 0.8f, x.h * 0.8f, blanco);
+      }
+    } else if (k == 2) {   // Goku cruza el mapa en la nube dejando su estela
+      const float u = std::fmod(desde * 0.18f, 1.0f), gx = fx + 30 + u * 420, gy = fy + 120;
+      dl->AddRectFilled(P(fx, gy + 52), P(gx + 20, gy + 58), IM_COL32(255, 236, 120, 200));
+      img(13, gx, gy + 30, 112, 80);
+      img(12, gx + 26, gy - 30, 64, 88);
+    }
+    img(0, 0, 0, 640, 104);
+    img(4, 48, 6, 288, 80);
+    img(5, 346, 6, 264, 80);
+    if (k >= 3) img(11, -20, 160, 336, 400);
+    if (k < e.textos.size()) {
+      const Tex& x = e.img[size_t(e.textos[k])];
+      const float esc = std::min(1.0f, std::min(500.0f / x.w, 260.0f / x.h)), cx = k >= 3 ? 400 : 320;
+      if (x) dl->AddImage(x.id(), P(cx - x.w * esc * 0.5f, fy + fh * 0.5f - x.h * esc * 0.5f),
+                          P(cx + x.w * esc * 0.5f, fy + fh * 0.5f + x.h * esc * 0.5f), ImVec2(0, 0), ImVec2(1, 1), blanco);
+    }
+  } else if (e.teatro) {   // otras escenas de teatro: el fondo de cada texto y el texto encima
+    dl->AddRectFilled(ImVec2(0, 0), W, IM_COL32(0, 0, 0, 255));
+    const size_t nf = e.fondos.size(), nt = e.textos.size();
+    const Tex& f = e.img[size_t(e.fondos[std::min(nf - 1, e.paso * nf / std::max<size_t>(1, nt))])];
+    if (f) {
+      const float esc = std::min(560.0f / f.w, 300.0f / f.h);
+      dl->AddImage(f.id(), P(320 - f.w * esc * 0.5f, 200 - f.h * esc * 0.5f), P(320 + f.w * esc * 0.5f, 200 + f.h * esc * 0.5f),
+                   ImVec2(0, 0), ImVec2(1, 1), blanco);
+    }
+    const Tex& x = e.img[size_t(e.textos[e.paso])];
+    if (x) {
+      const float esc = std::min(1.0f, std::min(560.0f / x.w, 90.0f / x.h));
+      dl->AddImage(x.id(), P(320 - x.w * esc * 0.5f, 390 - x.h * esc * 0.5f), P(320 + x.w * esc * 0.5f, 390 + x.h * esc * 0.5f),
+                   ImVec2(0, 0), ImVec2(1, 1), blanco);
+    }
+  } else {
+    // charla como en B2: banda morada abajo, la cara de quien habla en su emblema rojo a la izquierda y la linea en una
+    // caja blanca redondeada a su derecha. ponytail: la cara es la de B3 (CaraDe); los bustos de B2 no estan localizados.
+    dl->AddRectFilled(P(0, 350), P(640, 448), IM_COL32(64, 40, 120, 235));
+    dl->AddRectFilled(P(150, 300), P(625, 398), IM_COL32(244, 244, 244, 250), 14 * ls);
+    dl->AddRect(P(150, 300), P(625, 398), IM_COL32(200, 200, 210, 255), 14 * ls, 0, 1.5f * ls);
+    const int quien = e.paso < e.hablan.size() ? e.hablan[e.paso] : -1;
+    // R7: la cara es el retrato de B2 de esa pieza (su ficha, 342+5k #2*indice, de la ISO del jugador). Los bustos propios
+    // de las charlas no estan localizados (R7/b2/INFORME.md: ni en DATA_CMN ni en DATA_<idioma> hay un banco de bustos)
+    // R7: las cabezas de B2 (CMN 1196: 55 de 136x136, una por ID de personaje de B2: 0 Goku, 9 Raditz, 10 Nappa...)
+    if (const ImTextureID cab = CabezaB2(quien)) {
+      dl->AddCircleFilled(P(75, 350), 64 * ls, IM_COL32(200, 40, 40, 255));
+      dl->AddCircle(P(75, 350), 64 * ls, IM_COL32(255, 220, 120, 255), 0, 3 * ls);
+      dl->AddImage(cab, P(18, 290), P(132, 404));
+    }
+    const Tex& x = e.img[size_t(e.textos[e.paso])];
+    if (x) {
+      const float esc = std::min(1.3f, std::min(450.0f / x.w, 80.0f / x.h));
+      dl->AddImage(x.id(), P(388 - x.w * esc * 0.5f, 349 - x.h * esc * 0.5f), P(388 + x.w * esc * 0.5f, 349 + x.h * esc * 0.5f),
+                   ImVec2(0, 0), ImVec2(1, 1), IM_COL32(30, 30, 40, 255));
+    }
+  }
+  S::HelpLine(dl, a.At(600, 878), 34 * a.s, {{"A", T::T("Siguiente", "Next")}, {"B", T::T("Saltar", "Skip")}});
+  const bool sigue = (pressed & kA) || desde > (e.teatro ? 6.0f : 4.0f);
+  if (pressed & kB) e.paso = e.textos.size();
+  else if (sigue && desde > 0.25f) {
+    ++e.paso;
+    e.t0 = t;
+  }
+  pressed = 0;
+  if (e.paso >= e.textos.size()) g_esc = Escena{};
+}
 // Goku del tablero en 3D, como en B2: los archivos fijos del tablero (ELF 0x2350C0, tabla 0x377C80) son CMN 335 (#AMO de
 // 21 huesos) + 334 (sus 26 animaciones), 337 + 338 (Goku, #AMO de 44 huesos y 21 variantes; con la bandera 4 de
 // 0x6992DC, 339 + 340) y 336 (las 19 animaciones de Goku). Los demas personajes del tablero de B2 son fichas (los
@@ -979,34 +1736,63 @@ Tex g_tgo, g_tgoku, g_thoyo, g_tcabezas;
 ps2::Modelo g_goku3d;
 std::vector<ps2::Tex> g_goku3d_tx;
 ps2::Anim g_goku_espera, g_goku_andar;
+// R7: tabla DAT_00379010 (anim -> clip de CMN 336): 0 reposo -> 0, 1 andar -> 4, 2 combate -> 5 (contacto, estados
+// 0x0B/0x0C: una vez y se queda), 3 alerta -> 6 (al buscar, 36 cuadros: FUN_00277D40)
+ps2::Anim g_goku_lucha, g_goku_alerta;
+// tras el combate (FUN_00277BB0, a la ficha que pierde): anim 5 -> clip 8 (golpeado) o, sin vidas, anim 4 -> clip 7
+ps2::Anim g_goku_herido, g_goku_ko;
+float g_goku_reac_t = -10;
+bool g_goku_reac_ko = false;
 float g_goku_alto = 0, g_goku_giro = 0;
 bool g_goku3d_cargado = false;
+bool g_goku_variante = false;   // orden 82 (ELF 0x6992DC bit 0x04): Goku del tablero con CMN 339/340
 // Ficha del tablero en 3D (CMN 335: #AMO de 21 huesos y 3 partes; su textura 0 es el retrato y la 1 el dorso con la Z de
 // cada pieza, de 342+5k: 2 * indice y 2 * indice + 1) con sus 26 animaciones (CMN 334). Las texturas de las fichas de la
 // fase como ps2::Tex (las mismas que g_tfichas). ponytail: la espera es la animacion 0 (72 cuadros), sin confirmar.
 ps2::Modelo g_ficha3d;
 ps2::Anim g_ficha_espera;
 float g_ficha_alto = 0;
+// R7: la carta del CMN 335 tiene el retrato hacia +-x (con giro 0 se veia de canto, "mirando de lado"); en B2 mira al
+// frente en reposo. Giro de base = el que lleva la normal media de las caras del retrato (textura 0) a +z (la camara).
+float g_ficha_base = 0;
 std::vector<ps2::Tex> g_ps2_fichas;
 int g_ps2_fichas_fase = -1;
 void CargarGoku3D() {
   if (g_goku3d_cargado) return;
   g_goku3d_cargado = true;
+  g_goku_alto = 0;
   AfsPs2 cmn;
   if (!cmn.Abrir(BuscarJuego("budokai 2"), "DATA_CMN.AFS")) return;
-  g_goku3d = ps2::CargarSuelto(cmn.Entrada(337), cmn.Entrada(338), true, true);   // con colores: el pelo negro
+  // Encargo 03/2: con el bit 0x04 de 0x6992DC (orden 82) el cargador usa CMN 339/340 en vez de 337/338.
+  const int goku_amo = g_goku_variante ? 339 : 337, goku_amt = g_goku_variante ? 340 : 338;
+  g_goku3d = ps2::CargarSuelto(cmn.Entrada(goku_amo), cmn.Entrada(goku_amt), true, true);   // con colores: el pelo negro
   if (!g_goku3d.esq) return;
   int ie = 0, ia = 4;   // reposo (99 cuadros) y carrera (36), en absoluto (auditoria10/B: la 5 es una guardia)
   if (const char* v = std::getenv("DBZ3_TEST_GOKU_ANIM")) std::sscanf(v, "%d,%d", &ie, &ia);
   const std::vector<uint8_t> amm = cmn.Entrada(336);
   g_goku_espera = ps2::LeerAnim(amm, uint32_t(ie), g_goku3d.esq->padre.size());
   g_goku_andar = ps2::LeerAnim(amm, uint32_t(ia), g_goku3d.esq->padre.size());
+  g_goku_lucha = ps2::LeerAnim(amm, 5, g_goku3d.esq->padre.size());
+  g_goku_alerta = ps2::LeerAnim(amm, 6, g_goku3d.esq->padre.size());
+  g_goku_herido = ps2::LeerAnim(amm, 8, g_goku3d.esq->padre.size());
+  g_goku_ko = ps2::LeerAnim(amm, 7, g_goku3d.esq->padre.size());
+  g_goku_lucha.relativa = g_goku_alerta.relativa = g_goku_herido.relativa = g_goku_ko.relativa = false;
   g_goku_espera.relativa = g_goku_andar.relativa = false;   // en relativo salia roto (un brazo arriba, de lado)
   for (const auto& tr : g_goku3d.malla.tris)
     for (const auto& v : tr.p) g_goku_alto = std::max(g_goku_alto, v.y);
   g_goku3d_tx = ps2::Texturas(g_goku3d);
   REXLOG_INFO("dbz3 tablero b2: Goku 3D: {} triangulos, alto {:.1f}, espera {} ({} cuadros), andar {} ({} cuadros)",
               g_goku3d.malla.tris.size(), g_goku_alto, ie, g_goku_espera.cuadros, ia, g_goku_andar.cuadros);
+}
+// Orden 82 (ELF 0x293140, guion 309 de la fase VIII): el tablero cambia el Goku 3D a la variante
+// CMN 339 (#AMO) + 340 (#AMT) y enciende el bit 0x04 de 0x6992DC. El cargador del tablero elige
+// 337/338 con ese bit apagado y 339/340 encendido; la marca g_goku_variante hace lo mismo.
+void VarianteGoku() {
+  if (g_goku_variante) return;
+  g_goku_variante = true;
+  g_goku3d_cargado = false;   // CargarGoku3D (DibGoku3D) la recarga con 339/340 al siguiente cuadro
+  g_goku3d_tx.clear();
+  REXLOG_INFO("dbz3 tablero b2: orden 82: Goku del tablero con la variante (CMN 339/340)");
 }
 void CargarFicha3D() {
   static bool hecho = false;
@@ -1022,6 +1808,20 @@ void CargarFicha3D() {
       }
       for (const auto& tr : g_ficha3d.malla.tris)
         for (const auto& v : tr.p) g_ficha_alto = std::max(g_ficha_alto, v.y);
+      // plano del retrato en la pose de espera (cuadro 0): normal geometrica de sus triangulos
+      ps2::Malla p0;
+      if (g_ficha3d.esq && g_ficha_espera) ps2::Posar(*g_ficha3d.esq, g_ficha_espera, 0.0f, p0);
+      float nx = 0, nz = 0;
+      for (const auto& tr : (p0 ? p0 : g_ficha3d.malla).tris) {
+        if (tr.tex != 0) continue;
+        const auto &a = tr.p[0], &b = tr.p[1], &c = tr.p[2];
+        const float ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z, vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+        nx += std::fabs(uy * vz - uz * vy);
+        nz += std::fabs(ux * vy - uy * vx);
+      }
+      if (std::getenv("DBZ3_TEST_FICHA_BASE")) g_ficha_base = float(std::atof(std::getenv("DBZ3_TEST_FICHA_BASE")));
+      else if (nx > nz) g_ficha_base = 1.5707963f;   // de canto hacia +-x: un cuarto de vuelta lo pone de frente
+      REXLOG_INFO("dbz3 tablero b2: ficha 3D: normal del retrato ({:.2f}, {:.2f}), giro de base {:.2f}", nx, nz, g_ficha_base);
     }
     REXLOG_INFO("dbz3 tablero b2: ficha 3D: {} triangulos, alto {:.1f}, espera {} cuadros", g_ficha3d.malla.tris.size(),
                 g_ficha_alto, g_ficha_espera.cuadros);
@@ -1049,7 +1849,7 @@ ps2::Camara CamaraFigura(ImVec2 pie, float alto_modelo, float alto_px) {
   return cam;
 }
 // Ficha 3D de la pieza `idx` (su retrato y su dorso) de pie en `pie`.
-bool DibFicha3D(ImDrawList* dl, int idx, ImVec2 pie, float alto_px, float t) {
+bool DibFicha3D(ImDrawList* dl, int idx, ImVec2 pie, float alto_px, float t, float giro = 0) {
   CargarFicha3D();
   const size_t r = size_t(idx) * 2, dorso = r + 1;
   if (!g_ficha3d.malla || g_ficha_alto <= 0 || dorso >= g_ps2_fichas.size() || !g_ps2_fichas[r] || !g_ps2_fichas[dorso])
@@ -1068,7 +1868,7 @@ bool DibFicha3D(ImDrawList* dl, int idx, ImVec2 pie, float alto_px, float t) {
   esc.Empezar();
   ps2::Escena::Toon toon;   // cel shading y borde de P4 (la carta y la peana traen normales)
   toon.borde = g_ficha_alto * 0.009f;
-  esc.Poner(cam, m, g_ps2_fichas, {0, -ymin, 0}, 0.0f, 1.0f, toon);
+  esc.Poner(cam, m, g_ps2_fichas, {0, -ymin, 0}, g_ficha_base + giro, 1.0f, toon);
   esc.Pintar(dl);
   return true;
 }
@@ -1076,8 +1876,14 @@ bool DibFicha3D(ImDrawList* dl, int idx, ImVec2 pie, float alto_px, float t) {
 bool DibGoku3D(ImDrawList* dl, ImVec2 pie, float alto_px, float t, bool anda, float dx, float dy) {
   CargarGoku3D();
   if (!g_goku3d.malla || g_goku_alto <= 0) return false;
-  if (anda && (dx != 0 || dy != 0)) g_goku_giro = std::atan2(dx, dy);
-  const ps2::Anim& an = anda ? g_goku_andar : g_goku_espera;
+  // dx > 0: pose de combate (dx s desde el contacto); dy > 0: alerta de la busqueda (dy s); si no, andar o reposo
+  const bool lucha = dx > 0 && g_goku_lucha, alerta = !lucha && dy > 0 && g_goku_alerta;
+  const ps2::Anim& reac = g_goku_reac_ko ? g_goku_ko : g_goku_herido;
+  const float tr = g_ahora - g_goku_reac_t;
+  const bool reacciona = !lucha && !alerta && !anda && reac && tr >= 0 && tr < float(reac.cuadros) / 60.0f + 0.5f;
+  const ps2::Anim& an = lucha ? g_goku_lucha : alerta ? g_goku_alerta : reacciona ? reac : anda ? g_goku_andar : g_goku_espera;
+  if (lucha || alerta) t = std::min(lucha ? dx : dy, float(an.cuadros - 1) / 60.0f);   // una vez y se queda en el ultimo
+  if (reacciona) t = std::min(tr, float(an.cuadros - 1) / 60.0f);
   static ps2::Malla pose;
   const bool anima = bool(an);
   if (anima) ps2::Posar(*g_goku3d.esq, an, t, pose);
@@ -1115,6 +1921,8 @@ std::vector<ps2::Tex> g_shen_tx;
 ps2::Tex g_shen_nubes;   // nubes del cielo de la escena del deseo (CMN 328 hijo 1, textura 0)
 ps2::Modelo g_shen_sitio;   // la escena del deseo (CMN 328 hijo 0 + #AMT hijo 1), en las coordenadas de Shenron
 std::vector<ps2::Tex> g_shen_sitio_tx;
+ps2::Modelo g_shen_bolas;   // CMN 328 hijos 7 (#AMO de 57 huesos), 8 (#AMT) y 9 (#AMM): las 7 Bolas de la aparicion
+std::vector<ps2::Tex> g_shen_bolas_tx;
 bool g_shen_cargado = false;
 int g_shen = 0;   // 0 "Te concedere un deseo", 1 la lista, 2 "Si, eso es aceptable", 3 "Ahora debo irme..."
 // Deseo -> capsula de B3 (por nombre: SkillList.dson). Orden de la lista: 540 #0-5 (portal, trajes de Bulma 2-6), 539 #0-4
@@ -1233,6 +2041,90 @@ void DibHudSp(ImDrawList* dl, int k, const Lienzo& L, float c = -1, ImU32 col = 
   DibSp(dl, g_d.hud_ama, g_thud, k, L, c, col, dx, dy, giro);
 }
 
+// Encargo 01: listas A (pose) y B (recorte) independientes. No cambia DibSp ni las barras de vida.
+// `imagen` permite la composicion original: pose de 0x2D + etiqueta de 0x33+j en el panel.
+bool DibNativa01(ImDrawList* dl, const std::vector<Datos::Sprite>& v, const std::vector<Tex>& tx,
+                 int anim, const Lienzo& L, float cuadro, ImU32 col = IM_COL32_WHITE, float dy = 0, int imagen = -1) {
+  if (anim < 0 || anim >= int(v.size())) return false;
+  if (imagen < 0) imagen = anim;
+  if (imagen >= int(v.size())) return false;
+  const auto& sp = v[size_t(anim)];
+  const auto& im = v[size_t(imagen)];
+  const Datos::Sprite::Recorte* rec = nullptr;
+  for (const auto& r : im.recortes) {
+    if (r.cuadro > cuadro && rec) break;
+    rec = &r;
+  }
+  if (!rec || rec->tex < 0 || rec->tex >= int(tx.size()) || !tx[size_t(rec->tex)]) return false;
+  const Tex& x = tx[size_t(rec->tex)];
+  const Pose po = PoseDe(sp, cuadro);
+  const float x0 = im.x0 * po.ex, x1 = im.x1 * po.ex, y0 = im.y0 * po.ey, y1 = im.y1 * po.ey;
+  col = (col & 0x00FFFFFFu) | (ImU32(float(col >> 24) * std::clamp(po.al, 0.0f, 1.0f)) << 24);
+  dl->AddImage(x.id(), L.P(po.px + x0, po.py + dy + y0), L.P(po.px + x1, po.py + dy + y1),
+               ImVec2(rec->u0 / x.w, rec->v0 / x.h), ImVec2(rec->u1 / x.w, rec->v1 / x.h), col);
+  return true;
+}
+
+// FUN_00239690: tabla 0x377CC0 (condicion +0x1D de T1). Base 0x11 y emblemas 0x12..0x16.
+bool DibCasilla01(ImDrawList* dl, const Lienzo& L, int condicion, float cuadro, ImU32 col) {
+  if (condicion < 0 || condicion > 5 || g_d.life_ama.size() <= 22) return false;
+  if (!DibNativa01(dl, g_d.life_ama, g_ticonos, 17, L, 0, col)) return false;
+  if (condicion) {
+    const int anim = 17 + condicion;
+    const float c = std::fmod(std::max(0.0f, cuadro), std::max(1.0f, g_d.life_ama[size_t(anim)].dur));
+    DibNativa01(dl, g_d.life_ama, g_ticonos, anim, L, c, col);
+  }
+  return true;
+}
+
+// Orden real del panel (DAT_0037A830, 14 bytes); no es FUN_0027CD40 (objetos T8).
+constexpr int kAliados01[] = {28, 26, 27, 6, 4, 7, 8, 3, 5, 35, 24, 21, 33, 2};
+bool DibAliados01(ImDrawList* dl, const S::Area& a, float t, const std::vector<int>& libres) {
+  static std::vector<Tex> tx;
+  static int fase = -1;
+  static float visto = -10, inicio = 0;
+  if (fase != g_d.fase) {
+    tx.clear();
+    auto* dr = dbz3::launcher::PreviewDrawer();
+    if (!dr) return false;
+    for (const Imagen& im : g_d.aliados) {
+      Tex x;
+      if (im) {
+        x.t = dr->CreateTexture(uint32_t(im.w), uint32_t(im.h), rex::ui::ImmediateTextureFilter::kLinear, false, im.rgba.data());
+        x.w = float(im.w); x.h = float(im.h);
+      }
+      tx.push_back(std::move(x));
+    }
+    fase = g_d.fase;
+    visto = -10;
+  }
+  if (g_d.aliados_ama.size() < 71 || tx.size() < 8 || !tx[0] || !tx[1] || !tx[6] || !tx[7]) return false;
+  if (t - visto > 0.25f) inicio = t;
+  visto = t;
+  const float c = std::max(0.0f, (t - inicio) * 60.0f);
+  const Lienzo L = LienzoDe(a);
+  auto dib = [&](int anim, float cuadro, float dy = 0, int im = -1, ImU32 col = IM_COL32_WHITE) {
+    return DibNativa01(dl, g_d.aliados_ama, tx, anim, L, cuadro, col, dy, im);
+  };
+  // 0 es un velo sin textura: se conserva el oscurecido local, no se inventa un sprite.
+  dl->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize, IM_COL32(0, 0, 0, 120));
+  dib(c < 31 ? 3 : 4, c < 31 ? c : 0);
+  dib(c < 21 ? 7 : 8, c < 21 ? c : 0);
+  dib(13, std::min(c, 33.0f));
+  dib(16, std::min(c, 45.0f), 0, 19 + std::clamp(g_elegir, 1, 2));
+  const int primero = std::clamp(g_comp - 2, 0, std::max(0, int(libres.size()) - 5));
+  for (int fila = 0; fila < 5 && primero + fila < int(libres.size()); ++fila) {
+    const int i = primero + fila, id = g_f[size_t(libres[size_t(i)])].c;
+    const ImU32 color = i == g_comp ? IM_COL32_WHITE : IM_COL32(170, 170, 170, 255);
+    dib(38, 0, 32.0f * fila);
+    int etiqueta = -1;
+    for (int j = 0; j < 14; ++j) if (kAliados01[j] == id) etiqueta = 51 + j;
+    if (etiqueta >= 0) dib(45, 0, 32.0f * fila, etiqueta, color);
+    else S::MenuText(dl, L.P(345, 207 + 32.0f * fila), 16 * L.s, Nombre(g_f[size_t(libres[size_t(i)])]).c_str(), true, false);
+  }
+  return true;
+}
+
 // Camara del original: casi cenital (el mapa ya viene pintado en vista inclinada; en las capturas apenas hay
 // perspectiva); 1 px del mapa = 1 px de una pantalla de 480 de alto. Punto (mx, my) del mapa a pantalla.
 struct Cam {
@@ -1290,10 +2182,43 @@ void DibFicha(ImDrawList* dl, const Ficha& f, ImVec2 base, float w, float t, ImU
 
 // Tramos de vida (398 #9: 16x16 verde claro y oscuro) apilados en vertical junto a la ficha: uno por barra.
 void Barras(ImDrawList* dl, const Ficha& f, ImVec2 base, float e) {
-  for (int k = 0; k < f.barras_max; ++k) {
-    const float y1 = base.y - float(k) * 9 * e;
-    DibIcono(dl, 9, ImVec2(base.x, y1 - 8 * e), ImVec2(base.x + 9 * e, y1),
-             k < f.barras ? ImVec4(0, 0, 16, 16) : ImVec4(16, 0, 32, 16));
+  // R7: columna contigua de 5 bloques (las vidas, +1 del registro, van de 0 a 5: FUN_00279F60), llenos los que le quedan;
+  // celdas de 398 #9 (16x16, llena / vacia) a su tamano del original
+  // aplicar_estudios (entrega 17 sec. 6): la celda que cambia hace la anim 0x36 (sube, 81 cuadros) o 0x37 (baja, 41)
+  // del #AMA 397 y la barra se cuenta al acabar (FUN_00274210 b2.c:220366-220390); las demas, 0x35 llena / 0x34 vacia.
+  const auto& la = g_d.life_ama;
+  const bool ama = la.size() > 0x37;
+  // PRUEBA: DBZ3_TEST_B2_VIDA=1 quita y devuelve una barra (solo en pantalla) cada 3 s para ver las dos animaciones
+  static const bool prueba = std::getenv("DBZ3_TEST_B2_VIDA") != nullptr;
+  const int meta = prueba ? std::max(0, f.barras - int(g_ahora / 3.0f) % 2) : f.barras;
+  if (f.barras_vis < 0 || !ama) f.barras_vis = meta;
+  int anim = 0, cambia = -1;
+  float c = 0;
+  if (f.barras_vis != meta) {
+    anim = meta > f.barras_vis ? 0x36 : 0x37;
+    cambia = anim == 0x36 ? f.barras_vis : f.barras_vis - 1;
+    if (f.vida_t0 < 0) f.vida_t0 = g_ahora;
+    c = (g_ahora - f.vida_t0) * 60.0f;
+    if (c > la[size_t(anim)].dur) {
+      f.barras_vis += anim == 0x36 ? 1 : -1;
+      f.vida_t0 = -1, anim = 0, cambia = -1;
+    }
+  }
+  for (int k = 0; k < 5; ++k) {
+    const float y1 = base.y - float(k) * 12 * e;   // las celdas traen 2 px de margen: pegadas, sin hueco
+    ImVec2 p0(base.x - 6 * e, y1 - 16 * e), p1(base.x + 10 * e, y1);
+    if (!ama) {
+      DibIcono(dl, 9, p0, p1, k < f.barras ? ImVec4(0, 0, 16, 16) : ImVec4(16, 0, 32, 16));
+      continue;
+    }
+    const Datos::Sprite& sp = la[size_t(k == cambia ? anim : k < f.barras_vis ? 0x35 : 0x34)];
+    if (k == cambia) {   // escala y sacudida de las claves, alrededor del centro de la celda
+      const Pose po = PoseDe(sp, c);
+      const ImVec2 m((p0.x + p1.x) * 0.5f + (po.px - sp.px) * e, (p0.y + p1.y) * 0.5f + (po.py - sp.py) * e);
+      const float hx = (p1.x - p0.x) * 0.5f * po.ex, hy = (p1.y - p0.y) * 0.5f * po.ey;
+      p0 = ImVec2(m.x - hx, m.y - hy), p1 = ImVec2(m.x + hx, m.y + hy);
+    }
+    DibIcono(dl, sp.tex >= 0 ? sp.tex : 9, p0, p1, ImVec4(sp.u0, sp.v0, sp.u1, sp.v1));
   }
 }
 // Cifras azules del original (398 #6: "123450"); las que no tiene (6-9), con las de 398 #29.
@@ -1332,21 +2257,38 @@ float DibPieza(ImDrawList* dl, const Cam& k, const Ficha& f, ImVec2 pos, float t
   float e = 1;
   if (!k.P(pos.x, pos.y, p, &e)) return -1;
   float arriba = p.y - 68 * e;
+  // R7: el brote dura lo que el primer efecto de su fila (FUN_002762B0, tablas 0x379080/0x3790B0/0x379110 sobre el banco
+  // 343+5k): 48 cuadros (66 con movimiento tipo 4)
+  const float brote = std::clamp((g_ahora - f.brote_t) / ((f.mov == 4 ? 66.0f : 48.0f) / 60.0f), 0.0f, 1.0f);
+  if (brote < 1.0f && f.c != kSaibaman) {   // aparece: destello que se cierra sobre la pieza
+    const float r = (1.0f - brote) * 70.0f * e;
+    dl->AddCircleFilled(ImVec2(p.x, p.y - 30 * e), r, IM_COL32(255, 255, 220, int(160 * (1.0f - brote))));
+  }
   if (f.c == kSaibaman && g_thoyo && g_tcabezas) {
     dl->AddImage(g_thoyo.id(), ImVec2(p.x - 36 * e, p.y - 18 * e), ImVec2(p.x + 36 * e, p.y + 18 * e));
     const int n = int(t * 3) % 3;
-    dl->AddImage(g_tcabezas.id(), ImVec2(p.x - 28 * e, p.y - 48 * e), ImVec2(p.x + 28 * e, p.y + 8 * e),
-                 ImVec2(float(n) / 3, 0), ImVec2(float(n + 1) / 3, 1), col);
+    // al brotar la cabeza sube del agujero (de 0 a su alto en 1 s) con tierra que salta
+    const float alto = 56 * e * brote;
+    dl->AddImage(g_tcabezas.id(), ImVec2(p.x - 28 * e, p.y + 8 * e - alto), ImVec2(p.x + 28 * e, p.y + 8 * e),
+                 ImVec2(float(n) / 3, 0), ImVec2(float(n + 1) / 3, brote), col);
+    if (brote < 1.0f)
+      for (int q = 0; q < 6; ++q) {
+        const float an = float(q) * 1.047f + brote * 2.0f, d = brote * 40 * e;
+        dl->AddCircleFilled(ImVec2(p.x + std::cos(an) * d, p.y - std::fabs(std::sin(an)) * d * 0.6f), 4 * e * (1.0f - brote),
+                            IM_COL32(120, 80, 40, 220));
+      }
     arriba = p.y - 48 * e;
   } else if (f.c == kGoku && f.bando == 4 && (g_tgoku || g_goku3d.malla)) {
     dl->AddEllipseFilled(ImVec2(p.x, p.y), ImVec2(22 * e, 7 * e), IM_COL32(0, 0, 0, 90));
     // en 3D (su modelo del tablero de B2, andando durante el paso); sin el, el sprite de la intro
-    const Casilla &c0 = g_d.casillas[size_t(f.desde)], &c1 = g_d.casillas[size_t(f.casilla)];
-    const bool anda = g_ahora - f.t_mov < 0.35f && f.desde != f.casilla;
-    if (!DibGoku3D(dl, p, 80 * e, t, anda, c1.x - c0.x, c1.y - c0.y) && g_tgoku)
+    g_goku_giro = GiroDe(f, g_ahora);   // gira solo al moverse y vuelve a mirar al frente (R7)
+    const bool en_lucha = g_pend_j >= 0 && (&f == &g_f[size_t(g_pend_j)] || &f == &g_f[size_t(g_pend_r)]);
+    const float busca = g_marca_icono == 7 && g_marca == f.casilla ? g_ahora - g_marca_t : -1;
+    if (!DibGoku3D(dl, p, 80 * e, t, Andando(f, g_ahora), en_lucha ? std::max(0.001f, g_ahora - g_pend_t) : 0,
+                   busca >= 0 && busca < 36.0f / 60.0f ? std::max(0.001f, busca) : 0) && g_tgoku)
       dl->AddImage(g_tgoku.id(), ImVec2(p.x - 29 * e, p.y - 80 * e), ImVec2(p.x + 29 * e, p.y), ImVec2(0, 0), ImVec2(1, 1), col);
     arriba = p.y - 80 * e;
-  } else if (f.c != kSaibaman && DibFicha3D(dl, f.idx, p, 96 * e, t + float(f.n) * 0.37f)) {
+  } else if (f.c != kSaibaman && DibFicha3D(dl, f.idx, p, 96 * e, t + float(f.n) * 0.37f, GiroDe(f, g_ahora))) {
     arriba = p.y - 96 * e;   // la ficha 3D del original (CMN 335) con el retrato y el dorso de su pieza
   } else {
     const size_t dorso = size_t(f.idx) * 2 + 1;
@@ -1387,16 +2329,28 @@ float DibPieza(ImDrawList* dl, const Cam& k, const Ficha& f, ImVec2 pos, float t
 
 ImVec2 PosFicha(const Ficha& f) {
   const Casilla &a = g_d.casillas[size_t(f.desde)], &b = g_d.casillas[size_t(f.casilla)];
-  float k = std::clamp((g_ahora - f.t_mov) / 0.35f, 0.0f, 1.0f);
-  k = 1.0f - (1.0f - k) * (1.0f - k);
+  // lineal, tras el giro (0x273630: inicio + direccion * 4 * cuadros)
+  const float k = std::clamp((g_ahora - f.t_mov - f.t_giro) / std::max(f.t_dur, 0.01f), 0.0f, 1.0f);
   return ImVec2(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k);
 }
 
 void DibTablero(ImDrawList* dl, float t, bool prepara) {
   const ImVec2 W = ImGui::GetIO().DisplaySize;
-  // camara: sigue a la ficha elegida (o al rival del combate pendiente) sin salirse mucho del mapa
+  // camara (R7, medida en el ELF): la del guion mientras corren (ordenes 9-16); con un combate pendiente, el punto medio
+  // de las dos fichas (0x276F50); en la fase enemiga, el rival que se mueve (0x235930 -> 0x276FF0); si no, la ficha elegida
   ImVec2 obj(g_d.ancho * 0.5f, g_d.alto * 0.5f);
-  if (!prepara && g_sel < int(g_f.size())) obj = PosFicha(g_f[size_t(g_pend_r >= 0 ? g_pend_r : g_sel)]);
+  if (!HilosOcupados()) g_cam_script = false;
+  if (!prepara && g_sel < int(g_f.size())) obj = PosFicha(g_f[size_t(g_sel)]);
+  if (!prepara && g_cam_rival >= 0 && g_cam_rival < int(g_f.size())) obj = PosFicha(g_f[size_t(g_cam_rival)]);
+  if (!prepara && g_pend_j >= 0 && g_pend_r >= 0) {
+    const ImVec2 a = PosFicha(g_f[size_t(g_pend_j)]), b = PosFicha(g_f[size_t(g_pend_r)]);
+    obj = ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+  }
+  if (!prepara && g_cam_script) {
+    if (g_cam_pieza >= 0 && g_cam_pieza < int(g_f.size())) obj = PosFicha(g_f[size_t(g_cam_pieza)]);
+    else if (g_cam_casilla > 0 && g_cam_casilla < int(g_d.casillas.size()))
+      obj = ImVec2(g_d.casillas[size_t(g_cam_casilla)].x, g_d.casillas[size_t(g_cam_casilla)].y);
+  }
   Cam k;
   k.c = ImVec2(W.x * 0.5f, W.y * 0.5f);
   k.f = k.d * W.y / 480.0f;
@@ -1406,8 +2360,15 @@ void DibTablero(ImDrawList* dl, float t, bool prepara) {
   obj.x = g_d.ancho > 2 * medio ? std::clamp(obj.x, medio, g_d.ancho - medio) : g_d.ancho * 0.5f;
   obj.y = std::min(obj.y, g_d.alto - abajo);
   const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.1f);
-  g_cam_x += (obj.x - g_cam_x) * std::min(1.0f, dt * 4.0f);
-  g_cam_y += (obj.y - g_cam_y) * std::min(1.0f, dt * 4.0f);
+  if (g_cam_script && g_cam_lineal) {   // FUN_0023ACB0: 5 px por cuadro y por eje, y se pega al llegar
+    const float v = 300.0f * dt;
+    g_cam_x = std::fabs(obj.x - g_cam_x) <= v ? obj.x : g_cam_x + (obj.x > g_cam_x ? v : -v);
+    g_cam_y = std::fabs(obj.y - g_cam_y) <= v ? obj.y : g_cam_y + (obj.y > g_cam_y ? v : -v);
+  } else {   // FUN_0023AF30: 1/12 de lo que falta en cada cuadro de 60 Hz
+    const float f = 1.0f - std::pow(11.0f / 12.0f, dt * 60.0f);
+    g_cam_x += (obj.x - g_cam_x) * f;
+    g_cam_y += (obj.y - g_cam_y) * f;
+  }
   k.cx = g_cam_x;
   k.cy = g_cam_y;
   dl->AddRectFilledMultiColor(ImVec2(0, 0), W, IM_COL32(18, 36, 80, 255), IM_COL32(18, 36, 80, 255),
@@ -1487,6 +2448,8 @@ void DibTablero(ImDrawList* dl, float t, bool prepara) {
       DibIcono(dl, 18, ImVec2(p.x - 52 * e, p.y - 28 * e), ImVec2(p.x + 52 * e, p.y + 28 * e), ImVec4(0, 56.0f * float(n), 104, 56.0f * float(n + 1)), col);
       DibIcono(dl, 16, ImVec2(p.x - 30 * e, p.y - 84 * e), ImVec2(p.x + 30 * e, p.y - 6 * e), ImVec4(0, 0, 0, 0), col);
     } else if (c.lucha || c.condicion) {   // casilla de combate: boton morado, kanji y en el hexagono su condicion
+      Lienzo L; L.o = p; L.s = e;
+      if (DibCasilla01(dl, L, c.condicion, t * 60.0f, col)) continue;
       DibIcono(dl, 14, ImVec2(p.x - 24 * e, p.y - 10 * e), ImVec2(p.x + 48 * e, p.y + 70 * e), ImVec4(0, 0, 0, 0), col);
       // 1 media vida (corazon a medias), 2 ki a 0 (el 0 con llama), 3 vida que baja (corazon gris), 4 ki que baja
       // (llama), 5 sin bloqueo (la X roja): corazones 398 #15 (32x32, 8 niveles) y 398 #19 (filas de 32x32)
@@ -1533,7 +2496,7 @@ void DibTablero(ImDrawList* dl, float t, bool prepara) {
       const Casilla& c = g_d.casillas[size_t(o.casilla)];
       ImVec2 p;
       float e = 1;
-      if (!k.P(c.x + 6, c.y, p, &e)) continue;
+      if (!k.P(c.x, c.y, p, &e)) continue;
       if (o.tipo == 0) {
         const int b = BolaEn(o.casilla);
         if (b < 0) continue;
@@ -1541,11 +2504,14 @@ void DibTablero(ImDrawList* dl, float t, bool prepara) {
         DibIcono(dl, 2, ImVec2(p.x - 18 * e, p.y - 40 * e), ImVec2(p.x + 18 * e, p.y - 4 * e), ImVec4(40.0f * float(n), 0, 40.0f * float(n + 1), 40));
         continue;
       }
-      const int ic = o.tipo == 9 ? 26 : o.tipo == 1 ? 20 : o.tipo == 3 ? 21 : o.tipo == 8 ? 25 : o.tipo == 7 ? 22 : o.tipo == 6 ? 16 : o.tipo == 5 ? 24 : 17;
+      // #AMA 397, registro 0x43 + tipo (FUN_0027B740) -> textura de 398: 1 daga 20, 3 armadura 21, 5 cebolla 24, 6 Mr. Popo
+      // 23, 7 capsula 22, 8 zenie 25, 9 radar 26 (su primer cuadro; la daga y la armadura, la mitad izquierda)
+      const int ic = o.tipo == 9 ? 26 : o.tipo == 1 ? 20 : o.tipo == 3 ? 21 : o.tipo == 8 ? 25 : o.tipo == 7 ? 22 : o.tipo == 6 ? 23 : o.tipo == 5 ? 24 : 17;
       const Tex* x = Icono(ic);
       if (!x) continue;
       const float w = (ic == 20 || ic == 21) ? x->w * 0.5f : x->w, h = x->h;   // daga y armadura: la primera de dos
-      DibIcono(dl, ic, ImVec2(p.x - w * 0.5f * e, p.y - h * e), ImVec2(p.x + w * 0.5f * e, p.y), ImVec4(0, 0, w, h));
+      // el rect del #AMA va centrado en el punto de la casilla (p. ej. la daga -20..19 x -28..27)
+      DibIcono(dl, ic, ImVec2(p.x - w * 0.5f * e, p.y - h * 0.5f * e), ImVec2(p.x + w * 0.5f * e, p.y + h * 0.5f * e), ImVec4(0, 0, w, h));
       continue;
     }
     const bool en_prep = q.ficha <= -2;
@@ -1557,28 +2523,75 @@ void DibTablero(ImDrawList* dl, float t, bool prepara) {
     const float arriba = DibPieza(dl, k, f, pos, t, hecha ? IM_COL32(170, 170, 180, 255) : IM_COL32_WHITE);
     ImVec2 p;
     float e = 1;
-    if (!en_prep && q.ficha == g_sel && arriba >= 0 && k.P(pos.x, pos.y, p, &e)) {   // la elegida: sus movimientos en azul
-      CifrasAzules(dl, f.movs, ImVec2(p.x + 34 * e, arriba + 6 * e + 3 * e * std::sin(t * 4.0f)), 26 * e);
+    // cifra azul junto a cada pieza (como en las capturas del original): las del jugador, los movimientos que le quedan;
+    // las rivales, sus acciones de la fase enemiga (+2). La elegida da saltitos.
+    if (!en_prep && f.c != kSaibaman && arriba >= 0 && k.P(pos.x, pos.y, p, &e)) {
+      const float bote = q.ficha == g_sel ? 3 * e * std::sin(t * 4.0f) : 0.0f;
+      CifrasAzules(dl, f.jugador ? f.movs : f.acciones, ImVec2(p.x + 34 * e, arriba + 6 * e + bote), 26 * e);
     }
   }
-  // destino elegido con la cruceta: la flecha roja animada (398 #19, fila de arriba)
-  if (!prepara && g_dest > 0) {
+  // efectos de los guiones, en su punto del mapa (1 px del #AMA = 1 px del mapa)
+  for (size_t i = 0; i < g_efectos.size();) {
+    const Efecto& ef = g_efectos[i];
+    if (t > ef.t0 + ef.dur) {
+      g_efectos.erase(g_efectos.begin() + std::ptrdiff_t(i));
+      continue;
+    }
     ImVec2 p;
     float e = 1;
-    if (k.P(g_d.casillas[size_t(g_dest)].x, g_d.casillas[size_t(g_dest)].y, p, &e)) {
-      const int n = int(t * 8) % 4;
-      const float s = 34 * e, bob = 5 * e * std::sin(t * 6.0f);
-      DibIcono(dl, 19, ImVec2(p.x - s * 0.5f, p.y - s * 1.5f + bob), ImVec2(p.x + s * 0.5f, p.y - s * 0.5f + bob),
-               ImVec4(32.0f * float(n), 0, 32.0f * float(n + 1), 32));
+    if (t >= ef.t0 && k.P(ef.x, ef.y, p, &e)) {
+      Lienzo L;
+      L.o = p;
+      L.s = e;
+      const Datos::Sprite& sp = g_d.textos[size_t(ef.k)];
+      DibSp(dl, g_d.textos, g_tloc, ef.k, L, (t - ef.t0) * 60.0f, IM_COL32_WHITE, -sp.px, -sp.py);
     }
+    ++i;
   }
+  // cursor del original (FUN_00275440, medido en PCSX2 R7): la flecha roja = animacion 92 del #AMA 402 (textura
+  // DATA_<idioma> 188 #26), sin giro, en la casilla elegida (el destino o, si no hay, la del personaje); su punto se le
+  // acerca 1/6 por cuadro y la lista A la balancea (30,-30) -> (24,-25) en 20 cuadros con escala x -1 (volteada: apunta
+  // abajo a la izquierda, a la casilla, como en la captura flecha_roja_fase1.png).
+  static float cur_x = -1, cur_y = 0, cur_t = 0;
+  const int cur_c = prepara || g_estado != kJuego || g_fase_rival || HilosOcupados() || EscenaAbierta() ? -1
+                    : g_dest > 0 ? g_dest : sel_c;
+  if (cur_c > 0 && g_d.hud_ama.size() > 92) {
+    const Casilla& c = g_d.casillas[size_t(cur_c)];
+    const float f = cur_x < 0 ? 1.0f : 1.0f - std::pow(5.0f / 6.0f, std::clamp(t - cur_t, 0.0f, 0.5f) * 60.0f);
+    cur_x += (c.x - cur_x) * f;
+    cur_y += (c.y - cur_y) * f;
+    const Datos::Sprite& sp = g_d.hud_ama[92];
+    ImVec2 p;
+    float e = 1;
+    if (sp.tex >= 0 && sp.tex < int(g_thud.size()) && g_thud[size_t(sp.tex)] && k.P(cur_x, cur_y, p, &e)) {
+      const Tex& x = g_thud[size_t(sp.tex)];
+      const Pose po = PoseDe(sp, std::fmod(t * 60.0f, std::max(1.0f, sp.dur - 1)));
+      const float ex = po.ex, ey = po.ey;   // ex = -1: la textura va volteada (como en el original)
+      dl->AddImage(x.id(), ImVec2(p.x + (po.px + sp.x0 * ex) * e, p.y + (po.py + sp.y0 * ey) * e),
+                   ImVec2(p.x + (po.px + sp.x1 * ex) * e, p.y + (po.py + sp.y1 * ey) * e), ImVec2(sp.u0 / x.w, sp.v0 / x.h),
+                   ImVec2(sp.u1 / x.w, sp.v1 / x.h));
+    }
+  } else if (cur_c <= 0) {
+    cur_x = -1;   // al volver, aparece ya en su casilla
+  }
+  cur_t = t;
   // "!!" del contacto o "?!" de la busqueda (398 #8 / #7)
   if (!prepara && g_marca > 0 && t - g_marca_t < 1.2f) {
     ImVec2 p;
     float e = 1;
     if (k.P(g_d.casillas[size_t(g_marca)].x, g_d.casillas[size_t(g_marca)].y, p, &e)) {
-      const float s = 46 * e * (1.0f + 0.3f * std::max(0.0f, 0.2f - (t - g_marca_t)) * 5.0f);
-      DibIcono(dl, g_marca_icono, ImVec2(p.x - s * 0.5f + 30 * e, p.y - 66 * e - s * 1.4f), ImVec2(p.x + s * 0.5f + 30 * e, p.y - 66 * e - s * 0.4f));
+      // FUN_00274880 estado 3: entrada 0x2A (51 cuadros), bucle 0x2B (21). El evento conserva su vida local.
+      bool puesto = false;
+      if (g_marca_icono == 8 && g_d.life_ama.size() > 43) {
+        const float c = std::max(0.0f, (t - g_marca_t) * 60.0f), entrada = g_d.life_ama[42].dur;
+        Lienzo L; L.o = p; L.s = e;
+        puesto = DibNativa01(dl, g_d.life_ama, g_ticonos, c < entrada ? 42 : 43, L,
+                             c < entrada ? c : std::fmod(c - entrada, std::max(1.0f, g_d.life_ama[43].dur)));
+      }
+      if (!puesto) {
+        const float s = 46 * e * (1.0f + 0.3f * std::max(0.0f, 0.2f - (t - g_marca_t)) * 5.0f);
+        DibIcono(dl, g_marca_icono, ImVec2(p.x - s * 0.5f + 30 * e, p.y - 66 * e - s * 1.4f), ImVec2(p.x + s * 0.5f + 30 * e, p.y - 66 * e - s * 0.4f));
+      }
     }
   }
 }
@@ -1706,6 +2719,13 @@ void DibAviso(ImDrawList* dl, const S::Area& a, float t) {
 
 }  // namespace
 
+// Cabeza de B2 (CMN 1196) del luchador `id_b3` de B3 (el primer ID de B2 que le corresponde); nada si no hay.
+ImTextureID CabezaDeB3(int id_b3) {
+  for (int c = 0; c < 55; ++c)
+    if (B2aB3(c) == id_b3) return CabezaB2(c);
+  return ImTextureID{};
+}
+
 // ---- API (pasarela_misiones.cpp, con su g_mu) ----
 bool Disponible() {
   // una vez encontrada, se queda; mientras falte se vuelve a mirar cada 2 s (el jugador la puede elegir con el juego
@@ -1719,6 +2739,24 @@ bool Disponible() {
   visto = ms;
   hay = !BuscarJuego("budokai 2").empty();
   return hay;
+}
+
+// M1 (mod opcional b2.video_mundo_dragon): el video de entrada al Mundo Dragon. El original lanza
+// /USR/MOVIE_EU.SFD al abrir el tablero (FUN_002a47a0 lo reproduce con FUN_001461f0(.., 0x3a3770, 1), b2.c:246837;
+// se salta con START, mascara 0x8 en FUN_002a46f0, b2.c:246769-246777). Una vez por sesion. El fichero sale de la
+// copia del jugador (carpeta o .iso: opcional::ArchivoDeJuegoPs2 extrae de la ISO a la cache). A/START lo saltan
+// (lo lee el reproductor, video_sfd.h).
+void VideoMundoDragon() {
+  if (!dbz3::opcional::Activo("b2.video_mundo_dragon")) return;
+  static bool hecho = false;
+  if (hecho) return;
+  const std::string ruta = dbz3::opcional::Texto("b2.video_mundo_dragon", "ruta_iso", "USR/MOVIE_EU.SFD");
+  const std::filesystem::path p = dbz3::opcional::ArchivoDeJuegoPs2("b2", ruta);
+  if (p.empty()) return;   // sin copia de B2 (o sin el fichero): no se da por hecho (se reintenta al reentrar)
+  hecho = true;
+  const bool ok = dbz3::video::Reproducir(p);
+  REXLOG_INFO("dbz3 tablero b2: video de entrada (mod b2.video_mundo_dragon): {} ({})", ruta,
+              ok ? "reproduciendo" : "no se pudo abrir");
 }
 
 void Entrar() {
@@ -1735,34 +2773,35 @@ void Entrar() {
     g_deseo = 0;
     g_shen = 0;
   }
+  VideoMundoDragon();   // M1 (mod opcional b2.video_mundo_dragon), una vez por sesion
 }
 
 void Resultado(int ganador, int vida) {
   g_luchando = false;
   const int pj = g_pend_j, pr = g_pend_r;
   g_pend_j = g_pend_r = -1;
-  if (pj >= 0 && pr >= 0 && ganador >= 0) SucesosDeCombate(ganador == 0);
+  if (pj >= 0 && pr >= 0 && ganador >= 0) {
+    const Ficha &fj = g_f[size_t(pj)], &fr = g_f[size_t(pr)];
+    SucesosDeCombate(ganador == 0, ganador == 0 ? fr.barras - 1 <= 0 : fj.barras - 1 <= 0);
+  }
   if (pj < 0 || pr < 0 || ganador < 0) return FinDeAccion();
   Ficha &j = g_f[size_t(pj)], &r = g_f[size_t(pr)];
   REXLOG_INFO("dbz3 tablero b2: combate {} contra {}: gana {}, vida {}", Nombre(j), Nombre(r), ganador == 0 ? "el jugador" : "el rival", vida);
   if (ganador == 0) {
     j.vida = vida > 0 && vida < j.vida_max ? vida : 0;
     // FAQ: si estaba aturdido, el golpe quita 2 barras. ponytail: perder aturde al rival hasta el siguiente turno rival
-    r.barras -= r.aturdido > 0 ? 2 : 1;
-    r.aturdido = 1;
+    r.barras -= 1;   // R7: sin "aturdido" (de la FAQ; el ELF no lo tiene)
     if (r.barras <= 0) {
       r.fuera = true;
-      if (pr == g_jefe) {
-        g_estado = kGanada;
-        GuardarProgreso("tablero_b2_fase", std::min(g_d.fase + 1, kFases - 1));
-        REXLOG_INFO("dbz3 tablero b2: fase {} completada (bolas {:#x})", g_d.fase + 1, g_bolas);
-        return Aviso(Nombre(r) + T::T(" ha caído. ¡Fase completada!", " is down. Stage complete!"));
-      }
       Aviso(Nombre(r) + T::T(" ha caído.", " is down."));
     } else {
-      Aviso(Nombre(r) + T::T(" pierde una barra y queda aturdido.", " loses a bar and is stunned."), 4);
+      Aviso(Nombre(r) + T::T(" pierde una barra.", " loses a bar."), 4);
     }
   } else {   // ponytail (sin confirmar en la FAQ): perder quita una barra al tuyo, que vuelve con la vida llena
+    if (j.c == kGoku && j.bando == 4) {   // FUN_00277BB0: la pieza que pierde, golpeada o derribada
+      g_goku_reac_t = g_ahora;
+      g_goku_reac_ko = j.barras - 1 <= 0;
+    }
     j.vida = 0;
     if (--j.barras <= 0) {
       j.fuera = true;
@@ -1784,7 +2823,7 @@ void Resultado(int ganador, int vida) {
 
 // 0 nada, 1 salir, 2 combate: out = {jugador, rival (IDs de B3), mapa de B3, vida que le queda al jugador, vida del
 // rival (< 0 = solo la inicial), condicion de la casilla (1-5, ver T1)}.
-int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool auto_on, int out[8]) {
+int DibujarTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool auto_on, int out[8]) {
   g_ahora = t;
   if (g_d.fase < 0) {
     S::MenuText(dl, a.At(600, 400), 40 * a.s, T::T("No se pudo leer el tablero de tu Budokai 2.",
@@ -1795,7 +2834,8 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
     return (pressed & kB) ? 1 : 0;
   }
   Texturas();
-  if (auto_on && t - g_auto_t > 1.4f) {
+  if (g_estado == kJuego) CorrerHilos();
+  if (auto_on && !HilosOcupados() && !EscenaAbierta() && t - g_auto_t > 1.4f) {
     g_auto_t = t;
     if (g_estado == kGanada || g_estado == kPerdida) pressed |= kA;
     else Auto();
@@ -1836,21 +2876,8 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
     };
     if (!img(g_d.stage, 248, 1.2f)) S::MenuText(dl, a.At(600, 248), 44 * a.s, kSagas[g_d.fase](), true, false, 900 * a.s);
     img(g_d.objetivo, 338, 1.0f);
-    S::MenuText(dl, a.At(600, 410), 38 * a.s, T::T("Elige al compañero de Goku", "Pick Goku's partner"), true, false);
-    const int n = int(g_cand.size());
-    for (int i = 0; i < n; ++i) {
-      const float w = i == g_comp ? 118.0f : 70.0f, x = 600 + (float(i) - float(g_comp)) * 76.0f +
-                                                         (i > g_comp ? 26.0f : i < g_comp ? -26.0f : 0.0f);
-      if (x < 170 || x > 1030) continue;   // margen con el borde del panel (90..1110)
-      DibFicha(dl, g_d.piezas[size_t(g_cand[size_t(i)])], a.At(x, i == g_comp ? 565.0f : 540.0f), w * a.s, t,
-               i == g_comp ? IM_COL32_WHITE : IM_COL32(150, 150, 170, 230));
-    }
-    if (n > 0) S::MenuText(dl, a.At(600, 618), 36 * a.s, Nombre(g_d.piezas[size_t(g_cand[size_t(g_comp)])]).c_str(), true, false);
-    S::HelpLine(dl, a.At(600, 878), 34 * a.s, {{"LB", ""}, {"RB", T::T("Compañero", "Partner")}, {"A", T::T("Empezar", "Start")},
-                                               {"Y", T::T("Salir", "Quit")}});
+    S::HelpLine(dl, a.At(600, 878), 34 * a.s, {{"A", T::T("Empezar", "Start")}, {"Y", T::T("Salir", "Quit")}});
     if (pressed & kY) return 1;
-    if (n > 0 && (pressed & (kLeft | kLB))) g_comp = (g_comp + n - 1) % n;
-    if (n > 0 && (pressed & (kRight | kRB))) g_comp = (g_comp + 1) % n;
     // Fases en orden, como B2: el Mundo Dragon carga la fase de su partida guardada (ELF 0x2350C0 con 0x6992DA, copiado
     // de la partida 0x693A96 y limitado a 0-8) y no tiene pantalla para elegir otra. Antes, arriba/abajo saltaban a
     // cualquiera de las 9; ya no. Para volver a la I: menu del tablero > "¿Reiniciar Mundo Dragon?".
@@ -1859,6 +2886,59 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
   }
   DibHud(dl, a, t);
   DibAviso(dl, a, t);
+  DibEscena(dl, a, t, pressed);
+  if (g_estado == kJuego && g_elegir > 0 && !EscenaAbierta() && g_mensajes.empty()) {
+    // orden 69: como el original (tarea 0x2A2550), las fichas libres en fila y "quedan N"; A elige, las elegidas salen
+    // al tablero en su casilla del #YDW. ponytail: el panel es propio (la ventana DWU del original, CMN 402, sin portar)
+    std::vector<int> libres;
+    for (int c : g_cand)
+      if (g_f[size_t(c)].fuera) libres.push_back(c);
+    if (libres.empty()) {
+      g_elegir = 0;
+      return 0;
+    }
+    const int n = int(libres.size());
+    g_comp = std::clamp(g_comp, 0, n - 1);
+    // Encargo 01: la ventana de CMN 399 + DATA_<idioma> 184 sustituye al recuadro propio. Si el banco no esta
+    // (otra ISO), DibAliados01 devuelve false y se queda el panel de antes: nunca se pierde la eleccion.
+    const bool nativo01 = DibAliados01(dl, a, t, libres);
+    if (!nativo01) {
+      dl->AddRectFilled(a.At(90, 300), a.At(1110, 700), IM_COL32(8, 18, 54, 225), 16 * a.s);
+      dl->AddRect(a.At(90, 300), a.At(1110, 700), IM_COL32(120, 170, 255, 230), 16 * a.s, 0, 3 * a.s);
+      for (int i = 0; i < n; ++i) {
+        const float w = i == g_comp ? 118.0f : 70.0f, x = 600 + (float(i) - float(g_comp)) * 76.0f +
+                                                           (i > g_comp ? 26.0f : i < g_comp ? -26.0f : 0.0f);
+        if (x < 170 || x > 1030) continue;
+        DibFicha(dl, g_f[size_t(libres[size_t(i)])], a.At(x, i == g_comp ? 565.0f : 540.0f), w * a.s, t,
+                 i == g_comp ? IM_COL32_WHITE : IM_COL32(150, 150, 170, 230));
+      }
+    }
+    char q[96];
+    std::snprintf(q, sizeof(q), T::T("Elige aliado (quedan %d)", "Choose an ally (%d left)"), g_elegir);
+    S::MenuText(dl, a.At(600, nativo01 ? 300 : 350), 38 * a.s, q, true, false);
+    if (!nativo01)
+      S::MenuText(dl, a.At(600, 640), 36 * a.s, Nombre(g_f[size_t(libres[size_t(g_comp)])]).c_str(), true, false);
+    S::HelpLine(dl, a.At(600, 878), 34 * a.s, {{"LB", ""}, {"RB", T::T("Aliado", "Ally")}, {"A", T::T("Elegir", "Choose")}});
+    if (pressed & (kLeft | kLB)) g_comp = (g_comp + n - 1) % n;
+    if (pressed & (kRight | kRB)) g_comp = (g_comp + 1) % n;
+    if (auto_on) pressed |= kA;
+    if (pressed & (kA | kStart)) {
+      Ficha& c = g_f[size_t(libres[size_t(g_comp)])];
+      c.fuera = false;
+      c.jugador = true;
+      c.movs = c.movs_turno = 1;
+      c.brote_t = t;
+      --g_elegir;
+      g_comp = 0;
+      REXLOG_INFO("dbz3 tablero b2: aliado elegido: {} (casilla {}), quedan {}", Nombre(c), c.casilla, g_elegir);
+    }
+    return 0;
+  }
+  if (g_estado == kJuego && (HilosOcupados() || EscenaAbierta())) return 0;   // el guion manda
+  if (g_estado == kJuego && g_fase_rival && g_pend_j < 0 && g_menu == 0) {
+    FaseRival();
+    if (g_fase_rival && g_pend_j < 0) return 0;
+  }
   if (g_estado == kGanada || g_estado == kPerdida) {
     const bool gana = g_estado == kGanada;
     dl->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize, IM_COL32(0, 0, 0, 120));
@@ -1880,14 +2960,19 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
                                                {"Y", T::T("Salir", "Quit")}});
     if (pressed & kY) return 1;
     if (pressed & (kA | kStart)) {
-      if (gana && g_d.fase == kFases - 1 && (g_bolas & 0x7F) == 0x7F) {   // las 7 Bolas tras la fase IX: Shenron
+      if (gana && g_fase_sig < 0 && (g_bolas & 0x7F) == 0x7F) {   // orden 42 (fase IX) con las 7 Bolas   // las 7 Bolas tras la fase IX: Shenron
         g_estado = kDeseo;
         g_deseo = 0;
         g_shen = 0;
         REXLOG_INFO("dbz3 tablero b2: Shenron: {} deseos", g_tdeseos.size());
         return 0;
       }
-      const int f = gana ? std::min(g_d.fase + 1, kFases - 1) : g_d.fase;
+      if (gana && g_fase_sig < 0) {   // orden 42 sin las 7 Bolas: el original borra la partida del Mundo Dragon
+        g_bolas = 0;
+        GuardarProgreso("tablero_b2_bolas", 0);
+        GuardarProgreso("tablero_b2_fase", 0);  GuardarBanderas(true);
+      }
+      const int f = gana ? (g_fase_sig >= 0 ? g_fase_sig : 0) : g_d.fase;
       if (Cargar(f)) Preparar();
     }
     return 0;
@@ -1938,17 +3023,85 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
           for (int j = 0, n = CuantasAmt(sitio); j < n; ++j) g_shen_sitio.tex.push_back(TexturaAmt(sitio, j));
           g_shen_sitio_tx = ps2::Texturas(g_shen_sitio);
         }
+        g_shen_bolas = ps2::CargarSuelto(HijoAmb(a328, 7), HijoAmb(a328, 8), true);
+        if (g_shen_bolas.esq) {
+          g_shen_bolas.anim = ps2::LeerAnim(HijoAmb(a328, 9), 0, g_shen_bolas.esq->padre.size());
+          g_shen_bolas.anim.relativa = true;
+        }
+        g_shen_bolas_tx = ps2::Texturas(g_shen_bolas);
+        float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f, z0 = 1e9f, z1 = -1e9f;
+        for (const auto& tr : g_shen_bolas.malla.tris)
+          for (const auto& v : tr.p) {
+            x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
+            z0 = std::min(z0, v.z); z1 = std::max(z1, v.z);
+          }
+        REXLOG_INFO("dbz3 tablero b2: Shenron: Bolas 3D {} triangulos, x {:.1f}..{:.1f} y {:.1f}..{:.1f} z {:.1f}..{:.1f}, anim {} cuadros",
+                    g_shen_bolas.malla.tris.size(), x0, x1, y0, y1, z0, z1, g_shen_bolas.anim.cuadros);
       }
       REXLOG_INFO("dbz3 tablero b2: Shenron 3D: {} triangulos, {} texturas, animacion de {} cuadros, nubes {}, sitio {} "
                   "triangulos", g_shen_mod.malla.tris.size(), g_shen_tx.size(), g_shen_mod.anim.cuadros, bool(g_shen_nubes),
                   g_shen_sitio.malla.tris.size());
     }
-    if (g_shen_nubes) {   // cielo oscuro con las nubes del original, repetidas por toda la ventana
-      const ImVec2 ds = ImGui::GetIO().DisplaySize;
-      const float lado = 256 * a.s * 1.6f, desp = std::fmod(t * 6.0f, 1.0f);
-      dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(4, 6, 18, 255));
-      dl->AddImage(g_shen_nubes.id(), ImVec2(0, 0), ds, ImVec2(desp, 0), ImVec2(desp + ds.x / lado, ds.y / lado),
-                   IM_COL32(70, 80, 120, 255));
+    // La aparicion (dw_shenglong.c + #SPX 329; medida en el emulador 2026-10-18, PCSX2 + savestate en "Show Results" con
+    // las 7 Bolas, capturas en E:\DBZ3HD_trabajo\R7\b2\shenron): tiempos desde la pantalla 0xC sin su carga. 1,5-11 s las
+    // 7 Bolas en el suelo del sitio (CMN 328 hijo 0) vistas desde arriba, saliendo de un blanco y brillando cada vez mas;
+    // 9-13 s una columna de luz amarilla verdosa que acaba en blanco; 13-17 s blanco; 17-24 s Shenron entre niebla, sin
+    // suelo: de lado junto a la cabeza, de frente muy cerca y alejandose hasta el plano final (cabeza arriba, el cuerpo
+    // llenando la pantalla, fondo azul noche); desde 24 s la frase 535 y luego la 537 #0 y la lista. X a partir de 1,5 s
+    // salta al plano final (FUN_0029B020: cuenta < 1410 y boton). ponytail: la luz y el brillo de las Bolas van en 2D (en el
+    // original son el emisor 0x100 del #SPX 329, sin portar) y la camara son 3 planos medidos a ojo, no la de su timeline.
+    static float shen_t0 = 0, shen_visto = -10;
+    static bool shen_535 = true;   // "Tu, que has reunido las 7 Bolas..." antes de la 537 #0
+    if (t - shen_visto > 0.5f) {   // entrada en la escena
+      // PRUEBA: DBZ3_TEST_B2_DESEO=1 (prueba r2_deseo) empieza en la frase 537 #0, sin la aparicion; =2 con ella
+      const char* p = std::getenv("DBZ3_TEST_B2_DESEO");
+      const bool directo = p && p[0] == '1';
+      shen_t0 = directo ? t - 24.0f : t;
+      shen_535 = !directo;
+    }
+    shen_visto = t;
+    float te = t - shen_t0;
+    // PRUEBA: DBZ3_TEST_SHEN_T="s[:giro],..." congela la escena en esos segundos (giro = grados de la camara); A pasa al
+    // siguiente sin tocar la logica (para capturas de cada fase con la prueba r2_deseo)
+    static std::vector<std::pair<float, float>> fijos = [] {
+      std::vector<std::pair<float, float>> v;
+      if (const char* e = std::getenv("DBZ3_TEST_SHEN_T"))
+        for (const char* q = e; *q;) {
+          char* fin = nullptr;
+          const float s0 = std::strtof(q, &fin);
+          float g = -1000;
+          if (fin && *fin == ':') g = std::strtof(fin + 1, &fin);
+          if (!fin || fin == q) break;
+          v.push_back({s0, g});
+          q = *fin == ',' ? fin + 1 : fin;
+        }
+      return v;
+    }();
+    static size_t fijo = 0;
+    float giro_prueba = -1000;
+    if (fijo < fijos.size()) {
+      te = fijos[fijo].first;
+      giro_prueba = fijos[fijo].second;
+      if (pressed & (kA | kStart)) ++fijo;
+      pressed = 0;
+      shen_535 = te < 24.0f;
+    } else if (te < 24.0f) {
+      if (te > 1.5f && (pressed & (kA | kStart))) shen_t0 = t - 24.0f;
+      pressed &= uint16_t(~(kA | kStart));
+    }
+    auto tramo = [](float x, float x0, float x1) { return std::clamp((x - x0) / (x1 - x0), 0.0f, 1.0f); };
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const bool bolas = te < 13.0f, ve_shen = te >= 17.0f;
+    {   // fondo: oscuro sobre las Bolas; con Shenron niebla gris que pasa a azul noche (con las nubes del sitio, 328 hijo 1)
+      const float n = bolas ? 0.0f : tramo(te, 20.0f, 23.0f);
+      auto mezcla = [&](int c0, int c1) { return int(float(c0) + (float(c1) - float(c0)) * n); };
+      const ImU32 base = bolas ? IM_COL32(16, 20, 30, 255) : IM_COL32(mezcla(150, 22), mezcla(158, 26), mezcla(170, 50), 255);
+      dl->AddRectFilled(ImVec2(0, 0), ds, base);
+      if (g_shen_nubes && ve_shen) {
+        const float lado = 256 * a.s * 1.6f, desp = std::fmod(t * 6.0f, 1.0f);
+        dl->AddImage(g_shen_nubes.id(), ImVec2(0, 0), ds, ImVec2(desp, 0), ImVec2(desp + ds.x / lado, ds.y / lado),
+                     IM_COL32(70, 80, 120, int(60 + 60 * n)));
+      }
     }
     if (g_shen_mod.malla) {   // encuadre (una vez): del 2 % al 98 % de los vertices; Shenron llena la escena por encima de la
       // ventana (alto ~ 520 de los 900 del area), sin salirse
@@ -1973,36 +3126,89 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
         dist = std::max((y1 - y0) * 450.0f / (480.0f * tg), 2.0f * xr * 450.0f / (1000.0f * tg));
         REXLOG_INFO("dbz3 tablero b2: Shenron 3D: alto {:.1f}..{:.1f}, radio {:.1f}, distancia {:.1f}", y0, y1, xr, dist);
       }
+      (void)cy;
       ps2::Camara cam;
       cam.fov = 0.785f;
-      cam.c = ImVec2(a.p0.x + 600 * a.s, a.p0.y + 260 * a.s);   // Shenron de y 20 a 500 del area, sobre la ventana
+      cam.c = ImVec2(a.p0.x + 600 * a.s, a.p0.y + 450 * a.s);
       cam.h = ImVec2(600 * a.s, 450 * a.s);
-      cam.m[0] = cam.m[5] = cam.m[10] = cam.m[15] = 1;
-      cam.m[13] = -cy;
-      cam.m[14] = -dist;
-      cam.ok = true;
+      // camara mirando a `obj` desde `giro` grados alrededor de y (0 = desde +z), `alza` grados por encima, a `d`
+      auto mirar = [&cam](ps2::V3 obj, float giro, float alza, float d) {
+        const float g = giro * 0.0174533f, h = alza * 0.0174533f;
+        const ps2::V3 ojo{obj.x + d * std::sin(g) * std::cos(h), obj.y + d * std::sin(h), obj.z + d * std::cos(g) * std::cos(h)};
+        ps2::V3 f{obj.x - ojo.x, obj.y - ojo.y, obj.z - ojo.z};
+        const float lf = std::sqrt(f.x * f.x + f.y * f.y + f.z * f.z);
+        f = {f.x / lf, f.y / lf, f.z / lf};
+        ps2::V3 r{-f.z, 0, f.x};   // f x (0, 1, 0)
+        const float lr = std::max(1e-5f, std::sqrt(r.x * r.x + r.z * r.z));
+        r = {r.x / lr, 0, r.z / lr};
+        const ps2::V3 u{r.y * f.z - r.z * f.y, r.z * f.x - r.x * f.z, r.x * f.y - r.y * f.x};
+        auto pt = [](const ps2::V3& p, const ps2::V3& q) { return p.x * q.x + p.y * q.y + p.z * q.z; };
+        const float m[16] = {r.x, u.x, -f.x, 0, r.y, u.y, -f.y, 0, r.z, u.z, -f.z, 0, -pt(r, ojo), -pt(u, ojo), pt(f, ojo), 1};
+        std::memcpy(cam.m, m, sizeof(m));
+        cam.ok = true;
+      };
+      // de frente = giro 0 (medido con DBZ3_TEST_SHEN_T: 90 = de perfil, 180 = la cara tapada por el cuerpo)
+      static const float frente = std::getenv("DBZ3_TEST_SHEN_GIRO") ? float(std::atof(std::getenv("DBZ3_TEST_SHEN_GIRO"))) : 0.0f;
+      const float gf = giro_prueba > -999 ? giro_prueba : frente;
+      static ps2::Malla pose_bolas;
+      if (bolas) {   // las 7 Bolas (centradas por CargarSuelto) desde arriba, acercandose
+        // su animacion (420 cuadros: el brillo que crece) empieza a los 4 s, como el brillo del original
+        if (g_shen_bolas.esq && g_shen_bolas.anim)
+          ps2::Posar(*g_shen_bolas.esq, g_shen_bolas.anim, std::clamp(te - 4.0f, 0.0f, 6.9f), pose_bolas);
+        // PRUEBA: DBZ3_TEST_SHEN_BOLAS=d distancia de la camara a las Bolas
+        static const float prueba_d = std::getenv("DBZ3_TEST_SHEN_BOLAS") ? float(std::atof(std::getenv("DBZ3_TEST_SHEN_BOLAS"))) : 45.0f;
+        mirar({0, 1.0f, 0}, gf, 55.0f, prueba_d * (1.0f - 0.15f * tramo(te, 1.5f, 11.0f)));
+      } else {   // de lado junto a la cabeza (17 s), de frente muy cerca (21 s) y el plano final (24 s)
+        const float k1 = tramo(te, 17.0f, 21.0f), k2 = tramo(te, 21.0f, 24.0f);
+        // la cabeza esta en (-1, 14.9, 0) mirando hacia +z y abajo: los planos van desde debajo de ella
+        const float giro = gf + 75.0f * (1 - k1), alto = 14.5f - 1.2f * k2, d = 8.0f - 1.0f * k1 + 3.0f * k2;
+        mirar({-1.0f, alto, 0}, giro, -10.0f - 20.0f * k1 + 10.0f * k2, d);   // plano final: la cabeza arriba
+      }
       static ps2::Malla pose;
       const bool anima = g_shen_mod.esq && g_shen_mod.anim;
       if (anima) ps2::Posar(*g_shen_mod.esq, g_shen_mod.anim, t, pose);
       ps2::Escena esc;
       esc.Empezar();
-      if (g_shen_sitio.malla) esc.Poner(cam, g_shen_sitio.malla, g_shen_sitio_tx, {0, 0, 0}, 0.0f, 1.0f);
+      if (bolas && g_shen_sitio.malla) esc.Poner(cam, g_shen_sitio.malla, g_shen_sitio_tx, {0, 0, 0}, 0.0f, 1.0f);
+      if (bolas && g_shen_bolas.malla)
+        esc.Poner(cam, pose_bolas ? pose_bolas : g_shen_bolas.malla, g_shen_bolas_tx, {0, 0, 0}, 0.0f, 1.0f);
       // sin toon: con el toon de P4 (Toon{}, borde 0.15) Shenron animado salia roto (triangulos enormes por toda la
       // pantalla; captura D:/DBZ3HD/_pruebas/20261016-074244_escenarios_test3_r2_deseo). Avisado a P4 en RONDA4_PULIDO.
       // PRUEBA (P4): DBZ3_TEST_SHEN_TOON=1 lo pinta con el toon de ps2_modelo (normales basura de B2 -> sin normal)
       static const char* toon_prueba = std::getenv("DBZ3_TEST_SHEN_TOON");   // "2": sin borde
       ps2::Escena::Toon toon_p;
       if (toon_prueba && toon_prueba[0] == '2') toon_p.borde = 0;
-      if (toon_prueba)
+      if (!ve_shen) {
+      } else if (toon_prueba) {
         esc.Poner(cam, anima ? pose : g_shen_mod.malla, g_shen_tx, {0, 0, 0}, 0.0f, 1.0f, toon_p);
-      else
+      } else {
         esc.Poner(cam, anima ? pose : g_shen_mod.malla, g_shen_tx, {0, 0, 0}, 0.0f, 1.0f);
+      }
       esc.Pintar(dl);
+    }
+    {   // brillo de las Bolas, columna de luz, blancos y negro de la carga (2D, sobre la escena)
+      const ImVec2 c(ds.x * 0.5f, ds.y * 0.5f);
+      const float brillo = tramo(te, 4.0f, 9.0f) * (1 - tramo(te, 12.0f, 13.0f));
+      for (int k = 6; k >= 1 && brillo > 0; --k)
+        dl->AddCircleFilled(c, ds.y * (0.06f + 0.05f * float(k)) * (0.6f + 0.6f * brillo), IM_COL32(255, 240, 170, int(26 * brillo)), 48);
+      const float haz = tramo(te, 9.0f, 11.5f) * (1 - tramo(te, 13.0f, 13.5f));
+      if (haz > 0) {
+        const float w = ds.x * (0.05f + 0.25f * haz);
+        const ImU32 borde = IM_COL32(200, 230, 120, 0), medio = IM_COL32(250, 255, 210, int(255 * haz));
+        dl->AddRectFilledMultiColor(ImVec2(c.x - w, 0), ImVec2(c.x, ds.y), borde, medio, medio, borde);
+        dl->AddRectFilledMultiColor(ImVec2(c.x, 0), ImVec2(c.x + w, ds.y), medio, borde, borde, medio);
+      }
+      const float blanco = std::max({1 - tramo(te, 1.5f, 3.5f), tramo(te, 11.0f, 13.0f) * (1 - tramo(te, 17.0f, 18.5f))});
+      if (te < 1.5f)
+        dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(0, 0, 0, 255));
+      else if (blanco > 0)
+        dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(255, 255, 255, int(255 * blanco)));
     }
     const float s = std::min(1200.0f / 640.0f, 900.0f / 448.0f) * a.s;
     const ImVec2 o0(a.p0.x + (1200.0f * a.s - 640.0f * s) * 0.5f, a.p0.y + (900.0f * a.s - 448.0f * s) * 0.5f);
     auto P = [&](float x, float y) { return ImVec2(o0.x + x * s, o0.y + y * s); };
-    if (!g_d.shen_ama.empty() && !g_tshen_marco.empty() && g_tshen_marco[0]) {
+    // el original solo pone la ventana con la lista; las frases van sueltas abajo, en blanco (capturas del emulador)
+    if (te >= 24.0f && g_shen == 1 && !g_d.shen_ama.empty() && !g_tshen_marco.empty() && g_tshen_marco[0]) {
       const Datos::Sprite& m = g_d.shen_ama[0];
       dl->AddImage(g_tshen_marco[0].id(), P(m.px + m.x0, m.py + m.y0 * 1.1f), P(m.px + m.x1, m.py + m.y1 * 1.1f));
     }
@@ -2012,24 +3218,35 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
                    ImVec2(0, 0), ImVec2(1, 1), col);
     };
     const int n = int(g_tdeseos.size());
-    if (g_shen == 1 && n > 0) {
+    if (te < 24.0f) {
+    } else if (g_shen == 1 && n > 0) {
       if (pressed & kUp) g_deseo = (g_deseo + n - 1) % n;
       if (pressed & kDown) g_deseo = (g_deseo + 1) % n;
       const float filas[3] = {284, 320, 356};
+      dl->AddRectFilled(P(146, filas[1] - 15), P(494, filas[1] + 15), IM_COL32(40, 110, 220, 230));   // barra de la elegida
       for (int k = -1; k <= 1; ++k) {
         const int i = (g_deseo + k + n) % n;
         if (g_tdeseos[size_t(i)]) texto(g_tdeseos[size_t(i)], filas[k + 1], 26, k == 0 ? IM_COL32(255, 230, 90, 255) : IM_COL32(170, 170, 190, 220));
       }
     } else {
-      const int f = g_shen == 0 ? 0 : g_shen == 2 ? 1 : 5;
-      if (f < int(g_tshen_frases.size()) && g_tshen_frases[size_t(f)]) texto(g_tshen_frases[size_t(f)], 320, 100, IM_COL32_WHITE);
+      // tras pedir: "Si, eso es aceptable." (#1) o, si el deseo no se puede cumplir aqui, la frase del original "No puedo
+      // conceder ese deseo..." (537 #3; antes un aviso propio en letra de ImGui y despues el #1, que se contradecian)
+      const int f = g_shen == 0 ? (shen_535 ? 6 : 0) : g_shen == 2 ? (g_shen_no ? 3 : 1) : 5;
+      if (f < int(g_tshen_frases.size()) && g_tshen_frases[size_t(f)])
+        texto(g_tshen_frases[size_t(f)], 392, g_tshen_frases[size_t(f)].h, IM_COL32_WHITE);   // a su tamano, abajo
+    }
+    if (g_shen == 0 && shen_535 && te >= 24.0f && (pressed & (kA | kStart))) {
+      shen_535 = false;
+      pressed = 0;
     }
     S::HelpLine(dl, a.At(600, 878), 38 * a.s, {{"A", g_shen == 1 ? T::T("Pedir", "Wish") : T::T("Seguir", "Continue")},
                                                {"Y", T::T("Salir", "Quit")}});
-    if (auto_on) pressed |= kA;
+    if (auto_on && te < 24.0f && fijo >= fijos.size()) shen_t0 = t - 24.0f;
+    if (auto_on && te >= 24.0f) pressed |= kA;
     if (pressed & kY) return 1;
     if (pressed & (kA | kStart)) {
       if (g_shen == 1) {
+        g_shen_no = false;
         if (g_deseo == 0) {
           GuardarProgreso("tablero_b2_nave", 1);
           REXLOG_INFO("dbz3 tablero b2: deseo: portal de la nave de Babidi (Nave abierta)");
@@ -2037,7 +3254,7 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
           DarCapsulaB3(DeseoB3(g_deseo));
         } else {   // ponytail: sin equivalente en B3 (lista arriba); ahora el jugador lo ve
           REXLOG_INFO("dbz3 tablero b2: deseo {} sin equivalente en B3", g_deseo);
-          Aviso(T::T("Este deseo no tiene equivalente en Budokai 3.", "This wish has no equivalent in Budokai 3."));
+          g_shen_no = true;
         }
       }
       if (g_shen < 3) {
@@ -2047,7 +3264,7 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
       g_shen = 0;
       g_bolas = 0;   // las Bolas se dispersan y se vuelve a la fase I
       GuardarProgreso("tablero_b2_bolas", 0);
-      GuardarProgreso("tablero_b2_fase", 0);
+      GuardarProgreso("tablero_b2_fase", 0);  GuardarBanderas(true);
       if (Cargar(0)) Preparar();
     }
     return 0;
@@ -2055,11 +3272,18 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
 
   // combate pendiente: el "!!" se ve un momento y se pide el combate
   if (g_pend_j >= 0 && !g_luchando) {
-    if (t - g_pend_t < 1.0f) return 0;
+    if (t - g_pend_t < 0.5f || HilosOcupados() || EscenaAbierta()) return 0;   // ~30 cuadros (0x235780)
     const Ficha &j = g_f[size_t(g_pend_j)], &r = g_f[size_t(g_pend_r)];
     out[0] = B2aB3(j.c);
     out[1] = B2aB3(r.c);
-    out[2] = kMapaB3[g_d.fase];
+    {   // escenario de B2 de la casilla (alta instalada: -(registro + 1); si no, el mapa de B3 de la fase)
+      static const int forzado = std::getenv("DBZ3_TEST_B2_ESCENARIO") ? std::atoi(std::getenv("DBZ3_TEST_B2_ESCENARIO")) : -1;
+      const int e = forzado >= 0 ? forzado : g_d.casillas[size_t(r.casilla)].escenario;   // PRUEBA: fuerza el 0-12
+      const int reg = e >= 0 && e < 13 && kEscenarioB2[e] ? dbz3::escenarios::PorMod(kEscenarioB2[e]) : -1;
+      out[2] = reg >= 0 ? -(reg + 1) : kMapaB3[g_d.fase];
+      REXLOG_INFO("dbz3 tablero b2: combate en el escenario {} de B2 ({}) -> {}", e, e >= 0 && e < 13 && kEscenarioB2[e] ?
+                  kEscenarioB2[e] : "sin alta", reg >= 0 ? "registro " + std::to_string(reg) : "mapa B3 " + std::to_string(out[2]));
+    }
     out[3] = j.vida;
     out[4] = r.vida_max != 3000 ? r.vida_max : 0;
     out[5] = g_d.casillas[size_t(r.casilla)].condicion;
@@ -2118,7 +3342,7 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
         g_menu = 0;
         g_bolas = 0;
         GuardarProgreso("tablero_b2_bolas", 0);
-        GuardarProgreso("tablero_b2_fase", 0);
+        GuardarProgreso("tablero_b2_fase", 0);  GuardarBanderas(true);
         if (Cargar(0)) Preparar();
       }
     } else if (pressed & (kY | kStart | kB)) {
@@ -2131,6 +3355,7 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
   S::HelpLine(dl, a.At(870, 878), 38 * a.s, {{"A", T::T("Mover", "Move")}, {"X", T::T("Buscar", "Search")},
                                              {"B", T::T("Pasar", "Pass")}, {"LB", T::T("Radar", "Radar")},
                                              {"RB", T::T("Personaje", "Character")}, {"Y", T::T("Menú", "Menu")}});
+  if (t - g_turno_t < 0.6f) return 0;   // entrada del rombo del turno: sin mandos (asi no se encadenan turnos con B)
   if (pressed & (kY | kStart)) {
     g_menu = 1;
     g_menu_sel = 0;
@@ -2140,11 +3365,14 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
   }
   Ficha& f = g_f[size_t(g_sel)];
   if (pressed & kLB) {
+    SonidoEventoB2("marcador", 3);   // FUN_00236EA0 (b2.c:189786-189789): L1 esconde o saca el marcador
     g_hud_oculto = !g_hud_oculto;
     g_hud_t = g_radar_t = t;   // sale o entra con su animacion
+    GuardarProgreso("tablero_b2_marcador", g_hud_oculto ? 0 : 1);   // bit 0x08 de 0x6992DC, va con la partida
   }
   if (pressed & kRB) SiguienteSel();
   if (pressed & (kUp | kDown | kLeft | kRight)) {   // la vecina en esa direccion (en el mapa)
+    const int elegido_antes = g_dest;
     const float dx = (pressed & kRight) ? 1.0f : (pressed & kLeft) ? -1.0f : 0.0f;
     const float dy = (pressed & kDown) ? 1.0f : (pressed & kUp) ? -1.0f : 0.0f;
     const Casilla& c = g_d.casillas[size_t(f.casilla)];
@@ -2158,6 +3386,7 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
         g_dest = v;
       }
     }
+    if (g_dest > 0 && g_dest != elegido_antes) SonidoEventoB2("cursor", 0);   // FUN_002798A0 (b2.c:223825-223827)
   }
   if ((pressed & (kA | kStart)) && g_dest > 0 && f.movs > 0) Mover(g_sel, g_dest);
   else if ((pressed & kX) && f.movs > 0) Buscar(g_sel);
@@ -2166,6 +3395,82 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
     FinDeAccion();
   }
   return 0;
+}
+
+// ---- Mods opcionales de audio del tablero (encargo 13) ----
+// M4 (mod opcional b2.musica_combate): la pista del combate de una casilla. La lista de 24 posiciones (20 pistas
+// validas; -1 = sin musica) es la del ELF (tabla PTR_DAT_003749A4 -> VA 0x3888A0, valores 68..87, 0 al final;
+// b2.c:137069-137071) y el indice es el byte T1+0x1F de la casilla: 17, 1, 4, 6, 20, 21, 7, 15, 22 en las fases
+// I-IX (medido en los 9 #YDW, 2026-10-18). Si el opcional.toml no trae la lista, vale la de aqui (verificada).
+int PistaCombateB2(int indice) {
+  if (!dbz3::opcional::Activo("b2.musica_combate") || indice < 0) return -1;
+  static const int kLista[24] = {68, 69, 70, 71, 72, 73, 74, 75, 76, -1, -1, -1, 83, 84, 85, 86, 87, 77, 78, 79, 80,
+                                 81, 82, 0};
+  std::vector<int> lista = dbz3::opcional::Lista("b2.musica_combate", "lista");
+  if (lista.size() < 24) lista.assign(kLista, kLista + 24);
+  return indice < int(lista.size()) ? lista[size_t(indice)] : -1;
+}
+// M5 (mod opcional b2.musica_menus): indice de la tabla de musica del tablero (0x377E90) del menu abierto. Los
+// indices de menu son 13 (MNU_BGM), 15 (MNT_BGM) y 17 (MNO_SYS): los piden FUN_0023f4b0, FUN_002422a0 y
+// FUN_0025db40 y su nombre de recurso esta en b2.elf VA 0x3A20F0, 0x3A2228 y 0x3A27D0 (re-verificado 2026-10-18);
+// la lista sale de [indices_menu] del toml. Reparto pantalla->indice [H] (las pantallas del original no son las del
+// port): menu del tablero (Salir/Reiniciar y su Si/No) = 13, eleccion de aliados = 15, pantalla de los deseos = 17.
+// -1 = sin menu (la pista de la fase de siempre).
+int PistaMenuB2() {
+  if (!dbz3::opcional::Activo("b2.musica_menus")) return -1;
+  std::vector<int> idx = dbz3::opcional::Lista("b2.musica_menus", "indices_menu");
+  if (idx.size() < 3) idx = {13, 15, 17};
+  if (g_menu > 0) return idx[0];
+  if (g_estado == kJuego && g_elegir > 0 && !EscenaAbierta() && g_mensajes.empty()) return idx[1];
+  if (g_estado == kDeseo) return idx[2];
+  return -1;
+}
+
+// La musica del Mundo Dragon: la pista de cada fase de la tabla de B2 (ELF .data 0x377E90, u32 0x20000 | entrada de
+// ADX_US.AFS: los indices 0-9 -> 265..274, que el tablero pide por fase; R6 2026-10-17). Se corta al ir a un combate o al
+// salir y vuelve al regresar al tablero. R7: el indice lo pone la orden 71 (g_musica), no la fase (ver PistaB2).
+int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool auto_on, int out[8]) {
+  static int sonando = -1;
+  static float audio_anterior = -1;
+  const int r = DibujarTablero(dl, a, t, pressed, auto_on, out);
+  if (r == 0 && g_estado == kJuego && !EscenaAbierta()) SonidosPasosB2(audio_anterior, t);
+  audio_anterior = r == 0 ? t : -1;
+  const bool en_video = dbz3::video::Activo();   // M1: su video va encima y deja sin musica al port mientras dura
+  if (r != 0 || en_video) {
+    CallarMusicaPs2();
+    CallarSonidosPs2();
+    sonando = -1;
+    // M4 (mod opcional b2.musica_combate): al pedirse un combate de casilla (r == 2) suena su pista (T1+0x1F);
+    // la de la fase vuelve sola al volver al tablero (sonando != pista de la fase).
+    if (r == 2 && g_pend_r >= 0 && g_pend_r < int(g_f.size())) {
+      const size_t casilla = size_t(g_f[size_t(g_pend_r)].casilla);
+      const int pista = casilla < g_d.casillas.size() ? PistaCombateB2(g_d.casillas[casilla].musica) : -1;
+      if (pista > 0 && !g_iso_b2.empty()) {
+        sonando = pista;
+        const float vol = dbz3::settings::AudioMute() ? 0.0f : float(dbz3::settings::MasterVolume()) * 0.8f;
+        REXLOG_INFO("dbz3 tablero b2: musica del combate de la casilla {}: ADX_US {} (volumen {:.2f}, mod b2.musica_combate)",
+                    g_f[size_t(g_pend_r)].casilla, pista, vol);
+        // PRUEBA: DBZ3_TEST_MUSICA=1 la decodifica aunque el juego este en silencio (registro con su duracion)
+        OirMusicaPs2(g_iso_b2, "ADX_US.AFS", pista, std::getenv("DBZ3_TEST_MUSICA") ? 0.001f : vol);
+      }
+    }
+  } else if (const int menu = PistaMenuB2(); menu >= 0 || g_estado == kJuego || g_estado == kPrepara) {
+    // M5 (mod opcional b2.musica_menus): con un menu abierto suena su indice (13/15/17); sin menu o sin mod, la
+    // pista de la fase como siempre. El menu de los deseos (kDeseo) solo suena con el mod.
+    const int pista = PistaB2(menu >= 0 ? menu : (g_estado == kJuego ? g_musica : g_d.musica0));
+    if (g_d.fase >= 0 && pista > 0 && sonando != pista && !g_iso_b2.empty()) {
+      sonando = pista;
+      const float vol = dbz3::settings::AudioMute() ? 0.0f : float(dbz3::settings::MasterVolume()) * 0.8f;
+      if (menu >= 0)
+        REXLOG_INFO("dbz3 tablero b2: musica del menu {} (indice de la tabla de B2): ADX_US {} (volumen {:.2f}, mod b2.musica_menus)",
+                    menu, pista, vol);
+      else
+        REXLOG_INFO("dbz3 tablero b2: musica de la fase {}: ADX_US {} (volumen {:.2f})", g_d.fase + 1, pista, vol);
+      // PRUEBA: DBZ3_TEST_MUSICA=1 la decodifica aunque el juego este en silencio (registro con su duracion)
+      OirMusicaPs2(g_iso_b2, "ADX_US.AFS", pista, std::getenv("DBZ3_TEST_MUSICA") ? 0.001f : vol);
+    }
+  }
+  return r;
 }
 
 }  // namespace dbz3::pasarela::b2

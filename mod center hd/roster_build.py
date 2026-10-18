@@ -40,6 +40,8 @@ Un personaje nuevo es un mod "fuente" con `personaje.toml` (sin numeros de entra
     ki_color = "rojo"              # opcional: color de los efectos de sus tecnicas (ki, rayos)
     aura_de = "gogeta"             # opcional: el aura de otro personaje (ID 0-43 o gogeta,
                                    # gogeta_ssj4, vegito); se puede combinar con aura_color
+    aura_formas = [0, 3, 4, 0]     # opcional: tipo de aura de cada forma (0..5; Gohan adulto:
+                                   # 0 normal, 3 SSJ, 4 SSJ2 con rayos). Sin la clave, la del donante
     bocas = ["modelos/bocas.bin"]  # opcional: bocas propias (si no, las del donante re-etiquetadas)
     icono_fuente = "modelo"        # modelo (render cel-shading del 1er modelo, por defecto) |
                                    # imagen (ui/cara.png con fondo y aro oficiales) |
@@ -166,7 +168,13 @@ def work_dir(prefix):
     return d
 
 
+AVISOS = []   # (carpeta, texto) de cada "!! carpeta: texto": el launcher los ensena en ese mod
+
+
 def log(*a):
+    txt = " ".join(str(x) for x in a)
+    if txt.startswith("!! ") and ": " in txt:
+        AVISOS.append(tuple(txt[3:].split(": ", 1)))
     print(*a, flush=True)
 
 
@@ -849,7 +857,43 @@ def adjust(c, kind):
     return base
 
 
+CACHE_IMAGENES = None   # carpeta de la cache de iconos/retratos (la pone construir: <juego>/mods_cache/retratos)
+
+
 def select_images(c, ui, hd_model, portrait_size, want=("icono", "retrato"), fetch=None):
+    """select_images con cache en disco: el render de iconos y retratos era casi todo el tiempo de un montaje
+    completo (12 min con ~25 personajes) y se repetia en cada actualizacion del Kit aunque nada del personaje
+    cambiase. La clave son solo las entradas del render (modelo, imagenes del mod, ajustes, model_render.py)."""
+    if not CACHE_IMAGENES:
+        return _select_images(c, ui, hd_model, portrait_size, want, fetch)
+    import pickle  # noqa: PLC0415
+    h = hashlib.sha1(open(os.path.join(HERE, "model_render.py"), "rb").read())
+    h.update(bytes(hd_model))
+    h.update(json.dumps([image_source(c, ui, "icono"), image_source(c, ui, "retrato"), adjust(c, "icono"),
+                         adjust(c, "retrato"), list(portrait_size), list(want), fetch is not None]).encode())
+    if os.path.isdir(ui):
+        for fn in sorted(os.listdir(ui)):
+            p = os.path.join(ui, fn)
+            if os.path.isfile(p):
+                h.update(fn.encode() + open(p, "rb").read())
+    f = os.path.join(CACHE_IMAGENES, h.hexdigest() + ".pkl")
+    try:
+        with open(f, "rb") as fh:
+            return pickle.load(fh)
+    except Exception:  # noqa: BLE001  (sin cache o cache rota: se renderiza)
+        pass
+    r = _select_images(c, ui, hd_model, portrait_size, want, fetch)
+    try:
+        os.makedirs(CACHE_IMAGENES, exist_ok=True)
+        with open(f + ".tmp", "wb") as fh:
+            pickle.dump(r, fh)
+        os.replace(f + ".tmp", f)
+    except OSError:
+        pass
+    return r
+
+
+def _select_images(c, ui, hd_model, portrait_size, want=("icono", "retrato"), fetch=None):
     """-> (icono RGBA 84x84, [retrato P1, retrato P2] RGBA alto x ancho o None si
     'terminado' de 512x512, avisos). `fetch(entrada)` lee data_cmn (rastreador de los
     cuerpos nativos y afro de Mr. Satan, que van en un bin aparte)."""
@@ -877,6 +921,11 @@ def select_images(c, ui, hd_model, portrait_size, want=("icono", "retrato"), fet
     if icon is None and src == "modelo":
         try:
             icon = mr.make_icon(get_model(), yaw=yaw, zoom=z, dx=dx, dy=dy)
+            # en algunos PCs el render sale vacio sin dar error (casillas con el circulo en blanco en la seleccion):
+            # casi sin pixeles opacos = fallido, y se usa la imagen como si el render hubiera fallado
+            if float((np.asarray(icon)[..., 3] > 32).mean()) < 0.02:
+                icon = None
+                notes.append("icono: el render del modelo salio vacio; se usa ui/cara.png")
         except Exception as e:  # noqa: BLE001
             notes.append("icono: el modelo no se pudo renderizar (%s); se usa ui/cara.png" % e)
     if icon is None:
@@ -895,6 +944,9 @@ def select_images(c, ui, hd_model, portrait_size, want=("icono", "retrato"), fet
     if pors is None and src == "modelo":
         try:
             pors = mr.make_portraits(get_model(), portrait_size, yaw=yaw, zoom=z, dx=dx, dy=dy)
+            if pors and all(p is not None and float((np.asarray(p)[..., 3] > 32).mean()) < 0.01 for p in pors):
+                pors = None   # render vacio (ver el icono)
+                notes.append("retrato: el render del modelo salio vacio; se usa la imagen")
         except Exception as e:  # noqa: BLE001
             notes.append("retrato: el modelo no se pudo renderizar (%s); se usa la imagen" % e)
     if pors is None:
@@ -1070,26 +1122,46 @@ def build_trajes(trajes, cmn, out_dir, next_fid, work, toml, manifest, ids=None)
     for name, d, c in trajes:
         cid = int(c.get("personaje", -1))
         if cid not in IDS or not IDS[cid].get("models"):
-            log("!! %s: personaje %r sin modelos en el juego" % (name, cid))
+            log("!! %s: traje para el personaje %r, que no es del juego original: omitido "
+                "(los trajes extra solo van sobre personajes nativos)" % (name, cid))
             continue
         files = c.get("modelos", [])
         if not files:
             log("!! %s: sin modelos" % name)
             continue
-        fids, cache = [], {}
-        for rel in files:
-            # un numero (o "juego:N") = el modelo del juego tal cual: formas que son otro personaje (Vegeta
-            # SSJ4 = ID 92) para las que el traje no trae modelo propio
-            nat = rel if isinstance(rel, int) else (int(rel[6:]) if str(rel).startswith("juego:") else None)
-            if nat is not None:
+        # Preparar TODO el traje antes de publicar modelos o referencias TOML.
+        preparados, cache = [], {}
+        try:
+            for rel in files:
+                nat = rel if isinstance(rel, int) else (int(rel[6:]) if str(rel).startswith("juego:") else None)
+                tono = c.get("tono")
+                if nat is not None and tono is None:
+                    preparados.append((None, nat))
+                    continue
+                key = ("tono", nat, float(tono)) if nat is not None else ("archivo", str(rel))
+                if key not in cache:
+                    if nat is not None:
+                        import colores  # noqa: PLC0415
+                        hd, _ = colores.retint_modelo(cmn.entry(nat), float(tono))
+                    else:
+                        with open(os.path.join(d, rel), "rb") as modelo:
+                            hd = b3_ramps(to_hd(modelo.read(), work), name)
+                    cache[key] = hd
+                preparados.append((key, None))
+        except Exception as exc:  # noqa: BLE001 -- error del mod, no fallo de escritura
+            log("!! %s: traje omitido ANTES de publicar referencias (%s)" % (name, exc))
+            continue
+        fids, publicados = [], {}
+        for key, nat in preparados:
+            if key is None:
                 fids.append(nat)
                 continue
-            if rel not in cache:
-                write_entry(out_dir, "data_cmn.afs", next_fid,
-                            b3_ramps(to_hd(open(os.path.join(d, rel), "rb").read(), work), name), work)
-                cache[rel] = next_fid
+            if key not in publicados:
+                # Si falla escribir, aborta TreePublish: nunca se publica un roster parcial.
+                write_entry(out_dir, "data_cmn.afs", next_fid, cache[key], work)
+                publicados[key] = next_fid
                 next_fid += 1
-            fids.append(cache[rel])
+            fids.append(publicados[key])
         dn = IDS[cid]
         numero = dn.get("costumes", 1) + extra_n.get(cid, 0)     # numero del traje en el select (0 = el 1.o)
         extra_n[cid] = extra_n.get(cid, 0) + 1
@@ -1155,6 +1227,131 @@ def assign_ids(srcs):
     return ids
 
 
+# ---------------------------------------------------------------- reparto persistente de IDs
+# mods/roster_ids.toml (fuera de _roster, que se regenera): carpeta -> ID de cada personaje nuevo
+# y orden de los trajes extra. Reglas (INFORME R7/slots):
+#  1. un mod ya apuntado conserva su ID aunque se anadan o quiten otros;
+#  2. un `id` pedido en personaje.toml se respeta si nadie activo lo tiene (nunca desplaza a otro);
+#  3. un mod nuevo toma el primer ID libre que no este reservado;
+#  4. un mod desactivado o quitado RESERVA su ID (vuelve con el mismo). La reserva solo se libera
+#     cuando no queda ningun ID libre: primero la de mods cuya carpeta ya no existe, luego la de
+#     desactivados (con aviso). Sin archivo (primera vez) se toma el reparto del _roster actual.
+IDS_FILE = "roster_ids.toml"
+AVISOS_FILE = "roster_avisos.txt"
+MAX_CELDAS = 24        # casillas nuevas de la rueda (src/roster_ext.h kMaxVirtualCells = 64 - 40)
+
+
+def ids_del_roster(mods_dir):
+    """Migracion: carpeta -> ID del _roster ya montado (lineas '# Nombre (mod X)' + 'id = N')."""
+    out, mod = {}, None
+    try:
+        lines = open(os.path.join(mods_dir, OUT_MOD, "roster.toml"), encoding="utf-8").read().splitlines()
+    except OSError:
+        return out
+    for ln in lines:
+        if ln.startswith("# ") and ln.endswith(")") and "(mod " in ln and "traje extra" not in ln:
+            mod = ln[ln.rindex("(mod ") + 5:-1]
+        elif mod and ln.startswith("id = "):
+            out.setdefault(mod, int(ln[5:]))
+            mod = None
+    return out
+
+
+def plan_ids(mods_dir, srcs):
+    """(ids {carpeta activa: ID o None}, mapa nuevo {carpeta: ID} en orden de llegada, orden de trajes)."""
+    path = os.path.join(mods_dir, IDS_FILE)
+    doc = None
+    if os.path.isfile(path):
+        try:
+            doc = toml_file(path)
+        except (OSError, ValueError) as exc:
+            log("aviso: %s no valido (%s): se rehace desde el _roster actual" % (IDS_FILE, exc))
+    if doc is None:
+        mapa = ids_del_roster(mods_dir)
+        trajes = {}
+    else:
+        mapa = {str(k): v for k, v in doc.get("ids", {}).items() if isinstance(v, int)}
+        trajes = {str(k): v for k, v in doc.get("trajes", {}).items() if isinstance(v, int)}
+    mapa = {k: v for k, v in mapa.items() if v in ALL_IDS}
+    activos = [n for n, _, _ in srcs]
+    req = {n: c.get("id") for n, _, c in srcs if c.get("id") in ALL_IDS}
+    ids, dueno = {}, {}
+    for n in sorted(activos, key=lambda n: list(mapa).index(n) if n in mapa else len(mapa)):
+        i = mapa.get(n)                                  # 1. su ID de siempre
+        if i is not None and req.get(n, i) == i and i not in dueno:
+            ids[n], dueno[i] = i, n
+    for n in activos:                                    # 2. ID pedido por el mod
+        r = req.get(n)
+        if n in ids or r is None:
+            continue
+        if r in dueno:
+            log("!! %s: pide el ID %d, que ya usa %s: se le da otro libre" % (n, r, dueno[r]))
+        else:
+            ids[n], dueno[r] = r, n
+    reserva = {i: n for n, i in mapa.items() if n not in activos and i not in dueno}
+    for n in sorted(activos, key=lambda n: n not in mapa):   # 3. su ID o el primer libre; 4. reservas
+        if n in ids:
+            continue
+        i = mapa.get(n)
+        if i is None or i in dueno:
+            i = next((i for i in ALL_IDS if i not in dueno and i not in reserva), None)
+        if i is None and reserva and len(dueno) < MAX_CELDAS:   # sin casilla no vale la pena liberar
+            i = min(reserva, key=lambda i: (os.path.isdir(os.path.join(mods_dir, reserva[i])) or
+                                            os.path.isdir(os.path.join(mods_dir, reserva[i] + ".disabled")), i))
+            log("   %s: ID %d liberado de %s (quitado o desactivado) por falta de IDs" % (n, i, reserva[i]))
+            del mapa[reserva.pop(i)]
+        if i is None:
+            log("!! %s: no quedan plazas (maximo %d personajes nuevos a la vez; los mods quitados o "
+                "desactivados guardan la suya): desactiva otro personaje para jugar con este" % (n, MAX_CELDAS))
+            ids[n] = None
+            continue
+        ids[n], dueno[i] = i, n
+    nuevo = {k: (ids[k] if ids.get(k) is not None else v) for k, v in mapa.items()
+             if ids.get(k) is not None or (k not in ids and v not in dueno)}
+    for n in activos:
+        if ids[n] is not None and n not in nuevo:
+            nuevo[n] = ids[n]
+    # rueda: 24 casillas nuevas; si hay mas, se quedan fuera los ultimos en llegar
+    con_id = [n for n in nuevo if ids.get(n) is not None]
+    for n in con_id[MAX_CELDAS:]:
+        log("!! %s: no cabe en la rueda del select (maximo %d personajes nuevos a la vez): "
+            "desactiva otro personaje para jugar con este" % (n, MAX_CELDAS))
+        ids[n] = None
+    return ids, nuevo, trajes
+
+
+def ordenar_trajes(trajes, orden):
+    """Trajes extra en orden de llegada (antes alfabetico: un mod nuevo movia el numero de los otros)."""
+    orden = dict(orden)
+    for name, _, _ in sorted(trajes, key=lambda t: t[0]):
+        if name not in orden:
+            orden[name] = max(orden.values(), default=0) + 1
+    return sorted(trajes, key=lambda t: (orden[t[0]], t[0])), orden
+
+
+def guardar_reparto(mods_dir, mapa, orden):
+    txt = "\n".join(["# GENERADO por roster_build.py: ID fijo de cada personaje nuevo y orden de los trajes extra.",
+                     "# No cambia al anadir o quitar mods (un mod quitado reserva su ID). Editar a mano solo",
+                     "# para mover a alguien a proposito (con una copia de la partida guardada).",
+                     "version = 1", "", "[ids]"] +
+                    ["%s = %d" % (json.dumps(k), v) for k, v in mapa.items()] + ["", "[trajes]"] +
+                    ["%s = %d" % (json.dumps(k), v) for k, v in orden.items()]) + "\n"
+    path = os.path.join(mods_dir, IDS_FILE)
+    try:
+        if open(path, encoding="utf-8").read() == txt:
+            return
+    except OSError:
+        pass
+    open(path + ".tmp", "w", encoding="utf-8").write(txt)
+    os.replace(path + ".tmp", path)
+
+
+def guardar_avisos(mods_dir):
+    """mods/roster_avisos.txt: 'carpeta<TAB>texto' (src/mods.cpp lo ensena como problema del mod)."""
+    open(os.path.join(mods_dir, AVISOS_FILE), "w", encoding="utf-8").write(
+        "".join("%s\t%s\n" % a for a in dict.fromkeys(AVISOS)))
+
+
 def all_source_mods(mods_dir):
     """Todos los mods fuente (activos o no): [(carpeta, ruta, cfg, activo)]."""
     out = []
@@ -1175,13 +1372,17 @@ def status(a):
     """Estado de las plazas (IDs libres): libre / ocupada por que mod (JSON)."""
     mods = a.mods or default_mods()
     allm = all_source_mods(mods)
-    ids = assign_ids([(n, d, c) for n, d, c, on in allm if on])
-    by_id = {v: k for k, v in ids.items() if v is not None}
+    import contextlib  # noqa: PLC0415
+    import io  # noqa: PLC0415
+    with contextlib.redirect_stdout(io.StringIO()):    # sus avisos no van en la salida JSON
+        ids, mapa, _ = plan_ids(mods, [(n, d, c) for n, d, c, on in allm if on])   # = construir
+    by_id = {v: k for k, v in mapa.items()}           # reservadas (mod quitado o desactivado) tambien
+    by_id.update({v: k for k, v in ids.items() if v is not None})
     names = {n: c.get("nombre", n) for n, _, c, _ in allm}
     out = {"max": len(ALL_IDS), "plazas": [], "personajes": []}
     for i in ALL_IDS:
         m = by_id.get(i)
-        out["plazas"].append({"id": i, "original": slot_name(i), "estado": "ocupada" if m else "libre",
+        out["plazas"].append({"id": i, "original": slot_name(i), "estado": ("ocupada" if ids.get(m) == i else "reservada") if m else "libre",
                               "mod": m or "", "nombre": names.get(m, "") if m else ""})
     for n, _, c, on in allm:
         req = c.get("id")
@@ -1196,7 +1397,7 @@ def status(a):
     else:
         for p in out["plazas"]:
             log("plaza %2d (%s): %s" % (p["id"], p["original"],
-                                        "ocupada por %s (%s)" % (p["mod"], p["nombre"]) if p["mod"] else "libre"))
+                                        "%s por %s (%s)" % (p["estado"], p["mod"], p["nombre"]) if p["mod"] else "libre"))
         for p in out["personajes"]:
             if p["conflicto"] or p["sin_plaza"]:
                 log("!! %s pide la plaza %s: %s" % (p["mod"], p["id_pedido"],
@@ -1861,6 +2062,7 @@ def forms_config(c, dn, per, donor, name):
                             tantos modelos por traje como formas, cada forma el suyo; si no, el
                             reparto del donante (Gohan adulto: [0, 1, 1, 2], el SSJ2 = modelo SSJ)
       ki_base = [..]        nivel de ki en barras al que tiende cada forma (por defecto el del donante)
+      aura_formas = [..]    tipo de aura de cada forma (0..5; por defecto la del donante)
       fisica = "donante"    cadenas de fisica (pelo, colas del cinturon) del donante, o = ID de
                             otro personaje; sin la clave, ninguna (el modelo queda rigido)"""
     nforms = max(1, int(dn.get("forms") or 1))
@@ -1870,6 +2072,9 @@ def forms_config(c, dn, per, donor, name):
         nforms = len(fde) // 2
         lines = ["formas_de = %s" % toml_list(fde),          # "formas = N" lo pone el bucle (formas en el toml)
                  "modelo_forma = %s" % toml_list(list(range(nforms)))]
+        af = [max(0, min(5, int(x))) for x in c.get("aura_formas", [])][:nforms]
+        if af:
+            lines.append("aura_formas = %s" % toml_list(af))
         if c.get("equipo"):
             lines.append("equipo = %s" % toml_list([int(x) for x in c["equipo"]]))
         return nforms, list(range(nforms)), lines
@@ -1895,6 +2100,9 @@ def forms_config(c, dn, per, donor, name):
     kib = [max(0, min(7, int(x))) for x in c.get("ki_base", [])][:nforms]
     if kib:
         lines.append("ki_base = %s" % toml_list(kib))
+    af = [max(0, min(5, int(x))) for x in c.get("aura_formas", [])][:nforms]
+    if af:
+        lines.append("aura_formas = %s" % toml_list(af))
     fis = c.get("fisica")
     fid = donor if str(fis).lower() == "donante" else fis if type(fis) is int else None
     if fid is not None and (fid not in IDS or not IDS[fid].get("models")):
@@ -1906,9 +2114,11 @@ def forms_config(c, dn, per, donor, name):
 
 
 def build(a):
+    global CACHE_IMAGENES
     mods = a.mods or default_mods()
     us = a.us or default_us()
     out_dir = os.path.join(mods, OUT_MOD)
+    CACHE_IMAGENES = os.path.join(os.path.dirname(os.path.abspath(mods)), "mods_cache", "retratos")
     srcs = source_mods(mods)
     trajes = traje_mods(mods)
     if not srcs and not trajes:
@@ -1918,14 +2128,22 @@ def build(a):
                    ("personaje.toml", "traje.toml")) for n in os.listdir(mods) if n != OUT_MOD):
             raise ValueError("ninguna fuente valida: _roster anterior conservado")
         if os.path.isdir(out_dir):
+            if not os.path.isfile(os.path.join(mods, IDS_FILE)):   # reservas antes de apartar el _roster
+                guardar_reparto(mods, ids_del_roster(mods), {})
             retire_tree(out_dir)
             log("sin personajes nuevos activos: _roster apartado en mods_respaldo")
         else:
             log("sin personajes nuevos activos")
+        guardar_avisos(mods)
         return 0
+    ids, mapa, orden = plan_ids(mods, srcs)
+    trajes, orden = ordenar_trajes(trajes, orden)
     digest = inputs_hash(srcs + [(n, d, None) for n, d, _ in trajes])
+    # el reparto entra en el sello: si cambia un ID u orden de trajes, se vuelve a montar
+    digest = hashlib.sha1((digest + json.dumps([ids, [t[0] for t in trajes]], sort_keys=True)).encode()).hexdigest()
     stamp = os.path.join(out_dir, "build.hash")
     if not a.force and os.path.isfile(stamp) and open(stamp).read().strip() == digest:
+        guardar_reparto(mods, mapa, orden)
         log("_roster al dia (%d personajes)" % len(srcs))
         return 0
     target_dir = out_dir
@@ -1956,7 +2174,6 @@ def build(a):
         free = ALL_IDS
         toml = ["# GENERADO por mod center hd/roster_build.py (no editar: se regenera).", ""]
         manifest = []
-        ids = assign_ids(srcs)
         caps = Capsules(usi, cmn)
         own_caps, first_new = {}, caps.next_id
         voice_out = voces.VoiceWriter(us, out_dir)
@@ -1971,8 +2188,7 @@ def build(a):
             progress(k_src, steps, nombre)
             cid = ids[name]
             if cid is None:
-                log("!! %s: no quedan IDs libres (maximo %d personajes nuevos)" % (name, len(free)))
-                continue
+                continue          # sin ID o sin casilla: plan_ids ya dio el aviso
             try:
                 donor = int(c.get("donante", 21))
                 dn = IDS[donor]
@@ -2323,12 +2539,19 @@ def build(a):
                     extra.append("aura = %d" % next_fid)
                     next_fid += 1
                     log("   %s: color del aura %s (%d texturas)" % (name, c["aura_color"], cnt["texturas"]))
+                    if not any(cnt.values()):
+                        log("   %s: aviso: el color del aura %s no cambio nada (aura clara o gris)"
+                            % (name, c["aura_color"]))
                 except Exception as e:  # noqa: BLE001
                     log("   %s: aviso: color del aura sin cambiar (%s)" % (name, e))
-                    if aura_fid != dn["aura"]:
+                    if aura_fid is not None and 0 <= int(aura_fid) < 3990:
                         extra.append("aura = %d" % aura_fid)
-            elif aura_fid != dn["aura"]:
+            elif aura_fid is not None and 0 <= int(aura_fid) < 3990:
+                # siempre explicito: el fid del aura queda en el roster.toml y no depende de que
+                # el runtime copie la tabla por ID (frente 12: causa comun de "sin aura base").
                 extra.append("aura = %d" % aura_fid)
+                log("   %s: aura fid %d%s" % (name, aura_fid,
+                    "" if aura_fid == dn.get("aura") else " (no la del donante)"))
             if cam is not None:
                 write_entry(out_dir, "data_cmn.afs", next_fid, cam, work)
                 extra.append("cam = %d" % next_fid)
@@ -2337,67 +2560,92 @@ def build(a):
             # voces de combate: las de su juego (port), las de otro personaje o las del donante
             try:
                 spec = c.get("voces", "donante")
-                if isinstance(spec, str) and spec.lower().startswith("iw:") and iw_voices is None:
-                    iw_voices = voces.IwVoices(getattr(a, "iw", None))
+                if isinstance(spec, str) and "iw:" in spec.lower() and iw_voices is None:
+                    try:
+                        iw_voices = voces.IwVoices(getattr(a, "iw", None))
+                    except Exception:  # noqa: BLE001  (sin Infinite World: la alternativa tras "|", si la hay)
+                        if "|" not in spec:
+                            raise
                 v_lines, v_note = voces.resolve(spec, voice_out, iw_voices, donor=donor, base=d)
                 extra += v_lines
                 log("   %s: %s" % (name, v_note))
             except Exception as e:  # noqa: BLE001
                 log("   %s: aviso: voces del donante (%s)" % (name, e))
             # gritos de los golpes: banco propio (lang_usa / lang_jpn) hecho sobre el del donante
-            try:
-                gspec = c.get("gritos")
-                if gspec is None:
-                    vs = c.get("voces", "donante")
-                    gspec = vs if isinstance(vs, str) and vs.lower().startswith(("iw:", "sb1:", "sb2:")) else "donante"
-                gl = gspec.strip().lower()
-                if gl not in ("donante", "", "auto"):
-                    dl = dn["lang"][0]           # char372 +0x24: banco de gritos
-                    for lk, afs in langs.items():
-                        entry = afs.entry(dl)
-                        bank = gritos.amb_children(entry)[0]
-                        lens = gritos.bank_lengths(entry[bank[0]:bank[0] + bank[1]])
-                        if gl in ("ninguno", "ninguna", "no"):
-                            sounds = [gritos.np.zeros(max(n, 1), gritos.np.int16) for n in lens]
-                        elif gl.startswith("iw:"):
-                            if iw_voices is None:
-                                iw_voices = voces.IwVoices(getattr(a, "iw", None))
-                            sounds = gritos.assign(lens, gritos.iw_pool(iw_voices, gspec[3:].strip(), lk))
-                        elif gl.startswith("b1:"):
-                            # banco de Budokai 1 (55 sonidos, mismo orden que los huecos)
-                            if b1_cache.get(gl) is None:
-                                # copia dentro del mod (moveset/gritos_b1.npz): asi el mod funciona
-                                # en equipos sin la ISO de Budokai 1 (paquete de personajes)
-                                saved = os.path.join(d, "moveset", "gritos_b1.npz")
-                                try:
-                                    import b1port  # noqa: PLC0415
-                                    b1 = b1port.B1()
-                                    rec = b1.record(int(gl[3:]))
-                                    bank_b1 = gritos.scei_bank(b1.entry(rec["snd"][1]), b1.entry(rec["snd"][0]))
-                                    b1_cache[gl] = [gritos.resample(x, r) for x, r in bank_b1]
-                                    if not os.path.exists(saved):
-                                        os.makedirs(os.path.dirname(saved), exist_ok=True)
-                                        gritos.np.savez_compressed(saved, *b1_cache[gl])
-                                except Exception:  # noqa: BLE001
-                                    if not os.path.exists(saved):
-                                        raise
-                                    with gritos.np.load(saved) as z:
-                                        b1_cache[gl] = [z["arr_%d" % i] for i in range(len(z.files))]
-                            sounds = gritos.fit(lens, b1_cache[gl])
-                        elif gl.startswith("wav:"):
-                            # WAV propios del mod (p. ej. las voces de Heroes que saca importar.py), por duracion
-                            sounds = gritos.assign(lens, gritos.wav_pool(os.path.join(d, gspec[4:].strip())))
-                        elif gl.startswith(("sb1:", "sb2:")):
-                            import sb_voces  # noqa: PLC0415  (Shin Budokai: tonos PPHD -> huecos)
-                            sounds = sb_voces.gritos_sounds(gspec, lens, lk, entry[bank[0]:bank[0] + bank[1]])
-                        else:
-                            raise ValueError("gritos desconocidos: %r" % gspec)
-                        write_entry(out_dir, "lang_%s.afs" % lk, next_lang, gritos.build_lang(entry, sounds), work)
-                    extra.append("idioma = %s" % toml_list([next_lang, dn["lang"][1]]))
-                    log("   %s: gritos propios (%s, %d huecos)" % (name, gspec, len(lens)))
-                    next_lang += 1
-            except Exception as e:  # noqa: BLE001
-                log("   %s: aviso: gritos del donante (%s)" % (name, e))
+            # "iw:JANENBA|ninguno": alternativas en orden (la primera que se pueda montar; sin ninguna, las del donante)
+            gspec = c.get("gritos")
+            if gspec is None:
+                vs = c.get("voces", "donante")
+                gspec = vs if isinstance(vs, str) and vs.lower().startswith(("iw:", "sb1:", "sb2:")) else "donante"
+            g_err = None
+            for gspec in gspec.split("|"):
+                try:
+                    gl = gspec.strip().lower()
+                    if gl not in ("donante", "", "auto"):
+                        dl = dn["lang"][0]           # char372 +0x24: banco de gritos
+                        built = {}
+                        for lk, afs in langs.items():
+                            entry = afs.entry(dl)
+                            bank = gritos.amb_children(entry)[0]
+                            lens = gritos.bank_lengths(entry[bank[0]:bank[0] + bank[1]])
+                            if gl in ("ninguno", "ninguna", "no"):
+                                sounds = [gritos.np.zeros(max(n, 1), gritos.np.int16) for n in lens]
+                            elif gl.startswith("iw:"):
+                                if iw_voices is None:
+                                    iw_voices = voces.IwVoices(getattr(a, "iw", None))
+                                sounds = gritos.assign(lens, gritos.iw_pool(iw_voices, gspec[3:].strip(), lk))
+                            elif gl.startswith("b1:"):
+                                # banco de Budokai 1 (55 sonidos, mismo orden que los huecos)
+                                if b1_cache.get(gl) is None:
+                                    # copia dentro del mod (moveset/gritos_b1.npz): asi el mod funciona
+                                    # en equipos sin la ISO de Budokai 1 (paquete de personajes)
+                                    saved = os.path.join(d, "moveset", "gritos_b1.npz")
+                                    try:
+                                        import b1port  # noqa: PLC0415
+                                        b1 = b1port.B1()
+                                        rec = b1.record(int(gl[3:]))
+                                        bank_b1 = gritos.scei_bank(b1.entry(rec["snd"][1]), b1.entry(rec["snd"][0]))
+                                        b1_cache[gl] = [gritos.resample(x, r) for x, r in bank_b1]
+                                        if not os.path.exists(saved):
+                                            os.makedirs(os.path.dirname(saved), exist_ok=True)
+                                            gritos.np.savez_compressed(saved, *b1_cache[gl])
+                                    except Exception:  # noqa: BLE001
+                                        if not os.path.exists(saved):
+                                            raise
+                                        with gritos.np.load(saved) as z:
+                                            b1_cache[gl] = [z["arr_%d" % i] for i in range(len(z.files))]
+                                sounds = gritos.fit(lens, b1_cache[gl])
+                            elif gl.startswith("wav:"):
+                                # WAV propios del mod (p. ej. las voces de Heroes que saca importar.py), por duracion
+                                sounds = gritos.assign(lens, gritos.wav_pool(os.path.join(d, gspec[4:].strip())))
+                            elif gl.startswith("sdbh:"):
+                                # voces de Super Dragon Ball Heroes World Mission (su instalacion, como importar.py):
+                                # no se copian al mod; sin el juego, gritos del donante
+                                if b1_cache.get(gl) is None:
+                                    import cri  # noqa: PLC0415
+                                    import importar  # noqa: PLC0415
+                                    pool = [x for _, x in cri.voces_sdbh(importar.sdbh_cpks(), gspec[5:].strip())]
+                                    if not pool:
+                                        raise ValueError("sin voces de Heroes para %s" % gspec)
+                                    b1_cache[gl] = gritos.norm_pool(pool)
+                                sounds = gritos.assign(lens, b1_cache[gl])
+                            elif gl.startswith(("sb1:", "sb2:")):
+                                import sb_voces  # noqa: PLC0415  (Shin Budokai: tonos PPHD -> huecos)
+                                sounds = sb_voces.gritos_sounds(gspec, lens, lk, entry[bank[0]:bank[0] + bank[1]])
+                            else:
+                                raise ValueError("gritos desconocidos: %r" % gspec)
+                            built[lk] = gritos.build_lang(entry, sounds)
+                        for lk, data in built.items():   # solo si todos los idiomas salieron
+                            write_entry(out_dir, "lang_%s.afs" % lk, next_lang, data, work)
+                        extra.append("idioma = %s" % toml_list([next_lang, dn["lang"][1]]))
+                        log("   %s: gritos propios (%s, %d huecos)" % (name, gspec, len(lens)))
+                        next_lang += 1
+                    g_err = None
+                    break
+                except Exception as e:  # noqa: BLE001
+                    g_err = e
+            if g_err is not None:
+                log("   %s: aviso: gritos del donante (%s)" % (name, g_err))
             # encuadre del select: escala segun la altura (ajuste sobre los 38 nativos)
             h = max(heights)
             scale = min(1.24, max(0.88, 1.4228 - 0.0201 * h))
@@ -2469,6 +2717,8 @@ def build(a):
             "Personajes nuevos (generado por roster_build.py)\n" + "\n".join(manifest) + "\n")
         open(stamp, "w").write(digest)
         txn.commit(validate_roster)
+        guardar_reparto(mods, mapa, orden)     # solo con el _roster publicado (si falla, nada cambia)
+        guardar_avisos(mods)
         try:   # el _roster ya esta publicado: un fallo aqui es un aviso, no un montaje fallido
             clean_custom_lists(mods, first_new, own_caps)
         except Exception as exc:  # noqa: BLE001

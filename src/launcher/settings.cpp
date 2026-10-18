@@ -59,6 +59,11 @@ REXCVAR_DEFINE_INT32(dbz3_language, 1, "DBZ3/Language",
     .range(1, 6)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+// Idioma del launcher y de los textos propios que el juego no trae (portugues): "" = el de dbz3_language; "pt" =
+// portugues de Brasil (el texto del juego queda en ingles). Lo pone SetLanguage(9).
+REXCVAR_DEFINE_STRING(dbz3_ui_language, "", "DBZ3/Language", "Launcher/mod text language override: empty or pt")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 REXCVAR_DEFINE_STRING(dbz3_region, "us", "DBZ3/Language",
                       "Asset region: us (NTSC) or eu (PAL). Selects the us/ or eu/ asset folder "
                       "(text/audio/video packs). The dual-region core auto-detects the XEX, so "
@@ -626,17 +631,19 @@ static void ApplyFirstRunLanguage() {
     case LANG_ITALIAN: id = 6; break;
     case LANG_GERMAN: id = 3; break;
     case LANG_FRENCH: id = 4; break;
+    case LANG_JAPANESE: id = 2; break;
+    case LANG_PORTUGUESE: id = 9; break;
     default: break;
   }
 #else
   if (const char* l = std::getenv("LANG")) {
     const std::string s(l);
     id = s.rfind("es", 0) == 0 ? 5 : s.rfind("it", 0) == 0 ? 6 : s.rfind("de", 0) == 0 ? 3
-       : s.rfind("fr", 0) == 0 ? 4 : 1;
+       : s.rfind("fr", 0) == 0 ? 4 : s.rfind("ja", 0) == 0 ? 2 : s.rfind("pt", 0) == 0 ? 9 : 1;
   }
 #endif
   if (id != 1) {
-    REXCVAR_SET(dbz3_language, id);
+    SetLanguage(id);
     REXLOG_INFO("dbz3: primer arranque: idioma {} (el de Windows)", id);
   }
 }
@@ -863,7 +870,12 @@ void SetResolutionScale(int32_t scale) { REXCVAR_SET(dbz3_resolution_scale, scal
 
 int32_t Language() { return REXCVAR_GET(dbz3_language); }
 
-void SetLanguage(int32_t xbox_language_id) { REXCVAR_SET(dbz3_language, xbox_language_id); }
+int32_t UiLanguage() { return REXCVAR_GET(dbz3_ui_language) == "pt" ? 9 : Language(); }
+
+void SetLanguage(int32_t xbox_language_id) {
+  REXCVAR_SET(dbz3_ui_language, std::string(xbox_language_id == 9 ? "pt" : ""));
+  REXCVAR_SET(dbz3_language, xbox_language_id == 9 ? 1 : xbox_language_id);   // portugues: el juego, en ingles
+}
 
 const char* LanguageName(int32_t xbox_language_id) {
   switch (xbox_language_id) {
@@ -873,6 +885,7 @@ const char* LanguageName(int32_t xbox_language_id) {
     case 4:  return "French";
     case 5:  return "Spanish";
     case 6:  return "Italian";
+    case 9:  return "Portuguese (Brazil)";
     default: return "English";
   }
 }

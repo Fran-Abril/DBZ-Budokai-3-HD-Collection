@@ -1,23 +1,37 @@
-// dbz3 - Nave de Babidi de Budokai 2 (frente R2, ronda 4): las 4 pruebas de un jugador que dan Kili y los premios
-// que se consiguen al juntar Kili. pasarela_misiones.cpp solo llama a Entrar/Dibujar/Resultado (con su g_mu) y pide
-// los combates nativos (RequestBattleEx). Necesita la ISO de B2 del jugador (como el tablero).
-// Reglas (b2_reglas.md s8; pagos comprobados en el ELF europeo, 0x265AB0: prueba 6..9 -> x25, x2 con (cuadros + 60) / 60,
-// x4, x3; descompilado de Ghidra E:/DBZ3HD_trabajo/ghidra/salida/b2.c):
-//   I   derrota a todos los enemigos que puedas hasta caer (la vida se conserva): 25 Kili por enemigo
-//   II  aguanta con una sola barra de vida: 2 Kili por segundo
-//   III golpea al enemigo durante 99 s: 4 Kili por golpe
-//   IV  devuelve ondas de ki durante 99 s: 3 Kili por onda (b2.c: FUN_001e2610 -> FUN_001ebf40(luchador, 3) suma 1 en
-//       +0x9bb8 cuando la onda da "devuelta" (5) en FUN_001f7fc0, guardia pulsada hace < 5 cuadros; FUN_001d41e0 lo da
-//       como resultado y FUN_00265ab0 paga x3). En B3 es el mismo suceso: combate.cpp lo cuenta (sub_82122488 desde
-//       sub_82119B38, OndasDevueltas) y Resultado lo toma de ahi. El rival de B2 en esta prueba no ataca (FUN_001d1c40 da
-//       -2), vuelve a la guardia (FUN_001d1db0 da 1) y devuelve todas las ondas (FUN_001d1980 da 2): es el rally; aqui
-//       combate.cpp OndasModo lo pone de muneco en guardia con Deflect-Back mientras dura el combate.
-// El Kili se acumula (progreso "nave_kili") y cada umbral da su premio: tabla del ELF de la copia del jugador (SLES
-// 0x278320 en la europea: 43 filas u16 ID + u16 Kili, crecientes, acaba en 0,0; se busca por sus dos primeras filas).
-// 486-489 = Dabura, Majin Bu, Super Bu y Kid Bu (personajes); el resto, capsulas de B2 (nombres de la FAQ F3 por Kili).
-// ponytail: rivales al azar entre los de B2 (los del original sin leer: tabla del ELF por encontrar); escenario fijo
-// (B3 no tiene la nave); los premios se ensenan y avisan, todavia no entran en el inventario de capsulas; pantallas
-// con la letra y el marco de B3 (los graficos de la nave en la ISO estan sin localizar).
+// dbz3 - Nave de Babidi de Budokai 2 (frente R2 ronda 4; 1:1 en R7): las 4 pruebas de un jugador que dan Kili y los
+// premios que se consiguen al juntar Kili. pasarela_misiones.cpp solo llama a Entrar/Dibujar/Resultado (con su g_mu) y
+// pide los combates nativos (RequestBattleEx). Necesita la ISO de B2 del jugador (como el tablero).
+// RE (ELF europeo SLES_518.39, Ghidra E:/DBZ3HD_trabajo/ghidra/salida/b2.c; informe E:/DBZ3HD_trabajo/R7/nave):
+//   Pantallas: 1P/2P (0x2629B0, 0x264F60; 2P solo con dos mandos) -> prueba (0x262830, 0x264790: arriba/abajo SIN dar la
+//   vuelta, flechas solo si hay mas) -> seleccion de personajes y escenario nativa de B2 (0x2644E0 con la cabecera
+//   "Selecc. Person." / "Seleccion Fase" y el bocadillo de Babidi) -> combate (escena 0x19, tipo de combate 6 + prueba)
+//   -> resultado (escena 0x1A: 0x262640, 0x263700, 0x262DD0) -> de vuelta en la prueba.
+//   Reglas del combate (0x1D2620, tipo 6..9): COM al nivel 4;
+//     I   el rival con una barra (1000) y vidas sin fin (+0x16 = 0xFF): cada vez que cae se levanta (estado 0x19) y
+//         cuenta uno (0x9FA2); el jugador NO recupera vida; acaba al caer el jugador. 25 Kili por enemigo.
+//     II  los dos con una barra (1000), tiempo 36000 cuadros (600 s); cuenta los cuadros aguantados: (cuadros + 60) / 60
+//         segundos, 2 Kili por segundo.
+//     III 99 s (0x1734 cuadros); cuenta los golpes (0x9DD0); 4 Kili por golpe.
+//     IV  99 s; cuenta las ondas devueltas (0x9DC8; FUN_001e2610 -> FUN_001ebf40, onda "devuelta" con la guardia < 5
+//         cuadros antes); el rival no ataca y solo devuelve. 3 Kili por onda. Aqui: combate.cpp OndasDevueltas/OndasModo.
+//   Pago (0x265AB0): cuenta x {25, 2, 4, 3}. Resultado: el Kili ganado sube de 1 en 1 cada 3 cuadros mientras baja la
+//   cuenta (0x263700); 40 cuadros; luego pasa a la barra de la nave (0x262DD0, 1 cada 3 cuadros, la aguja gira
+//   barra * 360 / 10000, 0x261B20). Al llegar al Kili de un premio (tabla 0x3782A0: 43 x {ID, Kili}) sale la ventana
+//   del premio (0x2A44C0) y se gana. Un premio solo esta si aun no tienes el maximo (0x6942AD + 0x20 * ID menos lo que
+//   tienes); la barra solo da la vuelta al pasar de 10000 si quedan premios por ganar (si no, se queda en 10000).
+//   Al acabar suma los premios al inventario y guarda. Confirmar salta la cuenta / hasta el siguiente premio.
+//   Musica: pista 0x12 de la tabla 0x377E90 = ADX_US 1148 (0x263900, 0x2654A0). Voces de Babidi (DAT_00378370..84,
+//   ADX_US): 1149 con la frase 0 (1P/2P), 1150/1151 con la 9/10 (personajes), 1152-1154 con la 11-13 (escenario).
+// Frente 08 (1:1, studies 3): la disposicion es la de siempre (#AMA de DATA_CMN 905); DATA_<idioma> 1133 NO la lleva
+// (va con 1134/1135 en la tabla 0x378360; son IECS = sonido; detalle en la entrega studies 3/ENTREGAS/08). Ahora ademas:
+//   - la ventana de premio es la nativa ("Get skill!"): DATA_CMN 933 (14 animaciones) + DATA_<idioma> 1148 (4 texturas)
+//     y el nombre del premio de su arte (DATA_<idioma> 542 + ID, textura 0). Original: FUN_002a44c0 + FUN_002a4070.
+//   - el maximo de cada premio sale de la tabla #SKA de B2 (DATA_CMN 851: 520 registros de 0x20; +0x0D = maximo; en
+//     RAM 0x6942A0, cargada con FUN_0012d100(0x353, 0x694280, 0); el original consulta byte[0x6942AD + 0x20*ID]).
+//   - la prueba I encadena los combates sin pantalla VS (hub::ChainBattleEx desde pasarela_misiones.cpp: sub_820FE9B0,
+//     que corre antes de que el conector cierre el combate; Siguiente/Seguido/Encadenado/Seguir lo conectan).
+//   - la prueba II corta a los 600 s (el tiempo del combate del propio juego) y su reloj no cuenta la pausa.
+//   - los escenarios son los de B2 que instala el launcher (escenarios::PorMod), con mapa de B3 de respaldo.
 #include "pasarela.h"
 
 #include <rex/hook.h>
@@ -28,13 +42,18 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <memory>
@@ -42,13 +61,20 @@
 #include <rex/ui/immediate_drawer.h>
 
 #include "generated/dbz3_init.h"
+#include "escenarios.h"
 #include "eu_map.h"
 #include "ingame/game_style.h"
 #include "launcher/i18n.h"
 #include "launcher/launcher_state.h"
+#include "launcher/settings.h"
 
+namespace dbz3 {   // main.cpp: sin foco la ventana se oscurece y el F1 esta encima (la pausa del modo no cuenta)
+bool GameDimmed();
+bool OverlayOpen();
+}
 namespace dbz3::pasarela::b2 {
 bool Disponible();
+ImTextureID CabezaDeB3(int id_b3);   // pasarela_b2.cpp: cabeza de B2 (CMN 1196)
 }
 namespace dbz3::combate {   // combate.cpp: ondas que el luchador del lado dado ha devuelto (prueba IV)
 int OndasDevueltas(int lado);
@@ -67,20 +93,13 @@ constexpr uint16_t kUp = 0x0001, kDown = 0x0002, kLeft = 0x0004, kRight = 0x0008
                    kB = 0x2000;
 
 struct Prueba {
-  const char *es, *en, *ayuda_es, *ayuda_en;
-  int pago, tiempo;
+  int pago, tiempo;   // Kili por cada uno (0x265AB0); tiempo del combate en s (-1 sin limite)
 };
-const Prueba kPruebas[4] = {
-    {"Prueba I", "Trial I", "Derrota a todos los enemigos que puedas hasta caer. 25 Kili por enemigo.",
-     "Defeat as many enemies as you can until you fall. 25 Kili per enemy.", 25, 0},
-    {"Prueba II", "Trial II", "Aguanta con una sola barra de vida. 2 Kili por segundo.",
-     "Survive with a single health bar. 2 Kili per second.", 2, 99},
-    {"Prueba III", "Trial III", "Golpea al enemigo durante 99 segundos. 4 Kili por golpe.",
-     "Hit the enemy for 99 seconds. 4 Kili per hit.", 4, 99},
-    {"Prueba IV", "Trial IV", "Devuelve ondas de ki durante 99 segundos. 3 Kili por onda.",
-     "Deflect ki waves for 99 seconds. 3 Kili per wave.", 3, 99}};
-// Nombres de los premios por su Kili (FAQ F3, version inglesa). ponytail: las imagenes con sus nombres en la ISO estan
-// sin localizar.
+constexpr int kTopeII = 600;   // prueba II: 36000 cuadros = 600 s (B2 0x1D2620 case 7: +0x143a4 = 36000)
+const Prueba kPruebas[4] = {{25, -1}, {2, kTopeII}, {4, 99}, {3, 99}};   // la II la corta el juego a los 600 s
+
+// Nombres de los premios por su Kili (FAQ F3, version inglesa). ponytail: la ventana de premio de B2 (0x2A44C0) saca
+// el nombre de la tabla de capsulas del juego; aqui va con la letra de B3.
 struct Nombre {
   int kili;
   const char* nombre;
@@ -177,28 +196,77 @@ const int kLuchadores[] = {0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16
                            33, 34, 35, 36, 37};
 constexpr int kN = int(sizeof(kLuchadores) / sizeof(kLuchadores[0]));
 
-// Pasos del original (textos de Babidi de DATA_<idioma> 1132): prueba -> tu luchador -> tu oponente ("Entonces,
-// quien va a pelear? Ahora escoge a tu oponente", #9) -> el sitio ("Ahora, escoge el sitio donde quieras luchar",
-// #12) -> combate -> resultado. El jugador elige rival y escenario (no hay tabla de rivales: lo dicen esos textos).
-enum Estado { kPrueba, kJugador, kRival, kSitio, kSigue, kResultado };
-int g_estado = kPrueba, g_prueba = 0, g_luch = 0, g_riv = 1, g_sitio = 0, g_kili = 0;
-int g_vida = 0, g_vencidos = 0, g_ganado = 0, g_antes = 0, g_cuenta = 0;
-std::vector<const Premio*> g_nuevos;   // premios de la ultima prueba
-// "¡Nuevo!" solo si de verdad lo es: la primera vez que la barra pasa por su umbral (vuelta 0, progreso "nave_vueltas")
-// y con capsula de B3 que dar (los personajes 486-489 y las 16 sin equivalente no dan nada nuevo).
-std::vector<bool> g_de_verdad;
+// kModo: 1P/2P; kPrueba; kJugador/kRival/kSitio: la seleccion (en B2 la nativa; aqui la nuestra con la cabecera, el
+// bocadillo y la voz del original); kSigue: prueba I, el mismo rival se levanta; kResultado.
+enum Estado { kModo, kPrueba, kJugador, kRival, kSitio, kSigue, kResultado };
+int g_estado = kModo, g_prueba = 0, g_luch = 0, g_riv = 1, g_sitio = 0, g_kili = 0;
+int g_vida = 0, g_vencidos = 0, g_cuenta = 0, g_frase_sel = 9, g_frase_sitio = 11;
 float g_auto_t = 0;
+std::atomic<bool> g_enc_armado{false};   // prueba I: pasarela_misiones.cpp ya encadeno el siguiente combate (sub_820FE9B0)
 
-// Escenarios de B3 (entrada de data_cmn de su mapa) que se pueden elegir. ponytail: los de B2 no estan en B3.
+// Escenarios: los de B2 que instala el launcher desde la ISO del jugador (mod center hd/campos_iw.py auto, B12) y que
+// busca escenarios::PorMod; el mapa de B3 de respaldo es el mas parecido si el alta no esta. En B2 la nave usa la
+// seleccion nativa de escenario ("Seleccion Fase"; el motor 6/7, FUN_002644e0 -> FUN_002b45d0(6, 0x5100, ...)): las
+// mismas casillas de B2 que el tablero (pasarela_b2.cpp kEscenarioB2). No hay escenario fijo por prueba.
 struct Sitio {
-  int mapa;
+  const char* alta;   // stage.toml que instala el launcher (0 = sin alta: solo el mapa de B3)
+  int mapa;           // mapa de B3 de respaldo (entrada de data_cmn)
   const char *es, *en;
 };
-const Sitio kSitios[] = {{68, "Ciudad", "City"},          {64, "Zona rocosa", "Rocky area"}, {62, "Llanura", "Plains"},
-                         {60, "Namek", "Namek"},          {50, "Juegos de Cell", "Cell Games"},
-                         {56, "Isla", "Island"},          {58, "Sala del Tiempo", "Time Chamber"},
-                         {46, "Torneo", "Tournament"},    {54, "Planeta Kaio", "Kaio's planet"}};
+const Sitio kSitios[] = {{"Llanura B2", 62, "Llanura (B2)", "Plains (B2)"},
+                         {"Calle de la ciudad B2", 68, "Calle de la ciudad (B2)", "City street (B2)"},
+                         {"Base Red Ribbon B2", 44, "Base de la Red Ribbon (B2)", "Red Ribbon Base (B2)"},
+                         {"Montanas nevadas", 64, "Montañas nevadas (B2)", "Snowy mountains (B2)"},
+                         {"Templo de Kami", 52, "Templo de Kami (B2)", "Kami's Lookout (B2)"},
+                         {"Namek B2", 60, "Planeta Namek (B2)", "Planet Namek (B2)"},
+                         {"Islas B2", 56, "Islas (B2)", "Islands (B2)"}};
 constexpr int kNSitios = int(sizeof(kSitios) / sizeof(kSitios[0]));
+// Registro del selector del alta de B2 de cada sitio (-1 si el launcher no la creo), leido una vez.
+const std::vector<int>& Registros() {
+  static const std::vector<int> r = [] {
+    std::vector<int> v;
+    for (const Sitio& s : kSitios) v.push_back(s.alta ? dbz3::escenarios::PorMod(s.alta) : -1);
+    return v;
+  }();
+  return r;
+}
+// El combate del sitio: registro del alta (negativo, como el tablero: -(reg + 1)) o su mapa de B3.
+int EscenarioDelSitio(int sitio) {
+  const int reg = Registros()[size_t(sitio)];
+  return reg >= 0 ? -(reg + 1) : kSitios[sitio].mapa;
+}
+
+// Prueba II: segundos de pelea (estado 4 del combate vigilado), sin las entradas ni el final. La pausa no cuenta:
+// el reloj del juego esta oculto (mgr+35253 = 1, lo mismo que apaga las barras y el reloj del HUD) o la ventana no
+// tiene el foco (GameDimmed) o el F1 esta encima (OverlayOpen). El corte a los 600 s lo hace el propio combate
+// (kPruebas[1].tiempo): B2 0x1D2620 case 7 con 36000 cuadros.
+std::atomic<int> g_ms_lucha{0};
+std::atomic<unsigned> g_reloj{0};
+void Reloj() {
+  const unsigned gen = ++g_reloj;
+  g_ms_lucha = 0;
+  std::thread([gen] {
+    using C = std::chrono::steady_clock;
+    const auto fin = C::now() + std::chrono::minutes(32);
+    bool empezo = false;
+    auto antes = C::now();
+    while (g_reloj.load() == gen && C::now() < fin) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      const auto ahora = C::now();
+      const int e = EstadoCombate();
+      uint8_t* base = rex::Runtime::instance() ? rex::Runtime::instance()->virtual_membase() : nullptr;
+      const uint32_t mgr = base ? REX_LOAD_U32(dbz3::GA(0x823D6CF4)) : 0;
+      const bool pausa = base && mgr != 0 && REX_LOAD_U8(mgr + 35253) == 1;   // el juego esconde su reloj al pausar
+      if (e == 4 && !pausa && !dbz3::GameDimmed() && !dbz3::OverlayOpen()) {
+        empezo = true;
+        g_ms_lucha += int(std::chrono::duration_cast<std::chrono::milliseconds>(ahora - antes).count());
+      } else if (empezo && (e == 0 || e >= 5)) {
+        break;
+      }
+      antes = ahora;
+    }
+  }).detach();
+}
 
 void Pedir(int out[6]) {
   combate::OndasCero();
@@ -206,17 +274,16 @@ void Pedir(int out[6]) {
   const int j = kLuchadores[g_luch], r = kLuchadores[g_riv];
   out[0] = j;
   out[1] = r;
-  out[2] = kSitios[g_sitio].mapa;
-  out[3] = g_prueba == 1 ? 1000 : g_prueba == 0 ? g_vida : 0;   // II: una barra (1000 por barra); I: la que quedo
+  out[2] = EscenarioDelSitio(g_sitio);   // el alta de B2 (negativa) o su mapa de B3
+  out[3] = g_prueba == 1 ? 1000 : g_prueba == 0 ? g_vida : 0;   // II: una barra; I: la que quedo (no se recupera)
   out[4] = kPruebas[g_prueba].tiempo;
+  if (const char* t = std::getenv("DBZ3_TEST_NAVE_TIEMPO")) out[4] = std::atoi(t);   // pruebas: acorta el reloj
   out[5] = g_prueba;
-  REXLOG_INFO("dbz3 nave: prueba {}: {} contra {} en {} (vida {}, tiempo {})", g_prueba + 1, NombreDe(j), NombreDe(r),
-              kSitios[g_sitio].es, out[3], out[4]);
+  if (g_prueba == 1) Reloj();
+  REXLOG_INFO("dbz3 nave: prueba {}: {} contra {} en {} (vida {}, tiempo {}, vencidos {})", g_prueba + 1, NombreDe(j),
+              NombreDe(r), kSitios[g_sitio].es, out[3], out[4], g_vencidos);
 }
 
-// El Kili llena la barra de la nave (hasta 10000) y cada umbral que pasa da su premio; al pasar de 10000 la barra da la
-// vuelta y los premios se vuelven a ganar (ELF 0x262DD0; el original solo da la vuelta si quedan capsulas por tener:
-// ponytail, sin inventario de capsulas de B2 aqui, siempre la da).
 // Capsula de B3 equivalente a cada premio de B2 (por nombre: modding resources discord/research/SkillList.dson y
 // docs/07_ports/.../b3_caps.json; E:/DBZ3HD_trabajo/R2/capsulas/tabla.md). 0 = sin equivalente en B3: 186 Evil Tornado,
 // 183 Hell Blow Shoot, 192 Merry Swing, 190 Enjoy Browning, 184 Hate Ray Cannon, 191 Innocence Dance, 198 Badness
@@ -232,74 +299,76 @@ int CapsulaB3(int id_b2) {
     if (e[0] == id_b2) return e[1];
   return 0;
 }
-// Premio al inventario de capsulas de la partida de B3 (u8 por ID en 0x824BA110 + 0x2AFE9, docs/03_formatos/
-// CAPSULAS_B3.md). ponytail: una copia mas, hasta 9; el juego la guarda en su siguiente guardado.
-void DarCapsula(const Premio& p) {
+// Inventario: con equivalente, el de capsulas de la partida de B3 (u8 por ID en 0x824BA110 + 0x2AFE9, docs/03_formatos/
+// CAPSULAS_B3.md; maximo 9); sin el, uno propio en progreso.toml ("nave_b2_<ID>", maximo 1).
+constexpr dbz3::GA kPartida = 0x824BA110;   // US; la EU la traduce GA (eu_map)
+int Tienes(int id_b2) {
+  const int c = CapsulaB3(id_b2);
+  uint8_t* base = rex::Runtime::instance() ? rex::Runtime::instance()->virtual_membase() : nullptr;
+  if (c && base) return REX_LOAD_U8(kPartida + 0x2AFE9 + c);
+  return LeerProgreso("nave_b2_" + std::to_string(id_b2), 0);
+}
+// Maximo real de cada capsula: la tabla #SKA de B2 (DATA_CMN 851; 520 registros de 0x20; +0x0D = maximo). El original
+// la carga en RAM (FUN_0012d100(0x353, 0x694280, 0), b2.c) y cada premio la consulta como
+// byte[0x6942AD + 0x20 * ID] - byte[0x694074 + ID] (b2.c 0x2654C4): maximos reales = 9 en las capsulas y 1 en los
+// personajes (486-489) y en Absorption (193). Sin la ISO: 9 si la capsula existe en B3, si no 1 (lo de antes).
+const std::vector<uint8_t>& TablaCapsulas() {
+  static const std::vector<uint8_t> d = [] {
+    std::vector<uint8_t> v;
+    AfsPs2 cmn;
+    if (cmn.Abrir(BuscarJuego("budokai 2"), "DATA_CMN.AFS")) v = cmn.Entrada(851);
+    REXLOG_INFO("dbz3 nave: tabla de capsulas de B2 (#SKA 851): {} B{}", v.size(),
+                v.size() >= 0x20 && std::memcmp(v.data(), "#SKA", 4) == 0 ? "" : " (no es #SKA: maximos de reserva)");
+    return v;
+  }();
+  return d;
+}
+int Maximo(int id_b2) {
+  const std::vector<uint8_t>& d = TablaCapsulas();
+  const size_t o = 0x20 + 0x20 * size_t(id_b2) + 0x0D;
+  if (id_b2 >= 0 && o < d.size() && std::memcmp(d.data(), "#SKA", 4) == 0) return d[o];
+  return CapsulaB3(id_b2) ? 9 : 1;
+}
+void Dar(const Premio& p, int n) {
   const int c = CapsulaB3(p.id);
   uint8_t* base = rex::Runtime::instance() ? rex::Runtime::instance()->virtual_membase() : nullptr;
-  if (!c || !base) {
-    REXLOG_INFO("dbz3 nave: premio {} sin capsula de B3", p.nombre);
-    return;
-  }
-  constexpr dbz3::GA kPartida = 0x824BA110;   // US; la EU la traduce GA (eu_map)
-  const auto a = kPartida + 0x2AFE9 + c;
-  const uint8_t n = REX_LOAD_U8(a);
-  if (n < 9) REX_STORE_U8(a, uint8_t(n + 1));
-  REXLOG_INFO("dbz3 nave: premio {} -> capsula {} de B3 ({} -> {})", p.nombre, c, n, std::min(9, n + 1));
-}
-
-void Cobrar() {
-  g_antes = g_kili;
-  g_nuevos.clear();
-  g_de_verdad.clear();
-  int k = g_kili, resto = g_ganado, vueltas = LeerProgreso("nave_vueltas", 0);
-  while (resto > 0) {
-    if (k >= 10000) {
-      k -= 10000;
-      ++vueltas;
-    }
-    const int paso = std::min(resto, 10000 - k);
-    for (const Premio& p : Premios())
-      if (p.kili > k && p.kili <= k + paso) {
-        g_nuevos.push_back(&p);
-        g_de_verdad.push_back(vueltas == 0 && CapsulaB3(p.id) != 0);   // primera vuelta de la barra y algo que dar en B3
-      }
-    k += paso;
-    resto -= paso;
-  }
-  g_kili = k;
-  GuardarProgreso("nave_kili", g_kili);
-  GuardarProgreso("nave_vueltas", vueltas);
-  g_estado = kResultado;
-  REXLOG_INFO("dbz3 nave: prueba {}: {} Kili (barra {} -> {})", g_prueba + 1, g_ganado, g_antes, g_kili);
-  for (const Premio* p : g_nuevos) {
-    REXLOG_INFO("dbz3 nave: premio: {} (ID {}, {} Kili)", p->nombre, p->id, p->kili);
-    DarCapsula(*p);
+  if (c && base) {
+    const auto a = kPartida + 0x2AFE9 + c;
+    const int antes = REX_LOAD_U8(a), ahora = std::min(Maximo(p.id), antes + n);
+    REX_STORE_U8(a, uint8_t(ahora));
+    REXLOG_INFO("dbz3 nave: premio {} -> capsula {} de B3 ({} -> {}, maximo {})", p.nombre, c, antes, ahora, Maximo(p.id));
+  } else {
+    const std::string k = "nave_b2_" + std::to_string(p.id);
+    GuardarProgreso(k, std::min(Maximo(p.id), LeerProgreso(k, 0) + n));
+    REXLOG_INFO("dbz3 nave: premio {} (ID {} de B2, sin capsula en B3) apuntado", p.nombre, p.id);
   }
 }
 
-// ---- Graficos del original. El modo carga 3 archivos (tabla del ELF 0x378350, 0x2659F20 los pide de 3 en 3):
-// DATA_<idioma> 1131 (35 piezas: marco de madera, titulo, Babidi, bocadillos, "Fase 1-4", flechas, la nave, panel del
-// Kili, cifras, "ganadas/segs./veces/Kili/Hits", "Selecc. Person.", "Seleccion Fase"), DATA_CMN 905 (#AMA: la
-// disposicion, 125 animaciones) y DATA_<idioma> 1132 (las 14 frases de Babidi). Cada animacion del #AMA (registro de
-// 0x40 en +0x10: rectangulo local +0x00/+0x10, lista A de fotogramas de 0x20 B {tiempo, escala x, escala y, giro, x,
-// y, z, alfa}, lista B de cuadros de 0x30 B {+4 pieza, +0x20 u0 v0 u1 v1 inclusivos}) se dibuja en su sitio de reposo
-// (ultimo fotograma de A) con su primer cuadro, en la pantalla de 640x448 del original. Que animaciones salen en cada
-// pantalla: las que ponen las funciones del modo (0x2621F0, 0x262640, 0x262830; ELF europeo).
+// ---- Graficos del original. El modo carga 3 archivos (tabla del ELF 0x378350): DATA_<idioma> 1131 (35 piezas),
+// DATA_CMN 905 (#AMA: la disposicion, 125 animaciones) y DATA_<idioma> 1132 (las 14 frases de Babidi). Cada animacion
+// del #AMA (registro de 0x40 en +0x10: rectangulo local +0x00/+0x10, lista A de fotogramas de 0x20 B {tiempo, escala
+// x, escala y, giro, x, y, z, alfa}, lista B de cuadros de 0x30 B {+4 pieza, +0x20 u0 v0 u1 v1 inclusivos}) en la
+// pantalla de 640x448 del original. Cada objeto del modo hace su animacion de entrada y luego la de reposo, que se
+// repite (FUN_00245AD0 modo 1 -> 2).
 struct Tex {
   std::unique_ptr<rex::ui::ImmediateTexture> t;
   float w = 0, h = 0;
 };
 struct Anim {
-  float x0 = 0, y0 = 0, x1 = 0, y1 = 0, px = 0, py = 0, sx = 1, sy = 1;
+  float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
   int pieza = -1;
   float u0 = 0, v0 = 0, u1 = 0, v1 = 0;
-  std::vector<std::array<float, 6>> claves;   // lista A: {cuadro, escala x, escala y, x, y, alfa}
+  std::vector<std::array<float, 7>> claves;   // lista A: {cuadro, escala x, escala y, x, y, alfa, giro}
+  float Dur() const { return claves.empty() ? 0.0f : claves.back()[0]; }
 };
-float g_cuadro = 1e9f;   // cuadros (60 por segundo) desde que cambio la pantalla: entrada de cada pieza
-std::vector<Tex> g_pz, g_frases;
-std::vector<Anim> g_anim;
+std::vector<Tex> g_pz, g_frases;                 // 1131 (piezas), 1132 (frases de Babidi)
+std::vector<Tex> g_pzv;                          // ventana de premio: DATA_<idioma> 1148 (#AMT: 0 "Get skill!",
+                                                 // 1 estrella, 2 emblema, 3 "BOOM!!")
+std::vector<Anim> g_anim, g_animv;               // 905 (nave) y 933 (ventana de premio)
+std::map<int, Tex> g_nombres;                    // nombre de cada premio: DATA_<idioma> (542 + ID), textura 0
+std::string g_afs_idioma;                        // el DATA_<idioma>.AFS que se abrio ("DATA_UK.AFS"...)
 bool g_cargado = false;
+std::filesystem::path g_iso;
 
 std::vector<Anim> LeerAma(const std::vector<uint8_t>& d) {
   std::vector<Anim> out;
@@ -324,14 +393,7 @@ std::vector<Anim> LeerAma(const std::vector<uint8_t>& d) {
     const uint32_t na = u32(o + 0x30), oa = u32(o + 0x34), nb = u32(o + 0x38), ob = u32(o + 0x3C);
     for (uint32_t c = 0; c < na && c < 64 && oa + 0x20 * (size_t(c) + 1) <= d.size(); ++c) {
       const size_t q = oa + 0x20 * size_t(c);
-      a.claves.push_back({float(u32(q)), f32(q + 4), f32(q + 8), f32(q + 0x10), f32(q + 0x14), f32(q + 0x1C)});
-    }
-    if (na > 0 && oa + 0x20 * size_t(na) <= d.size()) {
-      const size_t k = oa + 0x20 * (size_t(na) - 1);
-      a.sx = f32(k + 4);
-      a.sy = f32(k + 8);
-      a.px = f32(k + 0x10);
-      a.py = f32(k + 0x14);
+      a.claves.push_back({float(u32(q)), f32(q + 4), f32(q + 8), f32(q + 0x10), f32(q + 0x14), f32(q + 0x1C), f32(q + 0xC)});
     }
     if (nb > 0 && ob + 0x30 <= d.size()) {
       a.pieza = int(u32(ob + 4));
@@ -349,13 +411,14 @@ void Cargar() {
   if (g_cargado) return;
   g_cargado = true;
   auto* dr = dbz3::launcher::PreviewDrawer();
-  const auto iso = BuscarJuego("budokai 2");
+  g_iso = BuscarJuego("budokai 2");
   AfsPs2 loc, cmn;
   const std::string lc = T::LangCode();
-  if (!dr || iso.empty() || !cmn.Abrir(iso, "DATA_CMN.AFS") ||
-      (!loc.Abrir(iso, lc == "es" ? "DATA_SP.AFS" : lc == "fr" ? "DATA_FR.AFS" : lc == "it" ? "DATA_IT.AFS"
-                                     : lc == "de" ? "DATA_DU.AFS" : "DATA_UK.AFS") && !loc.Abrir(iso, "DATA_UK.AFS"))) {
-    REXLOG_WARN("dbz3 nave: sin graficos de la nave (ISO {})", iso.string());
+  g_afs_idioma = lc == "es" ? "DATA_SP.AFS" : lc == "fr" ? "DATA_FR.AFS" : lc == "it" ? "DATA_IT.AFS"
+                 : lc == "de" ? "DATA_DU.AFS" : "DATA_UK.AFS";
+  if (!dr || g_iso.empty() || !cmn.Abrir(g_iso, "DATA_CMN.AFS") ||
+      (!loc.Abrir(g_iso, g_afs_idioma) && !loc.Abrir(g_iso, g_afs_idioma = "DATA_UK.AFS"))) {
+    REXLOG_WARN("dbz3 nave: sin graficos de la nave (ISO {})", g_iso.string());
     return;
   }
   auto leer = [&](size_t k, std::vector<Tex>& out) {
@@ -374,9 +437,56 @@ void Cargar() {
   };
   leer(1131, g_pz);
   leer(1132, g_frases);
+  leer(1148, g_pzv);   // ventana de premio del original (FUN_002a44c0, b2.c)
   g_anim = LeerAma(cmn.Entrada(905));
-  REXLOG_INFO("dbz3 nave: graficos de la ISO: {} piezas, {} frases, {} animaciones", g_pz.size(), g_frases.size(),
-              g_anim.size());
+  g_animv = LeerAma(cmn.Entrada(933));
+  REXLOG_INFO("dbz3 nave: graficos de la ISO: {} piezas, {} frases, {} animaciones; ventana de premio {} texturas y "
+              "{} animaciones", g_pz.size(), g_frases.size(), g_anim.size(), g_pzv.size(), g_animv.size());
+}
+
+// Nombre del premio con el arte del original: DATA_<idioma> (542 + ID) es un #AMT de 5 texturas (0 el nombre).
+// Lo carga la ventana (FUN_00292850 desde FUN_002a44c0, b2.c 0x2A44C0); aqui se cachea por ID.
+const Tex* NombreTex(int id_b2) {
+  if (id_b2 < 0 || id_b2 > 700 || g_iso.empty() || g_afs_idioma.empty()) return nullptr;
+  auto it = g_nombres.find(id_b2);
+  if (it == g_nombres.end()) {
+    it = g_nombres.emplace(id_b2, Tex{}).first;
+    AfsPs2 loc;
+    if (loc.Abrir(g_iso, g_afs_idioma)) {
+      const Imagen im = TexturaAmt(loc.Entrada(size_t(542 + id_b2)), 0);
+      if (im) {
+        if (auto* dr = dbz3::launcher::PreviewDrawer())
+          it->second.t = dr->CreateTexture(uint32_t(im.w), uint32_t(im.h), rex::ui::ImmediateTextureFilter::kLinear,
+                                           false, im.rgba.data());
+        it->second.w = float(im.w);
+        it->second.h = float(im.h);
+      }
+    }
+  }
+  return it->second.t ? &it->second : nullptr;
+}
+
+// Sonido: musica del modo (ADX_US 1148) y voces de Babidi (ADX_US 1149-1154).
+float Volumen() {
+  if (std::getenv("DBZ3_TEST_MUSICA")) return 0.001f;   // pruebas: se decodifica y se registra, sin oirse
+  return dbz3::settings::AudioMute() ? 0.0f : float(dbz3::settings::MasterVolume()) * 0.8f;
+}
+bool g_sonando = false;
+void Musica(bool on) {
+  if (on == g_sonando || g_iso.empty()) return;
+  g_sonando = on;
+  if (on) {
+    REXLOG_INFO("dbz3 nave: musica ADX_US 1148");
+    OirMusicaPs2(g_iso, "ADX_US.AFS", 1148, Volumen());
+  } else {
+    CallarMusicaPs2();
+  }
+}
+void Voz(int entrada) {
+  if (g_iso.empty()) return;
+  REXLOG_INFO("dbz3 nave: voz de Babidi ADX_US {}", entrada);
+  CallarAdxPs2();
+  OirAdxPs2(g_iso, "ADX_US.AFS", entrada, Volumen());
 }
 
 // Pantalla del original (640x448) dentro del area: escala y origen.
@@ -389,41 +499,83 @@ Lienzo LienzoDe(const S::Area& a) {
   const float s = std::min(1200.0f / 640.0f, 900.0f / 448.0f) * a.s;
   return {s, ImVec2(a.p0.x + (1200.0f * a.s - 640.0f * s) * 0.5f, a.p0.y + (900.0f * a.s - 448.0f * s) * 0.5f)};
 }
-// Animacion k del #AMA en su sitio (o en (x, y) si se da), con su escala de reposo.
-void Dib(ImDrawList* dl, const Lienzo& L, int k, ImU32 col = IM_COL32_WHITE, float x = -1, float y = -1) {
-  if (k < 0 || k >= int(g_anim.size())) return;
-  const Anim& a = g_anim[size_t(k)];
-  if (a.pieza < 0 || a.pieza >= int(g_pz.size()) || !g_pz[size_t(a.pieza)].t) return;
-  const Tex& p = g_pz[size_t(a.pieza)];
-  float px = x >= 0 ? x : a.px, py = y >= 0 ? y : a.py, sx = a.sx, sy = a.sy;
-  for (size_t i = 1; x < 0 && i < a.claves.size(); ++i) {   // entrada: claves de la lista A (lineal entre claves)
-    const auto &k0 = a.claves[i - 1], &k1 = a.claves[i];
-    if (g_cuadro >= k1[0]) continue;
-    const float f = k1[0] > k0[0] ? std::clamp((g_cuadro - k0[0]) / (k1[0] - k0[0]), 0.0f, 1.0f) : 1.0f;
-    sx = k0[1] + (k1[1] - k0[1]) * f;
-    sy = k0[2] + (k1[2] - k0[2]) * f;
-    px = k0[3] + (k1[3] - k0[3]) * f;
-    py = k0[4] + (k1[4] - k0[4]) * f;
-    break;
+float g_cuadro = 1e9f;   // cuadros (60 por segundo) desde que cambio la pantalla
+// Los objetos que siguen de una pantalla a otra no vuelven a entrar (B2 solo relanza la entrada si el objeto no esta ya
+// en ella: 0x262830, 0x263A80): Babidi, el bocadillo (sale y entra al cambiar de abajo a arriba) y la cabecera (al
+// cambiar de titulo). Cuadros desde su entrada.
+float g_c_bab = 0, g_c_burb = 0, g_c_tit = 0;
+
+// Pose de la animacion k en el cuadro c (lineal entre claves; `vuelta` = se repite, como las de reposo).
+struct Pose {
+  float x, y, sx, sy, a, giro;
+};
+Pose PoseDe(const Anim& a, float c, bool vuelta) {
+  if (a.claves.empty()) return {0, 0, 1, 1, 1, 0};
+  const float d = a.Dur();
+  if (vuelta && d > 0) c = std::fmod(std::max(0.0f, c), d);
+  const auto* k0 = &a.claves.front();
+  const auto* k1 = k0;
+  for (size_t i = 1; i < a.claves.size(); ++i) {
+    k1 = &a.claves[i];
+    if (c < (*k1)[0]) break;
+    k0 = k1;
   }
-  dl->AddImage(reinterpret_cast<ImTextureID>(p.t.get()), L.P(px + a.x0 * sx, py + a.y0 * sy),
-               L.P(px + (a.x1 + 1) * sx, py + (a.y1 + 1) * sy), ImVec2(a.u0 / p.w, a.v0 / p.h),
-               ImVec2(a.u1 / p.w, a.v1 / p.h), col);
+  const float f = (*k1)[0] > (*k0)[0] ? std::clamp((c - (*k0)[0]) / ((*k1)[0] - (*k0)[0]), 0.0f, 1.0f) : 1.0f;
+  auto m = [&](int j) { return (*k0)[j] + ((*k1)[j] - (*k0)[j]) * f; };
+  return {m(3), m(4), m(1), m(2), m(5), m(6)};
 }
-// Numero con las cifras del #AMA: `primera` = animacion del 0 (las 10 seguidas); la ultima cifra en el sitio de la
-// animacion del 0 y las demas a su izquierda (cifras de 40 px).
+// Dibuja la animacion k en el cuadro c; (dx, dy) desplaza; giro extra en grados (sentido horario) alrededor de su sitio.
+// Por defecto la disposicion de la nave (g_anim/g_pz); `set`/`pzs` dibujan otra (la ventana de premio).
+void DibC(ImDrawList* dl, const Lienzo& L, int k, float c, bool vuelta, float giro = 0, float dx = 0, float dy = 0,
+          ImU32 col = IM_COL32_WHITE, const std::vector<Anim>* set = nullptr, const std::vector<Tex>* pzs = nullptr) {
+  const std::vector<Anim>& anims = set ? *set : g_anim;
+  const std::vector<Tex>& piezas = pzs ? *pzs : g_pz;
+  if (k < 0 || k >= int(anims.size())) return;
+  const Anim& a = anims[size_t(k)];
+  if (a.pieza < 0 || a.pieza >= int(piezas.size()) || !piezas[size_t(a.pieza)].t) return;
+  const Tex& p = piezas[size_t(a.pieza)];
+  const Pose q = PoseDe(a, c, vuelta);
+  if (q.sx == 0 || q.sy == 0 || q.a <= 0) return;
+  const float g = (q.giro + giro) * 3.14159265f / 180.0f, cs = std::cos(g), sn = std::sin(g);
+  auto v = [&](float lx, float ly) {
+    lx *= q.sx;
+    ly *= q.sy;
+    return L.P(q.x + dx + lx * cs - ly * sn, q.y + dy + lx * sn + ly * cs);
+  };
+  const ImU32 cc = (col & 0x00FFFFFF) | (ImU32(float(col >> 24) * std::min(1.0f, q.a)) << 24);
+  dl->AddImageQuad(reinterpret_cast<ImTextureID>(p.t.get()), v(a.x0, a.y0), v(a.x1 + 1, a.y0), v(a.x1 + 1, a.y1 + 1),
+                   v(a.x0, a.y1 + 1), ImVec2(a.u0 / p.w, a.v0 / p.h), ImVec2(a.u1 / p.w, a.v0 / p.h),
+                   ImVec2(a.u1 / p.w, a.v1 / p.h), ImVec2(a.u0 / p.w, a.v1 / p.h), cc);
+}
+float DurDe(int k, const std::vector<Anim>* set = nullptr) {
+  const std::vector<Anim>& anims = set ? *set : g_anim;
+  return k >= 0 && k < int(anims.size()) ? anims[size_t(k)].Dur() : 0.0f;
+}
+// Objeto con entrada `e` (una vez, desde el cuadro `desde` de la pantalla) y reposo `r` (en bucle); e < 0 = sin entrada.
+void Obj(ImDrawList* dl, const Lienzo& L, int e, int r, float desde = 0, float dx = 0, float dy = 0,
+         const std::vector<Anim>* set = nullptr, const std::vector<Tex>* pzs = nullptr) {
+  const float c = g_cuadro - desde;
+  if (c < 0) return;
+  if (e >= 0 && c < DurDe(e, set)) return DibC(dl, L, e, c, false, 0, dx, dy, IM_COL32_WHITE, set, pzs);
+  DibC(dl, L, r, e >= 0 ? c - DurDe(e, set) : c, true, 0, dx, dy, IM_COL32_WHITE, set, pzs);
+}
+// Numero con las cifras del #AMA: `primera` = animacion del 0 (las 10 seguidas); la ultima cifra en el sitio de la del
+// 0 y las demas a su izquierda, cada una a su ancho (0x261920).
 void Numero(ImDrawList* dl, const Lienzo& L, int primera, int n) {
   if (primera < 0 || primera + 9 >= int(g_anim.size())) return;
   const Anim& c0 = g_anim[size_t(primera)];
+  const float paso = (c0.x1 + 1 - c0.x0) * (c0.claves.empty() ? 1.0f : c0.claves.back()[1]);
   const std::string s = std::to_string(std::max(0, n));
-  for (size_t i = 0; i < s.size(); ++i)
-    Dib(dl, L, primera + (s[i] - '0'), IM_COL32_WHITE, c0.px - 40.0f * c0.sx * float(s.size() - 1 - i), c0.py);
+  for (size_t i = 0; i < s.size(); ++i) {
+    const Anim& d = g_anim[size_t(primera + (s[i] - '0'))];
+    const Pose q0 = PoseDe(c0, 0, false), qd = PoseDe(d, 0, false);
+    DibC(dl, L, primera + (s[i] - '0'), 0, false, 0, q0.x - qd.x - paso * float(s.size() - 1 - i), q0.y - qd.y);
+  }
 }
 
 // Fondo: los lados de la ventana con la madera del marco del original (pieza 0) un poco oscurecida, como hacen las
-// remasterizaciones con las pantallas 4:3; dentro, el morado, la nave (71), el marco (4-7) y la cinta con el titulo
-// (13, 16).
-void Fondo(ImDrawList* dl, const S::Area& a, const Lienzo& L) {
+// remasterizaciones con las pantallas 4:3; dentro, el morado, la nave (71), el marco (4-7) y la cinta (13).
+void Fondo(ImDrawList* dl, const Lienzo& L, bool cielo) {
   const ImVec2 ds = ImGui::GetIO().DisplaySize;
   dl->AddRectFilled(ImVec2(0, 0), ds, IM_COL32(0, 0, 0, 255));
   if (!g_pz.empty() && g_pz[0].t && L.s > 0) {
@@ -434,26 +586,202 @@ void Fondo(ImDrawList* dl, const S::Area& a, const Lienzo& L) {
       for (float x = x1; x < ds.x; x += w) dl->AddImage(id, ImVec2(x, y), ImVec2(x + w, y + h), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(120, 120, 120, 255));
     }
   }
-  (void)a;
   dl->AddRectFilled(L.P(0, 0), L.P(640, 448), IM_COL32(34, 22, 52, 255));
-  Dib(dl, L, 71, IM_COL32(255, 255, 255, 90));
-  for (int k = 4; k <= 7; ++k) Dib(dl, L, k);
-  Dib(dl, L, 13);   // la cinta; el titulo (16) o la cabecera de cada pantalla (119, 122) van en el mismo sitio
-  // aviso de que el modo aun se esta haciendo (en la franja de papel de debajo del marco, sin pisar nada)
-  S::MenuText(dl, L.P(320, 430), 16 * L.s, T::T("EXPERIMENTAL: en construcción", "EXPERIMENTAL: work in progress"), true, false,
-              420 * L.s);
+  DibC(dl, L, 71, g_cuadro, true);
+  for (int k = 4; k <= 7; ++k) DibC(dl, L, k, 0, false);
+  if (cielo) DibC(dl, L, 124, 0, false);   // en la seleccion, la franja de abajo con el cielo (0x2644E0)
+  DibC(dl, L, 13, 0, false);
 }
-// Babidi (37) a la derecha con su bocadillo (19) y la frase k de 1132 dentro, como en el original.
-void Babidi(ImDrawList* dl, const Lienzo& L, int frase) {
-  Dib(dl, L, 37);
-  Dib(dl, L, 19);
-  if (frase >= 0 && frase < int(g_frases.size()) && g_frases[size_t(frase)].t && 19 < int(g_anim.size())) {
-    const Anim& b = g_anim[19];
-    const Tex& f = g_frases[size_t(frase)];
-    const float cx = b.px + (b.x0 + b.x1) * 0.5f - 6, cy = b.py + (b.y0 + b.y1) * 0.5f;
-    const float esc = std::min(400.0f / f.w, 120.0f / f.h);
-    dl->AddImage(reinterpret_cast<ImTextureID>(f.t.get()), L.P(cx - f.w * esc * 0.5f, cy - f.h * esc * 0.5f),
-                 L.P(cx + f.w * esc * 0.5f, cy + f.h * esc * 0.5f), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(20, 20, 30, 255));
+// Babidi (36 -> 37) y su bocadillo con la frase k de 1132 a su tamano, centrada: el de abajo (18 -> 19) o, en la
+// seleccion, el de arriba a la derecha (21 -> 22).
+void Babidi(ImDrawList* dl, const Lienzo& L, int frase, bool arriba) {
+  Obj(dl, L, 36, 37, g_cuadro - g_c_bab);
+  const int e = arriba ? 21 : 18, r = arriba ? 22 : 19;
+  Obj(dl, L, e, r, g_cuadro - g_c_burb);
+  if (g_c_burb < DurDe(e) || frase < 0 || frase >= int(g_frases.size()) || !g_frases[size_t(frase)].t ||
+      r >= int(g_anim.size()))
+    return;
+  const Anim& b = g_anim[size_t(r)];
+  const Pose q = PoseDe(b, 0, false);
+  const Tex& f = g_frases[size_t(frase)];
+  const float cx = q.x + (b.x0 + b.x1) * 0.5f, cy = q.y + (b.y0 + b.y1) * 0.5f;
+  dl->AddImage(reinterpret_cast<ImTextureID>(f.t.get()), L.P(cx - f.w * 0.5f, cy - f.h * 0.5f),
+               L.P(cx + f.w * 0.5f, cy + f.h * 0.5f));
+}
+
+// ---- Resultado (escena 0x1A): cuenta -> 40 cuadros -> barra de la nave con los premios -> 40 cuadros -> prueba.
+struct Res {
+  int fase = 0;            // 0 cuenta, 1 espera, 2 barra, 3 premio, 4 espera final
+  float acc = 0, espera = 0;
+  int total = 0;           // Kili ganado (cuenta x pago)
+  int ganado = 0;          // el que se ve en la linea del medio (sube y luego pasa a la barra)
+  int cuenta = 0;          // la que se ve arriba (baja)
+  int barra = 0;           // la barra de la nave (0..10000)
+  int sig = 0;             // siguiente premio (43 = ninguno)
+  int quedan = 0;          // premios que aun se pueden ganar (B2 iGpffff8c00)
+  int premio = -1;         // el que se esta ensenando
+  float premio_t = 0;      // cuadro en el que salio (ventana nativa: DATA_CMN 933)
+  bool nuevo = false;
+  std::vector<int> max, ganados;
+} g_res;
+
+int Siguiente() {
+  const auto& P = Premios();
+  int i = 0;
+  while (i < int(P.size()) && !(g_res.barra < P[size_t(i)].kili && g_res.ganados[size_t(i)] != g_res.max[size_t(i)])) ++i;
+  return i;
+}
+void Vuelta() {   // al pasar de 10000: vuelta si quedan premios, si no se queda llena
+  if (g_res.quedan < 1) g_res.barra = 10000;
+  else g_res.barra -= 10000;
+  g_res.sig = Siguiente();
+}
+void EmpezarResultado() {
+  const auto& P = Premios();
+  const int pago = kPruebas[g_prueba].pago;
+  g_res = Res();
+  g_res.total = g_cuenta * pago;
+  g_res.cuenta = g_cuenta;
+  g_res.barra = g_kili;
+  g_res.max.resize(P.size());
+  g_res.ganados.assign(P.size(), 0);
+  for (size_t i = 0; i < P.size(); ++i) {
+    g_res.max[i] = std::max(0, Maximo(P[i].id) - Tienes(P[i].id));
+    g_res.quedan += g_res.max[i];
+  }
+  g_res.sig = Siguiente();
+  REXLOG_INFO("dbz3 nave: resultado de la prueba {}: {} x {} = {} Kili (barra {}, premios por ganar {})", g_prueba + 1,
+              g_cuenta, pago, g_res.total, g_kili, g_res.quedan);
+}
+void EnsenarPremio() {
+  const auto& P = Premios();
+  g_res.premio = g_res.sig;
+  const Premio& p = P[size_t(g_res.premio)];
+  g_res.nuevo = Tienes(p.id) == 0 && g_res.ganados[size_t(g_res.premio)] < 1;
+  g_res.premio_t = g_cuadro;
+  g_res.fase = 3;
+  REXLOG_INFO("dbz3 nave: premio: {} (ID {}, {} Kili, maximo {}){}", p.nombre, p.id, p.kili, Maximo(p.id),
+              g_res.nuevo ? " nuevo" : "");
+}
+void AcabarBarra() {
+  const auto& P = Premios();
+  for (size_t i = 0; i < P.size(); ++i)
+    if (g_res.ganados[i] > 0) Dar(P[i], g_res.ganados[i]);
+  g_kili = g_res.barra;
+  GuardarProgreso("nave_kili", g_kili);
+  g_res.fase = 4;
+  g_res.espera = 0;
+  REXLOG_INFO("dbz3 nave: barra de la nave: {} Kili", g_kili);
+}
+// Un cuadro de la pantalla de resultado; true = vuelve a la prueba.
+bool PasoResultado(float cuadros, bool ok) {
+  auto& r = g_res;
+  const int pago = kPruebas[g_prueba].pago;
+  switch (r.fase) {
+    case 0:   // 0x263700: 1 Kili cada 3 cuadros; la cuenta baja uno cada `pago`
+      if (ok || r.ganado >= r.total) {
+        r.cuenta = 0;
+        r.ganado = r.total;
+        r.fase = 1;
+        r.espera = 0;
+        break;
+      }
+      for (r.acc += cuadros; r.acc >= 3 && r.ganado < r.total; r.acc -= 3) {
+        if (r.ganado % pago == 0) --r.cuenta;
+        ++r.ganado;
+      }
+      break;
+    case 1:   // 0x263670: 40 cuadros; sin Kili se acaba
+      if ((r.espera += cuadros) > 40) {
+        if (r.total < 1) return true;
+        if (r.barra > 9999) Vuelta();
+        r.sig = Siguiente();
+        r.fase = 2;
+        r.acc = 0;
+      }
+      break;
+    case 2: {   // 0x262DD0
+      const auto& P = Premios();
+      if (ok) {
+        if (r.barra > 9999) Vuelta();
+        if (r.sig >= int(P.size()) && r.barra + r.ganado > 9999) {
+          r.ganado -= 10000 - r.barra;
+          r.barra = 10000;
+          if (r.barra > 9999) Vuelta();
+        }
+        const int falta = r.sig < int(P.size()) ? P[size_t(r.sig)].kili - r.barra : 1 << 30;
+        if (falta <= r.ganado) {
+          r.barra += falta;
+          r.ganado -= falta;
+          EnsenarPremio();
+        } else {
+          r.barra += r.ganado;
+          r.ganado = 0;
+          if (r.barra > 10000) Vuelta();
+          AcabarBarra();
+        }
+        break;
+      }
+      if (r.sig < int(P.size()) && r.barra == P[size_t(r.sig)].kili) {
+        EnsenarPremio();
+      } else if (r.ganado < 1) {
+        AcabarBarra();
+      } else {
+        for (r.acc += cuadros; r.acc >= 3 && r.ganado > 0; r.acc -= 3) {
+          --r.ganado;
+          ++r.barra;
+          if (r.barra > 10000) Vuelta();
+          if (r.sig < int(P.size()) && r.barra == P[size_t(r.sig)].kili) break;
+        }
+      }
+      break;
+    }
+    case 3:   // ventana del premio (0x262D50): al cerrarla se gana y se busca el siguiente (0x263540)
+      if (ok) {
+        ++r.ganados[size_t(r.premio)];
+        --r.quedan;
+        r.premio = -1;
+        if (r.ganado > 0 && r.barra > 9999) Vuelta();
+        r.sig = Siguiente();
+        r.fase = 2;
+        r.acc = 0;
+      }
+      break;
+    default:   // 0x262CC0 / 0x262C50: guardado y 40 cuadros
+      if ((r.espera += cuadros) > 40) return true;
+  }
+  return false;
+}
+void DibujarResultado(ImDrawList* dl, const Lienzo& L) {
+  // 0x262640: titulo (16), panel (77), franja (78), esferas (79, 80), aguja (81), cuenta (82) con su palabra (92-95),
+  // Kili ganado (96, 106) y barra de la nave (107, 117)
+  Obj(dl, L, 15, 16);
+  for (int k = 77; k <= 80; ++k) DibC(dl, L, k, g_cuadro, true);
+  DibC(dl, L, 81, 0, false, float(g_res.barra) * 360.0f / 10000.0f);
+  Numero(dl, L, 82, g_res.cuenta);
+  DibC(dl, L, 92 + g_prueba, 0, false);
+  Numero(dl, L, 96, g_res.ganado);
+  DibC(dl, L, 106, 0, false);
+  Numero(dl, L, 107, g_res.barra);
+  DibC(dl, L, 117, 0, false);
+  if (g_res.fase == 3 && g_res.premio >= 0) {
+    // Ventana del premio: la de B2 ("Get skill!"). FUN_002a4070 (b2.c) lanza a la vez la tarea del cartel (anim 0
+    // -> reposo 1), la de la estrella (3 -> 4) y las del estallido con el emblema (6..12) y la placa "BOOM!!" (13);
+    // las texturas son DATA_<idioma> 1148 (la disposicion, DATA_CMN 933). El nombre del premio es su arte nativo
+    // (DATA_<idioma> 542 + ID, textura 0) y el Kili, nuestra linea (el original no lo repite).
+    const Premio& p = Premios()[size_t(g_res.premio)];
+    const float c = std::max(0.0f, g_cuadro - g_res.premio_t);
+    Obj(dl, L, 3, 4, g_res.premio_t, 0, 0, &g_animv, &g_pzv);   // estrella
+    Obj(dl, L, 0, 1, g_res.premio_t, 0, 0, &g_animv, &g_pzv);   // cartel "Get skill!"
+    for (int k = 6; k <= 13; ++k) DibC(dl, L, k, c, false, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
+    if (const Tex* n = NombreTex(p.id))
+      dl->AddImage(reinterpret_cast<ImTextureID>(n->t.get()), L.P(320 - n->w * 0.5f, 206 - n->h * 0.5f),
+                   L.P(320 + n->w * 0.5f, 206 + n->h * 0.5f));
+    else
+      S::MenuText(dl, L.P(320, 206), 22 * L.s, p.nombre.c_str(), true, false, 320 * L.s);
+    char li[48];
+    std::snprintf(li, sizeof(li), "%d Kili%s", p.kili, g_res.nuevo ? T::T("  ¡Nuevo!", "  New!") : "");
+    S::MenuText(dl, L.P(320, 300), 15 * L.s, li, false, false);
   }
 }
 
@@ -466,110 +794,159 @@ bool Abierta() { return LeerProgreso("tablero_b2_nave", 0) != 0; }
 void Entrar() {
   combate::OndasModo(false);
   g_kili = LeerProgreso("nave_kili", 0);
-  Premios();
-  Cargar();
-  g_estado = kPrueba;
+  g_enc_armado = false;
+  Premios();   // los graficos los carga Dibujar en el hilo que dibuja (crear texturas desde otro hilo rompia: R7)
+  g_estado = kModo;   // la primera vez, la pantalla de 1P/2P (0x2654A0 con 0x8C44 = 0)
   REXLOG_INFO("dbz3 nave: entrar ({} Kili)", g_kili);
 }
 
+// --- Cadena de la prueba I (B2: el rival cae y se levanta, sin pantalla VS). La pide pasarela_misiones.cpp en el hilo
+// del juego (gancho sub_820FE9B0, antes de que el conector cierre el combate) y la gasta CombateNave sin volver a
+// pedir nada: el hub::ChainBattleEx pedido arranca el combate siguiente. Sin el armado, todo sigue igual que antes
+// (pantalla VS). Ver studies 3/ENTREGAS/08_nave_babidi_1a1. ---
+bool Siguiente(int out[6], int vida) {   // no toca el estado: la cadena puede fallar
+  if (g_prueba != 0 || g_enc_armado.load()) return false;
+  const int j = kLuchadores[g_luch], r = kLuchadores[g_riv];
+  out[0] = j;
+  out[1] = r;
+  out[2] = EscenarioDelSitio(g_sitio);
+  out[3] = std::max(1, vida);   // el jugador sigue con la vida que le quedo (B2: no se recupera)
+  out[4] = kPruebas[0].tiempo;
+  out[5] = 0;
+  return true;
+}
+void Seguido(int vida) {   // el combate encadenado quedo pedido: cuenta el vencido y guarda la vida
+  if (g_enc_armado.exchange(true)) return;
+  ++g_vencidos;
+  g_vida = std::max(1, vida);
+  REXLOG_INFO("dbz3 nave: prueba I: el rival se levanta; combate {} encadenado (vida {})", g_vencidos + 1, g_vida);
+}
+bool Encadenado() { return g_enc_armado.load(); }
+bool Seguir() { return g_enc_armado.exchange(false); }   // CombateNave: lo consume y arranca la cadena
+
 // 0 nada, 1 salir, 2 combate pedido en out = {jugador, rival, mapa, vida inicial, tiempo, prueba}.
 int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool auto_on, int out[6]) {
+  Cargar();
   static int antes = -1;
-  static float desde = 0;
-  if (g_estado != antes) {   // pantalla nueva: las piezas entran con sus claves
+  static float desde = 0, t_antes = 0, d_bab = 0, d_burb = 0, d_tit = 0;
+  const float dt = std::clamp(t - t_antes, 0.0f, 0.1f);
+  t_antes = t;
+  if (g_estado != antes) {   // pantalla nueva: las piezas entran con sus claves; Babidi habla
+    auto sel = [](int e) { return e == kJugador || e == kRival || e == kSitio; };
+    auto cab = [&](int e) { return e == kSitio ? 2 : sel(e) ? 1 : 0; };
+    if (antes < 0 || antes == kResultado || antes == kSigue || g_estado == kResultado) d_bab = d_burb = d_tit = t;
+    else {
+      if (sel(antes) != sel(g_estado)) d_burb = t;   // bocadillo de abajo <-> de arriba
+      if (cab(antes) != cab(g_estado)) d_tit = t;    // titulo / "Selecc. Person." / "Seleccion Fase"
+    }
     antes = g_estado;
     desde = t;
+    if (g_estado == kModo) Voz(1149);
+    if (g_estado == kJugador) {
+      g_frase_sel = 9 + std::rand() % 2;   // 0x2617C0
+      Voz(1150 + g_frase_sel - 9);
+    }
+    if (g_estado == kSitio) {
+      g_frase_sitio = 11 + std::rand() % 3;   // 0x261700
+      Voz(1152 + g_frase_sitio - 11);
+    }
   }
   g_cuadro = (t - desde) * 60.0f;
+  g_c_bab = (t - d_bab) * 60.0f;
+  g_c_burb = (t - d_burb) * 60.0f;
+  g_c_tit = (t - d_tit) * 60.0f;
   const Lienzo L = LienzoDe(a);
-  Fondo(dl, a, L);
+  auto salir = [&](int r) {
+    Musica(false);
+    CallarAdxPs2();
+    antes = -1;
+    return r;
+  };
+  if (g_estado == kSigue) {   // prueba I: el mismo rival se levanta (vidas sin fin) y sigue con la vida que quedo
+    Pedir(out);
+    g_estado = kPrueba;
+    return salir(2);
+  }
+  Musica(true);
+  Fondo(dl, L, g_estado == kJugador || g_estado == kRival || g_estado == kSitio);
   if (auto_on && t - g_auto_t > 2.5f) {
     g_auto_t = t;
     pressed |= kA;
   }
-  if (g_estado == kSigue) {   // prueba I: el siguiente enemigo sin pasar por el menu (el siguiente de la lista)
-    g_riv = (g_riv + 1) % kN;
-    if (g_riv == g_luch) g_riv = (g_riv + 1) % kN;
-    Pedir(out);
-    g_estado = kPrueba;
-    return 2;
-  }
-  if (g_estado == kResultado) {   // panel (77) con la bola (80) y su aguja (81), franja (78); cifras y palabras del #AMA
-    Dib(dl, L, 16);
-    Dib(dl, L, 77);
-    Dib(dl, L, 78);
-    Dib(dl, L, 80);
-    Dib(dl, L, 81);
-    Numero(dl, L, 82, g_cuenta);
-    Dib(dl, L, g_prueba == 0 ? 92 : g_prueba == 1 ? 93 : g_prueba == 2 ? 94 : 95);   // ganadas / segs. / Hits / veces
-    Numero(dl, L, 96, g_ganado);
-    Dib(dl, L, 106);   // Kili
-    Numero(dl, L, 107, g_kili);
-    Dib(dl, L, 117);   // Kili (total de la barra)
-    float y = 352;
-    for (size_t i = 0; i < g_nuevos.size(); ++i) {   // ponytail: los nombres con la letra de B3 (imagen sin localizar)
-      const Premio* p = g_nuevos[i];
-      if (y > 400) break;
-      char l[96];
-      if (i < g_de_verdad.size() && g_de_verdad[i])
-        std::snprintf(l, sizeof(l), T::T("¡Nuevo! %s (%d Kili)", "New! %s (%d Kili)"), p->nombre.c_str(), p->kili);
-      else
-        std::snprintf(l, sizeof(l), "%s (%d Kili)", p->nombre.c_str(), p->kili);
-      S::MenuText(dl, L.P(320, y), 15 * L.s, l, true, false);
-      y += 22;
-    }
+  const bool ok = (pressed & (kA | kStart)) != 0;
+  if (g_estado == kResultado) {
+    const bool fin = PasoResultado(dt * 60.0f, ok);
+    DibujarResultado(dl, L);
     M::Help(dl, a, {{"A", T::T("Seguir", "Continue")}});
-    if (pressed & (kA | kB | kStart)) g_estado = kPrueba;
-    if (auto_on && (pressed & kA)) return 1;   // prueba: un combate y fuera
+    if (fin) {
+      g_estado = kPrueba;
+      if (auto_on) return salir(1);   // prueba automatica: un combate y fuera
+    }
     return 0;
   }
-  if (g_estado == kPrueba) {   // "Seleccion Fase" (122), "Fase 1-4" (46/50/54/58), el indicador (62 + 65..69) y Babidi
-    if (pressed & kUp) g_prueba = (g_prueba + 3) % 4;
-    if (pressed & kDown) g_prueba = (g_prueba + 1) % 4;
-    if (auto_on) g_prueba = 2;
-    Dib(dl, L, 122);
-    Dib(dl, L, 46 + 4 * g_prueba);   // solo la elegida: las 4 van en el mismo sitio, cada una con su linea a su casilla
-    Dib(dl, L, 62);
-    Dib(dl, L, 66 + g_prueba);
-    Babidi(dl, L, 1 + g_prueba);
-    {   // lo que hay que hacer y lo que paga, con nuestra letra: Babidi lo dice con su frase, pero sin las cifras del Kili
-      const char* d = T::T(kPruebas[g_prueba].ayuda_es, kPruebas[g_prueba].ayuda_en);
-      const char* corte = std::strstr(d, ". ");
-      const std::string l1 = corte ? std::string(d, corte + 1) : std::string(d), l2 = corte ? std::string(corte + 2) : std::string();
-      S::MenuText(dl, L.P(198, 205), 17 * L.s, l1.c_str(), true, false, 322 * L.s);
-      if (!l2.empty()) S::MenuText(dl, L.P(198, 225), 17 * L.s, l2.c_str(), true, false, 322 * L.s);
-      if (g_prueba == 3)   // como se juega (B2: el rival solo devuelve; la guardia pulsada < 5 cuadros antes del impacto devuelve)
-        S::MenuText(dl, L.P(198, 245), 15 * L.s, T::T("Dispara; devuelve la onda con la guardia justo al llegar.", "Fire; guard right as the wave arrives to send it back."),
-                    false, false, 322 * L.s);
+  if (g_estado == kModo) {   // 0x2629B0: titulo, Babidi con la frase 0, el recuadro (24 -> 25) y 1P (29) / 2P (35)
+    Obj(dl, L, 15, 16, g_cuadro - g_c_tit);
+    Babidi(dl, L, 0, false);
+    Obj(dl, L, 24, 25);
+    if (g_cuadro >= DurDe(24)) {   // 1P elegido (28 da el vaiven); 2P solo con dos mandos (0x264F60): aqui uno
+      DibC(dl, L, 28, g_cuadro, true);
+      DibC(dl, L, 35, 0, false, 0, 0, 0, IM_COL32(150, 150, 150, 255));
     }
     M::Help(dl, a, {{"A", T::T("Elegir", "Select")}, {"B", T::T("Salir", "Quit")}});
-    if (pressed & kB) return 1;
-    if (pressed & (kA | kStart)) g_estado = kJugador;
+    if (pressed & kB) return salir(1);
+    if (ok) g_estado = kPrueba;
     return 0;
   }
-  // luchador, oponente y sitio: "Selecc. Person." (119), el recuadro (25) con la cara de B3, 1P/2P (29/35) y las
-  // flechas (40/43); el sitio, con su nombre
+  if (g_estado == kPrueba) {   // 0x262830 / 0x264790
+    const int antes_p = g_prueba;
+    if ((pressed & kUp) && g_prueba > 0) --g_prueba;   // sin dar la vuelta
+    if ((pressed & kDown) && g_prueba < 3) ++g_prueba;
+    if (auto_on) g_prueba = 2;
+    if (const char* f = std::getenv("DBZ3_TEST_NAVE_PRUEBA"))   // pruebas: la prueba automatica (I/II)
+      g_prueba = std::clamp(std::atoi(f), 0, 3);
+    static float desde_p = 0;
+    if (g_prueba != antes_p) desde_p = g_cuadro;   // la "Fase N" nueva entra con su animacion
+    Obj(dl, L, 15, 16, g_cuadro - g_c_tit);
+    Obj(dl, L, 61, 62);                                // la columna de las 4 casillas
+    DibC(dl, L, 66 + g_prueba, 0, false);              // la casilla encendida
+    Obj(dl, L, 45 + 4 * g_prueba, 46 + 4 * g_prueba, desde_p);
+    if (g_prueba != 0) Obj(dl, L, 39, 40);             // flechas solo si hay mas arriba / abajo
+    if (g_prueba != 3) Obj(dl, L, 42, 43);
+    Babidi(dl, L, 1 + g_prueba, false);                // frase de la prueba (1P: 1-4)
+    M::Help(dl, a, {{"A", T::T("Elegir", "Select")}, {"B", T::T("Volver", "Back")}});
+    if (pressed & kB) g_estado = kModo;
+    else if (ok) g_estado = kJugador;
+    return 0;
+  }
+  // Seleccion: en B2 la nativa con "Selecc. Person." (118 -> 119) y, para el escenario, "Seleccion Fase" (121 -> 122),
+  // con Babidi y el bocadillo de arriba. Aqui el recuadro (25) con la cara de B3, a la izquierda para no pisarlos.
   int* cur = g_estado == kJugador ? &g_luch : g_estado == kRival ? &g_riv : &g_sitio;
   const int n = g_estado == kSitio ? kNSitios : kN;
   if (pressed & (kLeft | kUp)) *cur = (*cur + n - 1) % n;
   if (pressed & (kRight | kDown)) *cur = (*cur + 1) % n;
-  Dib(dl, L, g_estado == kSitio ? 16 : 119);   // el sitio no tiene cabecera propia: el titulo de la nave
-  Dib(dl, L, 25);
+  if (g_estado == kSitio) Obj(dl, L, 121, 122, g_cuadro - g_c_tit);
+  else Obj(dl, L, 118, 119, g_cuadro - g_c_tit);
+  constexpr float bx = 170 - 320, by = 210 - 172;   // el recuadro (320, 172) movido a (170, 210)
+  Obj(dl, L, 24, 25, 0, bx, by);
   if (g_estado == kSitio) {
-    S::MenuText(dl, L.P(320, 172), 22 * L.s, T::T(kSitios[g_sitio].es, kSitios[g_sitio].en), true, false, 150 * L.s);
+    S::MenuText(dl, L.P(170, 210), 22 * L.s, T::T(kSitios[g_sitio].es, kSitios[g_sitio].en), true, false, 150 * L.s);
   } else {
     const int id = kLuchadores[*cur];
-    if (ImTextureID tex = CaraDe(id)) dl->AddImage(tex, L.P(268, 150), L.P(372, 236));
-    S::MenuText(dl, L.P(320, 252), 15 * L.s, NombreDe(id).c_str(), true, false, 150 * L.s);
-    Dib(dl, L, g_estado == kJugador ? 29 : 35);   // 1P / 2P
+    // R7: la cabeza de B2 (CMN 1196, la del original); sin ella, la cara de B3
+    ImTextureID tex = dbz3::pasarela::b2::CabezaDeB3(id);
+    if (!tex) tex = CaraDe(id);
+    if (tex) dl->AddImage(tex, L.P(118, 168), L.P(222, 254));
+    DibC(dl, L, g_estado == kJugador ? 29 : 35, 0, false, 0, -150, g_estado == kJugador ? -12 : -64);   // 1P / 2P
   }
-  Dib(dl, L, 40);
-  Dib(dl, L, 43);
-  Babidi(dl, L, g_estado == kJugador ? 0 : g_estado == kRival ? 9 : 12);
+  S::MenuText(dl, L.P(170, 300), 15 * L.s,
+              ("<  " + (g_estado == kSitio ? std::string(T::T(kSitios[g_sitio].es, kSitios[g_sitio].en))
+                                           : NombreDe(kLuchadores[*cur])) + "  >").c_str(),
+              true, false, 230 * L.s);
+  Babidi(dl, L, g_estado == kSitio ? g_frase_sitio : g_frase_sel, true);
   M::Help(dl, a, {{"A", T::T("Elegir", "Select")}, {"B", T::T("Volver", "Back")}});
   if (pressed & kB) g_estado = g_estado == kJugador ? kPrueba : g_estado - 1;
-  if (pressed & (kA | kStart)) {
-    if (g_estado == kRival && g_riv == g_luch) g_riv = (g_riv + 1) % kN;
+  if (ok) {
+    if (g_estado == kRival && g_riv == g_luch && kN > 1) g_riv = (g_riv + 1) % kN;
     if (g_estado != kSitio) {
       ++g_estado;
       return 0;
@@ -578,39 +955,45 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
     g_vencidos = 0;
     Pedir(out);
     g_estado = kPrueba;
-    return 2;
+    return salir(2);
   }
   return 0;
 }
 
 // Fin del combate de la prueba (lado 0 = jugador): segundos que sobraban (-1 sin limite) y golpes que quitaron vida.
 void Resultado(int ganador, int vida, int segundos, int golpes) {
-  const Prueba& p = kPruebas[g_prueba];
   combate::OndasModo(false);
-  REXLOG_INFO("dbz3 nave: fin: gana el lado {}, vida {}, {} s de sobra, {} golpes, {} ondas devueltas", ganador + 1, vida,
-              segundos, golpes, combate::OndasDevueltas(0));
+  const int ms = g_ms_lucha.load();
+  ++g_reloj;   // para el reloj de la prueba II
+  REXLOG_INFO("dbz3 nave: fin: gana el lado {}, vida {}, {} s de sobra, {} golpes, {} ondas devueltas, {} ms de pelea",
+              ganador + 1, vida, segundos, golpes, combate::OndasDevueltas(0), ms);
   if (ganador < 0) {   // salio desde la pausa: sin Kili
     g_estado = kPrueba;
     return;
   }
   if (g_prueba == 0) {
-    if (ganador == 0) {   // sigue con la vida que le queda
-      ++g_vencidos;
+    if (ganador == 0) {
+      if (g_enc_armado) {   // el combate siguiente ya se pidio (pasarela_misiones.cpp sub_820FE9B0): Seguido ya conto
+        g_estado = kSigue;
+        return;
+      }
+      ++g_vencidos;   // el rival cae y se levanta: uno mas, y sigue con la vida que le queda
       g_vida = std::max(1, vida);
       g_estado = kSigue;
       return;
     }
     g_cuenta = g_vencidos;
   } else if (g_prueba == 1) {
-    g_cuenta = segundos >= 0 ? p.tiempo - segundos : 0;
+    g_cuenta = (std::min(ms, kTopeII * 1000) * 60 / 1000 + 60) / 60;   // (cuadros + 60) / 60
   } else if (g_prueba == 2) {
     g_cuenta = golpes;
   } else {
     g_cuenta = combate::OndasDevueltas(0);   // IV: ondas de ki devueltas (combate.cpp, sub_82122488)
   }
-  g_ganado = p.pago * g_cuenta;
+  if (const char* c = std::getenv("DBZ3_TEST_NAVE_CUENTA")) g_cuenta = std::atoi(c);   // pruebas: la barra y premios
   if (g_cuenta > 0) RangoMejora("rango_nave_" + std::to_string(g_prueba), 1, 25);   // escalafon: cada prueba, una vez
-  Cobrar();
+  EmpezarResultado();
+  g_estado = kResultado;
 }
 
 // Para el tablero de B2 (cápsula al azar de sus casillas): la de B3 equivalente a una de B2, 0 si no hay.

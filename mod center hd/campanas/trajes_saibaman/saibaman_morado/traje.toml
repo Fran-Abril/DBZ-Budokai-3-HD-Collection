@@ -1,0 +1,9 @@
+# Saibaman de colores (1.5.1): traje extra del Saibaman (ID 42) con SU modelo del juego (entrada 371 de data_cmn de la
+# copia del jugador) con el tono girado al montar (roster_build: "tono"). El mod no trae arte del juego.
+# En el tablero de Budokai 2 cada combate contra un Saibaman elige un traje al azar.
+[traje]
+personaje = 42
+nombre = "Saibaman morado"
+nombre_en = "Purple Saibaman"
+modelos = ["juego:371"]
+tono = 195

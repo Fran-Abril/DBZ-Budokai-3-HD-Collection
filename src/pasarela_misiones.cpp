@@ -11,6 +11,8 @@
 // Todo con piezas del juego: combate nativo (dbz3::hub::RequestBattleEx), caras del marcador, marco, bocadillo y
 // letra de los menus (game_style). Textos propios (es/en). Nada de B1/B2 va en la version: la saga lee la ISO del
 // jugador y los personajes importados son mods suyos; si falta algo, la entrada lo dice y no empieza.
+// Frente 08 (nave de Babidi 1:1, studies 3): los combates de la nave llevan el escenario de B2 (registro del selector,
+// negativo, como el tablero) y la prueba I encadena (sub_820FE9B0 + hub::ChainBattleEx): ver CombateNave y el gancho.
 // Avance en user_data/dbz3/pasarela/progreso.toml (claves saga_b1, tablero_*, gotenks, buu*). US y EU.
 // Sin ganchos propios. Docs: docs/16_pasarela_modos/04_misiones_y_tablero.md.
 #include "pasarela.h"
@@ -19,6 +21,7 @@
 #include "iw_mini_vuelo.h"
 #include "cinematica.h"
 #include "video_sfd.h"
+#include "mods_opcionales.h"
 #include "ingame/tutorial.h"
 
 #include <rex/hook.h>
@@ -60,6 +63,8 @@ void InyectarPad(uint32_t usuario, int32_t botones);   // net/netplay_hooks.cpp 
 }
 namespace dbz3::hub {
 bool RequestBattleEx(int id1, int id2, int stage, bool p2_com, int time_s, int hp1, int hp2, int form1, int form2);
+bool ChainBattleEx(int id1, int id2, int stage, bool p2_com, int time_s, int hp1, int hp2, int form1, int form2);
+void HoldChain(bool hold);
 bool OwnBattle();
 bool RegisterMode(const char* key, void (*open)(), bool (*busy)());   // hub_menu.cpp
 bool RegisterGate(const char* key, bool (*ready)(), const char* (*why)());
@@ -94,6 +99,12 @@ bool Abierta();
 void Entrar();
 int Dibujar(ImDrawList* dl, const dbz3::ingame::style::Area& a, float t, uint16_t pressed, bool auto_on, int out[6]);
 void Resultado(int ganador, int vida, int segundos, int golpes);
+// Prueba I encadenada (frente 08): el combate siguiente se pide en el fin del actual (gancho de abajo) y CombateNave
+// lo arranca sin volver a pedirlo.
+bool Siguiente(int out[6], int vida);
+void Seguido(int vida);
+bool Encadenado();
+bool Seguir();
 }  // namespace dbz3::pasarela::nave
 
 namespace dbz3::pasarela::misiones {
@@ -140,6 +151,7 @@ struct Paso {
   int informe = -1;        // IW: mision (indice de g_iw) cuyo titulo y texto se ensenan
   int vida_minima = 0;     // IW, reto sin atacar: vida con la que hay que acabar
   int iw = 0;              // IW: 1 "Fight" (vale ganar o aguantar el tiempo), 2 dejar ganar al rival
+  int escenario = -1;      // registro de escenario directo (altas de mods); -1 = el de `mapa`
 };
 
 // --- Saga de B1: los combates de la historia de Budokai 1 de la ISO del jugador ---
@@ -258,21 +270,46 @@ void LeerIW() {   // en un hilo; una vez (o otra vez si fallo)
 // Por que una mision de IW no se juega en B3 (nullptr = jugable).
 constexpr int kMisionesDM = 96;   // 97-201: Fighter's Road
 int g_iw_luchador = 0;           // Fighter's Road: el luchador elegido (B3)
+// El aviso dice a quien falta y como conseguirlo: la receta del Kit lo crea desde la copia de IW del jugador (Nova's Mods
+// solo reparte recetas y retoques, nunca modelos de IW). Cadenas guardadas: el puntero vive lo que el juego.
+const char* FaltaIW(int id_iw) {
+  static const std::pair<int, const char*> kNombre[] = {{44, "Goku GT"}, {45, "Baby"}, {46, "Super 17"}, {47, "Janemba"},
+                                                         {48, "Pikkon"}, {54, "Vegeta GT"}, {55, "Gran Saiyaman 2"},
+                                                         {56, "Pan"}, {70, "Gogeta SS4"}};
+  static std::mutex mu;
+  static std::map<int, std::string> hechas;
+  std::lock_guard<std::mutex> lk(mu);
+  auto it = hechas.find(id_iw);
+  if (it == hechas.end()) {
+    const char* n = "?";
+    for (const auto& [id, nombre] : kNombre)
+      if (id == id_iw) n = nombre;
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  T::T("Necesita a %s: instálalo en el lanzador > Nova's Mods > Pack Infinite World (se crea con tu "
+                       "copia de IW)",
+                       "Needs %s: install it in the launcher > Nova's Mods > Infinite World pack (built from your IW "
+                       "copy)"),
+                  n);
+    it = hechas.emplace(id_iw, buf).first;
+  }
+  return it->second.c_str();
+}
 const char* MotivoIW(const MisionTablaIW& t) {
   if (t.numero > kMisionesDM)   // Fighter's Road: el jugador es el elegido; solo cuenta el rival
-    return IWaB3(t.rival) < 0 ? T::T("personaje solo de Infinite World: impórtalo con el Mod Kit",
-                                     "Infinite World-only character: import it with the Mod Kit")
-                              : nullptr;
+    return IWaB3(t.rival) < 0 ? FaltaIW(t.rival) : nullptr;
   // Training No.2 (guardia, esquiva y teletransporte): jugable (VigilarEntreno2, verificado entero: iw_fix 2026-10-17)
-  if (t.condicion == -1 && t.numero != 1 && t.numero != 2 && t.numero != 6 && t.numero != 9 &&
+  // R7: No.4 jugable (agarres, verificado en iw_fix); No.8 (hiper + Dragon Rush) tiene vigilante pero sin probar entero
+  // (el piloto no consigue que el golpe fuerte en hiper entre): sigue en gris salvo con la sonda
+  if (t.condicion == -1 && t.numero != 1 && t.numero != 2 && t.numero != 4 && t.numero != 6 && t.numero != 9 &&
       !std::getenv("DBZ3_R1_TRAZA"))
     return T::T("entrenamiento de mandos de IW: guardia, esquiva, teletransporte, persecución; sin portar",
                 "IW controls training: guard, dodge, teleport, pursuit; not ported");
   if (t.condicion < -1 || t.condicion > 3) return T::T("regla de IW sin descifrar", "IW rule not decoded");
   // R9 (cuarta y quinta vuelta): las definitivas de IW van sobre el guion del donante (roster_build iw_guion_donante,
   // IW_TECNICAS_DONANTE para Baby); Goku GT, Baby, Vegeta GT y Pan pasan combates con definitivas.
-  if (IWaB3(t.jugador) < 0 || IWaB3(t.rival) < 0) return T::T("personaje solo de Infinite World: impórtalo con el Mod Kit",
-                                                             "Infinite World-only character: import it with the Mod Kit");
+  if (IWaB3(t.jugador) < 0) return FaltaIW(t.jugador);
+  if (IWaB3(t.rival) < 0) return FaltaIW(t.rival);
   return nullptr;
 }
 // Combate de una mision jugable de IW con las reglas de su condicion; `regla` = la condicion en el idioma del juego.
@@ -285,6 +322,12 @@ Paso PasoIW(const MisionTablaIW& t, std::string& regla) {
   } else if (t.condicion == -1 && t.numero == 2) {   // "Training No.2" (DATA_USA 133): guardia, esquiva, teletransporte
     std::snprintf(txt, sizeof(txt), "%s", T::T("Para 5 golpes (G), esquiva 5 (G justo al golpe) y teletranspórtate 5 (G + izquierda/derecha justo al golpe) en 180 s.",
                                                "Guard 5 attacks (G), dodge 5 (G right at the hit) and teleport 5 times (G + left/right at the hit) in 180 s."));
+  } else if (t.condicion == -1 && t.numero == 4) {   // "Training No.4" (DATA_USA 135): agarres (VigilarEntrenoIW)
+    std::snprintf(txt, sizeof(txt), "%s", T::T("Haz 3 agarres (P + G junto al rival) en 180 s.",
+                                               "Perform 3 throws (P + G next to your opponent) in 180 s."));
+  } else if (t.condicion == -1 && t.numero == 8) {   // "Training No.8" (DATA_USA 139): Aura Burning = modo hiper de B3
+    std::snprintf(txt, sizeof(txt), "%s", T::T("Entra en modo híper (P + K + G + E) y haz 3 Dragon Rush en 180 s.",
+                                               "Enter Hyper Mode (P + K + G + E) and perform 3 Dragon Rushes in 180 s."));
   } else if (t.condicion == -1 && t.numero == 6) {   // "Training No.6" (DATA_USA 137): solo ki, super y definitiva
     std::snprintf(txt, sizeof(txt), "%s", T::T("Solo valen las bolas de ki, los súper ataques y la definitiva: deja K.O. al rival en 180 s.",
                                                "Only Ki blasts, Super and Ultimate attacks count: knock out your opponent in 180 s."));
@@ -323,6 +366,10 @@ Paso PasoIW(const MisionTablaIW& t, std::string& regla) {
     x.tiempo = std::getenv("DBZ3_R1_ENTRENO2_TIEMPO") ? std::atoi(std::getenv("DBZ3_R1_ENTRENO2_TIEMPO")) : 180;   // prueba
     x.reglas.nivel_com = 1;   // que ataque
     x.iw = 4;
+  } else if (t.condicion == -1 && (t.numero == 4 || t.numero == 8)) {   // Training No.4 / No.8: VigilarEntrenoIW
+    x.tiempo = 180;
+    x.reglas.nivel_com = 0;
+    x.iw = t.numero == 4 ? 5 : 6;
   } else if (t.condicion == -1 && t.numero == 6) {   // Training No.6. ponytail: IW no deja dar golpes; aqui los golpes hacen el
     x.tiempo = 180;                           // 25 % (Reglas::solo_ki, la de Mr. Satan herido de la Leyenda)
     x.reglas.nivel_com = 0;
@@ -363,6 +410,9 @@ std::atomic<int> g_hud_tipo{0}, g_hud_meta{0}, g_hud_golpes{0};
 std::atomic<bool> g_panel{false};
 // tablero: vida que le queda al del jugador en el combate pedido (0 = llena)
 int g_vida = 0;
+int g_nave_prueba = -1;   // prueba de la nave en curso (CombateNave c[5])
+bool g_nave_armada = false;      // el fin del combate de la prueba I ya encadeno el siguiente (gancho sub_820FE9B0)
+bool g_nave_encadenada = false;  // el combate de la nave lo pidio la cadena: Lanzar no vuelve a pedirlo
 // Bu
 int g_absorbidos = 1;    // bit por absorcion (la 0, Super Bu, siempre)
 int g_forma_bu = 0;
@@ -431,7 +481,7 @@ const Texto kTitulos[kModos] = {{"Saga de Vegeta en Namek (Budokai 1)", "Vegeta'
                                 {"¡Fusión fallida! (Gotenks gordo)", "Failed fusion! (Fat Gotenks)"},
                                 {"Las absorciones de Súper Bu", "Super Buu's absorptions"},
                                 {"Misiones del Dragón (Infinite World)", "Dragon Mission (Infinite World)"},
-                                {"Nave de Babidi (Budokai 2) - EXPERIMENTAL", "Babidi's Spaceship (Budokai 2) - EXPERIMENTAL"}};
+                                {"Nave de Babidi (Budokai 2) - BETA", "Babidi's Spaceship (Budokai 2) - BETA"}};
 const Texto kAyudas[kModos] = {
     {"Los combates de la historia de Budokai 1 de tu copia del juego, con Zarbon importado de Budokai 1.",
      "The story battles from your copy of Budokai 1, with Zarbon imported from Budokai 1."},
@@ -443,8 +493,8 @@ const Texto kAyudas[kModos] = {
      "Buu absorbs whoever he beats. Before each fight, choose which absorption to fight with."},
     {"El mapa de Dragon Mission de tu copia de Infinite World: elige una misión en el mapa y cúmplela.",
      "The Dragon Mission map from your copy of Infinite World: pick a mission on the map and clear it."},
-    {"EXPERIMENTAL, en construcción. Las 4 pruebas de la nave de Budokai 2: gana Kili y consigue los premios de Babidi.",
-     "EXPERIMENTAL, work in progress. The 4 trials of the Budokai 2 ship: earn Kili and get Babidi's prizes."}};
+    {"Las 4 pruebas de la nave de Budokai 2: gana Kili y consigue los premios de Babidi.",
+     "The 4 trials of the Budokai 2 ship: earn Kili and get Babidi's prizes."}};
 
 // Pasos lineales de cada modo (el tablero arma los suyos al llegar a una casilla).
 std::vector<Paso> PasosDe(int m) {
@@ -595,13 +645,15 @@ void VolverAlTablero() {   // con g_mu
 // rival, condicion de la casilla}. Condiciones con las Reglas que existen: 2 (empiezan con 0 de ki) = ki del rival a 0;
 // 4 (el ki se va gastando) = el jugador no gana ki. ponytail: 2 no vacia el ki del jugador, y 3 (la vida se va gastando)
 // y 5 (sin bloqueo) solo se avisan: hacen falta campos nuevos en Reglas (pasarela.h/.cpp, frente P3).
+bool Lanzar();   // mas abajo
 void CombateTablero(const int c[8]) {   // con g_mu
   g_pasos.clear();
   Paso x;
   x.tipo = kCombate;
   x.jugador = c[0];
   x.rival = c[1];
-  x.mapa = c[2];
+  if (c[2] < 0) x.escenario = -c[2] - 1;   // pasarela_b2: el alta del escenario de B2 de la casilla
+  else x.mapa = c[2];
   x.vida2 = c[4];
   // sin condicion no hay aviso: la franja repetia la cinta del titulo (revision de R6)
   if (c[5] == 1) x.texto = {"Empezáis con media vida.", "Both start with half health."};
@@ -615,6 +667,14 @@ void CombateTablero(const int c[8]) {   // con g_mu
     x.texto = {"La vida se va gastando.", "Health keeps draining."};
   }
   if (c[5] == 5) x.reglas.sin_bloqueo = true;
+  // Saibaman de colores: cada combate contra uno saca un traje al azar entre los que tenga (los 2 de serie y los del
+  // mod de colores, mod center hd/campanas/trajes_saibaman). Con un solo traje, el de siempre.
+  if (c[1] == 42) {
+    auto* rt = rex::Runtime::instance();
+    uint8_t* base = rt ? rt->virtual_membase() : nullptr;
+    const int n = base ? REX_LOAD_U8(dbz3::GA(0x8234ABB8u) + 96u * 42u + 4) : 0;
+    if (n > 1) x.reglas.traje_rival = int(std::chrono::steady_clock::now().time_since_epoch().count() % n);
+  }
   x.reglas.ataque = float(c[6]) / 100.0f;   // daga y armadura del tablero
   x.reglas.defensa = std::min(0.9f, float(c[7]) / 100.0f);
   if (c[5] == 4) {
@@ -626,7 +686,9 @@ void CombateTablero(const int c[8]) {   // con g_mu
   g_vida = c[3];
   g_paso = 0;
   g_intentos = 0;
-  Publicar(kPantalla);
+  // B2 no tiene tarjeta VS: del contacto ("!!" y pose, en pasarela_b2) va derecho al combate. La tarjeta solo si
+  // el conector esta ocupado (la tarjeta lo reintenta).
+  if (!Lanzar()) Publicar(kPantalla);
 }
 // ---- Nave de Babidi (pasarela_nave.cpp): c = {jugador, rival, mapa, vida inicial, tiempo, prueba} ----
 void VolverANave() {   // con g_mu
@@ -640,8 +702,11 @@ void CombateNave(const int c[6]) {   // con g_mu
   x.tipo = kCombate;
   x.jugador = c[0];
   x.rival = c[1];
-  x.mapa = c[2];
+  if (c[2] < 0) x.escenario = -c[2] - 1;   // alta de B2 (registro del selector), como el tablero
+  else x.mapa = c[2];
   x.tiempo = c[4];
+  if (c[5] == 0 || c[5] == 1) x.vida2 = 1000;   // B2 0x1D2620: el rival con una barra en I y II
+  x.reglas.nivel_com = 2;                         // B2: COM al nivel mas alto en las 4 pruebas
   if (c[5] == 3) x.reglas.ki_rival = 5;   // IV: el rival con ki para lanzar ondas. ponytail: valor sin leer de B2
   static const Texto kAviso[4] = {{"Prueba I: hasta caer.", "Trial I: until you fall."},
                                   {"Prueba II: una sola barra de vida.", "Trial II: a single health bar."},
@@ -650,8 +715,17 @@ void CombateNave(const int c[6]) {   // con g_mu
   x.texto = kAviso[std::clamp(c[5], 0, 3)];
   g_pasos.push_back(x);
   g_vida = c[3];
+  g_nave_prueba = c[5];
   g_paso = 0;
   g_intentos = 0;
+  // Prueba I de B2: el rival se levanta y sigue el combate, sin pantalla VS. El combate siguiente ya lo pidio el
+  // gancho sub_820FE9B0 (hub::ChainBattleEx + HoldChain): aqui solo se suelta y se pone su vigilante.
+  if (nave::Encadenado()) {
+    nave::Seguir();
+    g_nave_encadenada = true;
+    if (Lanzar()) return;
+    g_nave_encadenada = false;
+  }
   Publicar(kPantalla);
 }
 
@@ -818,11 +892,128 @@ void VigilarEntreno2() {
     }
   }).detach();
 }
+// Training No.4 (x.iw 5) y No.8 (x.iw 6), R7: cuenta por el codigo de animacion del jugador (X+2928 & 0xFFF, medido con
+// PilotoSecuencia en iw_fix 2026-10-17, E:/DBZ3HD_trabajo/R7/iw/sonda*.toml):
+// - No.4 "Regular Throw, Attack Throw y Charge Attack x3": el agarre de B3 que entra (base 0x480: 0x357 intento ->
+//   0x488 agarrado; P+G o LB). ponytail: B3 no tiene agarre de ataque (E+G solo guarda) ni ataque cargado (P+K mantenido
+//   no sale): se piden 3 agarres.
+// - No.8 "Aura Burning + 3 Pursuit Attacks seguidos x3": el modo hiper de B3 (P+K+G+E, X+8208) es el Aura Burning y su
+//   Dragon Rush (el atacante pasa por 0x400-0x43F; la victima 0x440-0x47F) son las persecuciones seguidas: 3 Dragon Rush.
+// Al cumplir, como el No.2: ring out ganado (mgr+35569) y vida del rival a 0. Vida y ki como en el No.2 (no se pierde).
+std::atomic<bool> g_iw_entreno{false};
+void VigilarEntrenoIW(int iw) {
+  g_iw_entreno = false;
+  std::thread([iw] {
+    constexpr dbz3::GA kMgrPtr = 0x823D6CF4;
+    constexpr uint32_t kX0 = 2096, kXPaso = 8240, kVida = 6080, kKi = 6100, kKiMax = 6104;
+    rex::Runtime* rt = rex::Runtime::instance();
+    uint8_t* base = rt ? rt->virtual_membase() : nullptr;
+    int cuenta = 0;
+    bool en = false, dentro = false;
+    for (int64_t fin = NowMs() + 400000; base && NowMs() < fin; std::this_thread::sleep_for(std::chrono::milliseconds(8))) {
+      const bool own = dbz3::hub::OwnBattle();
+      if (en && !own) break;
+      en = en || own;
+      const uint32_t mgr = own ? REX_LOAD_U32(kMgrPtr) : 0;
+      if (!mgr || REX_LOAD_U32(mgr + 35128) != 4) continue;
+      const uint32_t x = mgr + kX0;
+      {   // vida: no se pierde por K.O.
+        uint32_t u = REX_LOAD_U32(x + kVida + 4), v = REX_LOAD_U32(x + kVida);
+        float mx, vida;
+        std::memcpy(&mx, &u, 4);
+        std::memcpy(&vida, &v, 4);
+        if (mx > 0 && vida < mx * 0.4f) REX_STORE_U32(x + kVida, u);
+      }
+      if (iw == 6) {   // ki para el modo hiper (en IW el Aura Burning tambien pide ki)
+        uint32_t u = REX_LOAD_U32(x + kKiMax), v = REX_LOAD_U32(x + kKi);
+        float mx, ki;
+        std::memcpy(&mx, &u, 4);
+        std::memcpy(&ki, &v, 4);
+        if (mx > 0 && ki < mx * 0.5f) REX_STORE_U32(x + kKi, u);
+      }
+      const uint32_t c = REX_LOAD_U32(x + 2928) & 0xFFF;
+      const bool ahora = REX_LOAD_U16(x + 3244) == 15 &&
+                         (iw == 5 ? (c & 0xFF0) == 0x480 : (c & 0xFC0) == 0x400);
+      static int64_t t_ultimo = 0;   // un Dragon Rush pasa por varios tramos de codigos: uno cada 3 s como mucho
+      if (ahora && !dentro && (iw == 5 || NowMs() - t_ultimo > 3000)) {
+        t_ultimo = NowMs();
+        ++cuenta;
+        REXLOG_INFO("dbz3 misiones: iw: entrenamiento {}: {} {} de 3 (codigo {:03X})", iw == 5 ? 4 : 8,
+                    iw == 5 ? "agarre" : "Dragon Rush", cuenta, c);
+        if (cuenta >= 3 && !g_iw_entreno.exchange(true)) {
+          REXLOG_INFO("dbz3 misiones: iw: entrenamiento {} cumplido: el rival cae", iw == 5 ? 4 : 8);
+          REX_STORE_U8(mgr + 35569, 1);
+          REX_STORE_U32(mgr + kX0 + kXPaso + kVida, 0u);
+        }
+      }
+      dentro = ahora;
+    }
+  }).detach();
+}
 // SONDA de los entrenamientos 2-10 (DBZ3_R1_TRAZA=1): mientras dura el combate pedido, cada cambio de la accion
 // (X+3244) y del codigo de animacion (X+2928 & 0xFFF) de los dos luchadores, con el estado del combate, al registro
 // ("iw traza"): para saber que valores son guardia, esquiva, teletransporte, persecucion... y contarlos despues.
+// PRUEBA R7 (con la sonda): DBZ3_R7_SEC = "PASO,PASO,..." en bucle mientras dura la pelea; PASO = [r|a]HEX@MS: botones
+// XInput (A 1000 G, X 4000, Y 8000, B 2000, LB 100, RB 200) mantenidos MS ms, con la palanca hacia el rival (r) o
+// alejandose (a). Para medir que accion (X+3244) da cada mando de los entrenamientos.
+void PilotoSecuencia(const char* sec) {
+  struct P { int dir; int32_t bot; int ms; };
+  std::vector<P> pasos;
+  for (const char* s = sec; *s;) {
+    P p{0, 0, 100};
+    if (*s == 'r' || *s == 'a') p.dir = *s++ == 'r' ? 1 : -1;
+    char* e = nullptr;
+    p.bot = int32_t(std::strtol(s, &e, 16));
+    if (e && *e == '@') p.ms = std::atoi(e + 1);
+    pasos.push_back(p);
+    s = std::strchr(s, ',');
+    if (!s) break;
+    ++s;
+  }
+  std::thread([pasos] {
+    constexpr dbz3::GA kMgrPtr = 0x823D6CF4;
+    rex::Runtime* rt = rex::Runtime::instance();
+    uint8_t* base = rt ? rt->virtual_membase() : nullptr;
+    bool en = false;
+    size_t i = 0;
+    for (int64_t fin = NowMs() + 300000; base && !pasos.empty() && NowMs() < fin;) {
+      const bool own = dbz3::hub::OwnBattle();
+      if (en && !own) break;
+      en = en || own;
+      const uint32_t mgr = own ? REX_LOAD_U32(kMgrPtr) : 0;
+      if (!mgr || REX_LOAD_U32(mgr + 35128) != 4) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        continue;
+      }
+      const P& p = pasos[i++ % pasos.size()];
+      for (int64_t t = NowMs() + 2500; p.bot && NowMs() < t;) {   // botones solo con el jugador libre (quieto o andando)
+        const uint32_t ac = REX_LOAD_U16(mgr + 2096 + 3244);
+        if (ac == 0 || ac == 2 || ac == 3 || REX_LOAD_U32(mgr + 35128) != 4) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+      }
+      int dir = 0;
+      if (p.dir) {   // hacia el rival segun el lado en pantalla (X+4960+48 / +56), como PilotoE2
+        const uint32_t x0 = mgr + 2096;
+        uint32_t a = REX_LOAD_U32(x0 + 4960 + 48), b = REX_LOAD_U32(x0 + 4960 + 56);
+        float jx, rx;
+        std::memcpy(&jx, &a, 4);
+        std::memcpy(&rx, &b, 4);
+        dir = (rx >= jx ? 1 : -1) * p.dir;
+      }
+      if (std::getenv("DBZ3_R7_KI")) REX_STORE_U32(mgr + 2096 + 6100, REX_LOAD_U32(mgr + 2096 + 6104));   // ki lleno
+      REXLOG_INFO("dbz3 misiones: r7 sec: paso {} botones {:04X} dir {} {} ms (hiper {})", (i - 1) % pasos.size(), p.bot,
+                  dir, p.ms, REX_LOAD_U8(mgr + 2096 + 8208));
+      dbz3::iwmini::PadPrueba(dir);
+      dbz3::net::InyectarPad(0, p.bot);
+      std::this_thread::sleep_for(std::chrono::milliseconds(p.ms));
+    }
+    dbz3::iwmini::PadPrueba(0);
+    dbz3::net::InyectarPad(0, -1);
+  }).detach();
+}
 void SondaIW() {
   if (!std::getenv("DBZ3_R1_TRAZA")) return;
+  if (const char* sec = std::getenv("DBZ3_R7_SEC")) PilotoSecuencia(sec);
   std::thread([] {
     constexpr dbz3::GA kMgrPtr = 0x823D6CF4;
     constexpr uint32_t kX0 = 2096, kXPaso = 8240, kAccion = 3244, kCodigo = 2928, kEstado = 35128;
@@ -847,12 +1038,57 @@ void SondaIW() {
     }
   }).detach();
 }
+// Escena de MOTOR de IW volcada por studies 3/ENTREGAS/04_iw_escenas_motor/generar.py: forma compacta .cine (una
+// linea por token; '#' comenta). La camara por cuadro y la duracion real llenan los campos que consume cinematica.cpp
+// (Paso::cam_*, Paso::cuadros). El vinculo actor->modelo y las voces aun NO van (se marcan en el volcado).
+bool LeerCineIW(const std::filesystem::path& ruta, dbz3::cinematica::Escena& e) {
+  namespace C = dbz3::cinematica;
+  std::ifstream f(ruta);
+  if (!f) return false;
+  C::Paso p;
+  bool abierto = false;
+  std::string tipo;
+  while (f >> tipo) {
+    if (tipo[0] == '#' || tipo == "mision") { std::string resto; std::getline(f, resto); continue; }
+    if (tipo == "linea") { if (abierto) e.pasos.push_back(p); p = C::Paso{}; abierto = true; continue; }
+    if (tipo == "cuadros") { f >> p.cuadros; continue; }
+    if (tipo == "plano") { f >> p.plano; continue; }
+    if (tipo == "anim0") { f >> p.anim[0]; continue; }
+    if (tipo == "anim1") { f >> p.anim[1]; continue; }
+    if (tipo == "cam") { int n; f >> n; continue; }
+    if (tipo == "ojo" || tipo == "obj") {
+      std::array<float, 4> v{};
+      f >> v[0] >> v[1] >> v[2] >> v[3];
+      (tipo == "ojo" ? p.cam_ojo : p.cam_obj).push_back(v);
+      continue;
+    }
+    if (tipo == "fov" || tipo == "roll") {
+      std::array<float, 2> v{};
+      f >> v[0] >> v[1];
+      (tipo == "fov" ? p.cam_fov : p.cam_roll).push_back(v);
+      continue;
+    }
+    std::string resto;
+    std::getline(f, resto);   // token desconocido: se ignora
+  }
+  if (abierto) e.pasos.push_back(p);
+  return !e.pasos.empty();
+}
 // Escena de antes de una mision en el motor de B3 (cinematica.h, frente R3): los dos luchadores de la mision en su
 // escenario y, abajo, cada linea del subtitulo del video de IW (tablas del ELF: VideoIW). ponytail: en IW es un video
 // (SFD) con voz; quien habla y cuanto dura cada linea van en el video (no se leen): plano general y 3 s por linea.
 // Respaldo del video original (video_sfd.h): solo si el video no se puede reproducir (ISO, falta el archivo).
+// DBZ3_IW_ESCENA=<fichero .cine>: escena de MOTOR decodificada (generar.py) en vez del respaldo de B3.
 dbz3::cinematica::Escena EscenaHistoriaIW(const DragonMissionIW& dm, int video) {
   namespace C = dbz3::cinematica;
+  if (const char* r = std::getenv("DBZ3_IW_ESCENA")) {
+    C::Escena c;
+    if (LeerCineIW(r, c)) {
+      REXLOG_INFO("dbz3 misiones: iw: escena de motor de IW leida de {} ({} pasos)", r, c.pasos.size());
+      return c;
+    }
+    REXLOG_WARN("dbz3 misiones: iw: DBZ3_IW_ESCENA={} no se pudo leer; se usa el respaldo de B3", r);
+  }
   C::Escena e;
   C::Paso p;
   p.segundos = 2.0f;
@@ -870,6 +1106,43 @@ dbz3::cinematica::Escena EscenaHistoriaIW(const DragonMissionIW& dm, int video) 
     e.pasos.push_back(p);
   }
   return e;
+}
+// Musica de IW (R7): la pista del mapa (PantallaDM::Pista, ADX_CMN de la copia del jugador) mientras se ve el mapa; -1
+// la corta. Solo corta la suya (la musica de PS2 es una a la vez y la usan tambien el tablero y la nave de B2).
+// Volumen: el del lanzador (como pasarela_b2.cpp Dibujar).
+void MusicaIW(int pista) {
+  static int sonando = -1;
+  if (pista == sonando) return;
+  if (pista < 0) {
+    CallarMusicaPs2();
+  } else {
+    const float vol = dbz3::settings::AudioMute() ? 0.0f : float(dbz3::settings::MasterVolume()) * 0.8f;
+    REXLOG_INFO("dbz3 misiones: iw: musica ADX_CMN {} (volumen {:.2f})", pista, vol);
+    // PRUEBA: DBZ3_TEST_MUSICA=1 la decodifica aunque el juego este en silencio (registro con su duracion)
+    OirMusicaPs2(BuscarIW(), "ADX_CMN.AFS", pista, std::getenv("DBZ3_TEST_MUSICA") ? 0.001f : vol);
+  }
+  sonando = pista;
+}
+// M6 (mod opcional iw.musica_menus): las pistas de menu de IW (ADX_CMN, banco 2) con la lista verificada en
+// iw_sles55347.c: 74 (LoadWaitStartGameSelection_DataLoad, :346407), 75 (pantalla VS, :365724), 77 (opciones,
+// :356861/:357673), 80 (LoadWaitDragonMissionFunc, :456353), 81 (rueda de personajes, :362329/:362648), 82 (menu
+// principal s_MAIN_MENU_UPDATE, :348255) y 83 (aparicion de la rueda, :340244). El toml trae esas claves en
+// [pistas] (la 80 incluida); cual suena en cada pantalla del port es [H] (las pantallas del original no son las del
+// port): ficha de mision (g_iw_vista 1) -> 74; resultado (2) -> 82; rueda de respaldo de Fighter's Road (3) -> 81.
+// -1 = sin cambio (la pista del mapa): sin el mod, o si el toml no trae esa pista.
+int PistaMenuIW(int vista) {
+  if (!dbz3::opcional::Activo("iw.musica_menus")) return -1;
+  std::vector<int> pistas;   // claves de [pistas]: las pistas de menu verificadas (74, 75, 77, 80, 81, 82, 83)
+  for (const std::string& k : dbz3::opcional::Claves("iw.musica_menus", "pistas")) pistas.push_back(std::atoi(k.c_str()));
+  auto usa = [&](std::initializer_list<int> quiero) {
+    for (int q : quiero)
+      if (std::find(pistas.begin(), pistas.end(), q) != pistas.end()) return q;
+    return -1;
+  };
+  if (vista == 1) return usa({74, 82});
+  if (vista == 2) return usa({82, 83});
+  if (vista == 3) return usa({81, 83});
+  return -1;
 }
 void VolverAlMapa() {   // con g_mu
   g_pasos.clear();
@@ -996,6 +1269,23 @@ void Siguiente() {   // con g_mu
   Publicar(kPantalla);
 }
 
+// M2 (mod opcional iw.video_apertura): OPENING2.SFD de la copia de IW al entrar al modo, una vez por sesion. El
+// original lo tiene junto a las etiquetas "# VS MODE #" y "# OPENING #" (R7/mapa_recursos/musica_video.md A5) y su
+// pantalla exacta sigue sin resolver [H] (opcional.toml: "modo de arranque exacto sin confirmar"); aqui se usa la
+// entrada al Dragon Mission, que es cuando el port abre IW. La ISO puede ser carpeta o .iso (cache).
+void VideoAperturaIW() {
+  if (!dbz3::opcional::Activo("iw.video_apertura")) return;
+  static bool hecho = false;
+  if (hecho) return;
+  const std::string ruta = dbz3::opcional::Texto("iw.video_apertura", "ruta_iso", "USR/OPENING2.SFD");
+  const std::filesystem::path p = dbz3::opcional::ArchivoDeJuegoPs2("iw", ruta);
+  if (p.empty()) return;   // sin copia de IW (o sin el fichero): no se da por hecho (se reintenta al reentrar)
+  hecho = true;
+  const bool ok = dbz3::video::Reproducir(p);
+  REXLOG_INFO("dbz3 misiones: iw: video de apertura (mod iw.video_apertura): {} ({})", ruta,
+              ok ? "reproduciendo" : "no se pudo abrir");
+}
+
 void Entrar(int m) {   // con g_mu: desde el menu
   g_modo = m;
   g_intentos = 0;
@@ -1011,6 +1301,7 @@ void Entrar(int m) {   // con g_mu: desde el menu
     g_iw_vista = 0;
     g_iw_mision = -1;
     REXLOG_INFO("dbz3 misiones: iw: mapa de Dragon Mission (hechas hasta la {})", LeerProgreso("iw_hecho", 0));
+    VideoAperturaIW();   // M2 (mod opcional iw.video_apertura)
     return VolverAlMapa();
   }
   g_pasos = PasosDe(m);
@@ -1028,7 +1319,9 @@ void Entrar(int m) {   // con g_mu: desde el menu
 bool Lanzar() {   // con g_mu
   const Paso& p = g_pasos[size_t(g_paso)];
   int escenario = 0;
-  if (p.mapa < 0) {
+  if (p.escenario >= 0) {
+    escenario = p.escenario;
+  } else if (p.mapa < 0) {
     escenario = EscenarioB3(p.texto_propio);
   } else {
     escenario = EscenarioPorMapa(p.mapa);
@@ -1041,8 +1334,15 @@ bool Lanzar() {   // con g_mu
   reglas.contador = &g_hud_golpes;
   if (g_modo == kBuu && p.jugador == kSuperBu) reglas.traje_jugador = std::max(0, TrajeBu(g_forma_bu));
   g_iw_t0 = NowMs();
-  const int vida1 = (g_modo == kTablero || g_modo == kNave) && g_vida > 0 ? -g_vida : 0;   // la vida que le quedo (tablero)
-  if (!dbz3::hub::RequestBattleEx(p.jugador, p.rival, escenario, true, p.tiempo, vida1, p.vida2, forma1, p.forma2)) return false;
+  int vida1 = (g_modo == kTablero || g_modo == kNave) && g_vida > 0 ? -g_vida : 0;   // la vida que le quedo (tablero)
+  if (g_modo == kNave && g_nave_prueba == 1) vida1 = 1000;   // Prueba II de B2: el jugador tambien con una sola barra
+  g_nave_armada = false;   // combate nuevo: la cadena de la prueba I se vuelve a armar en su fin (sub_820FE9B0)
+  if (g_nave_encadenada) {   // nave: el combate ya lo encadeno el gancho (sub_820FE9B0); sale de la espera en negro
+    g_nave_encadenada = false;
+    dbz3::hub::HoldChain(false);
+  } else if (!dbz3::hub::RequestBattleEx(p.jugador, p.rival, escenario, true, p.tiempo, vida1, p.vida2, forma1, p.forma2)) {
+    return false;
+  }
   REXLOG_INFO("dbz3 misiones: {} combate: id {} (forma {}, traje {}) contra id {} (forma {}), escenario {}, tiempo {}, "
               "vida {} / {}, ki del rival {:.1f}", kClaves[g_modo], p.jugador, forma1, reglas.traje_jugador, p.rival,
               p.forma2, escenario, p.tiempo, vida1, p.vida2, reglas.ki_rival);
@@ -1074,6 +1374,7 @@ bool Lanzar() {   // con g_mu
     if (reto.iw == 2) gana = f.ganador == 1;                                // IW: dejar ganar al rival
     if (reto.iw == 3) gana = gana && g_iw_transformo.load();               // IW Training No.9: transformado
     if (reto.iw == 4) gana = g_iw_entreno2.load();                         // IW Training No.2: 5 + 5 + 5
+    if (reto.iw == 5 || reto.iw == 6) gana = g_iw_entreno.load();          // IW Training No.4 / No.8 (R7)
     if (reto.reglas.golpes > 0 || reto.reglas.sin_atacar) {
       REXLOG_INFO("dbz3 misiones: reto {}: {} golpes, ataco {}, {} s de sobra, vida {} (minimo {})",
                   gana ? "cumplido" : "fallado", f.golpes, f.ataco, f.segundos, f.vida[0], reto.vida_minima);
@@ -1143,8 +1444,13 @@ class Panel : public rex::ui::ImGuiDialog {
       if (show) in->AddUIInputBlocker(); else in->RemoveUIInputBlocker();
       blocked_ = show;
     }
+    // M6 (mod opcional iw.musica_menus): la rueda del juego (Fighter's Road) suena con la pista de rueda de IW
+    // (81, Char_WheelOpenUpdate); la pasarela esta oculta mientras se elige y el mapa no manda su pista.
+    const int rueda_iw = g_iw_eligiendo.load() ? PistaMenuIW(3) : -1;
+    if (rueda_iw >= 0) MusicaIW(rueda_iw);
+    else if (fase != kMapaIW) MusicaIW(-1);
     const float t = float(ImGui::GetTime()), dt = std::min(io.DeltaTime, 0.1f);
-    alpha_ = std::clamp(alpha_ + (show ? dt * 4.0f : -dt * 8.0f), 0.0f, 1.0f);
+    alpha_ =std::clamp(alpha_ + (show ? dt * 4.0f : -dt * 8.0f), 0.0f, 1.0f);
     if (!show) {
       wait_release_ = true;
       if (alpha_ <= 0.0f) return;
@@ -1375,9 +1681,16 @@ class Panel : public rex::ui::ImGuiDialog {
         if (const char* no = MotivoIW(m)) info_.motivo[size_t(m.numero)] = no;
         info_.mejor[size_t(m.numero)] = LeerProgreso("iw_rango_" + std::to_string(m.numero), 0);   // mejor rango + 1
       }
-      for (const MisionTablaIW& m : tabla_iw_) {   // abiertas: hasta la primera jugable sin hacer
+      // abiertas: hasta la primera sin hacer que sea jugable o que solo pida un personaje que el jugador puede crear
+      // (Pack Infinite World): esa frena el avance, como en IW, y dice a quien falta. Las que aun no estan portadas
+      // (entrenamientos de mandos) se saltan para no dejar la partida atascada. Antes se saltaba todo lo bloqueado y se
+      // abrian misiones de mas adelante (informe R6: tras la 73 salia la 76).
+      auto falta_pj = [](const MisionTablaIW& m) {
+        return m.numero > kMisionesDM ? IWaB3(m.rival) < 0 : (IWaB3(m.jugador) < 0 || IWaB3(m.rival) < 0);
+      };
+      for (const MisionTablaIW& m : tabla_iw_) {
         if ((m.numero > kMisionesDM) != g_iw_road) continue;   // Dragon Mission o Fighter's Road
-        if (m.numero > info_.hecho && info_.motivo[size_t(m.numero)].empty()) {
+        if (m.numero > info_.hecho && (info_.motivo[size_t(m.numero)].empty() || falta_pj(m))) {
           info_.abiertas = m.numero;
           break;
         }
@@ -1397,10 +1710,15 @@ class Panel : public rex::ui::ImGuiDialog {
     if (iw_en_video_ && !en_video) iw_mudo_hasta_ = NowMs() + 400;
     iw_en_video_ = en_video;
     if (en_video || NowMs() < iw_mudo_hasta_) pressed = 0;
+    const int menu_iw = g_iw_vista != 0 ? PistaMenuIW(g_iw_vista) : -1;   // M6 (mod opcional iw.musica_menus)
+    MusicaIW(dbz3::iwmini::Activo() ? PistaMinijuegoIW()
+             : en_video || pantalla_.Contando() || g_iw_esperando_video ? -1
+             : menu_iw >= 0 ? menu_iw : pantalla_.Pista(info_));
     if (!en_video && g_iw_esperando_video) {   // acabo el video de antes: su combate
       g_iw_esperando_video = false;
       SondaIW();   // (tambien tras el video de antes)
       if (g_iw_tras_video.iw == 3) VigilarFormaIW();
+      if (g_iw_tras_video.iw == 5 || g_iw_tras_video.iw == 6) VigilarEntrenoIW(g_iw_tras_video.iw);
       g_pasos = {g_iw_tras_video};
       g_paso = 0;
       g_intentos = 0;
@@ -1495,18 +1813,21 @@ class Panel : public rex::ui::ImGuiDialog {
           REXLOG_INFO("dbz3 misiones: iw: escena de la historia antes de la mision {}: video {} ({} lineas)", n, v,
                       dm->subtitulos[size_t(v)].size());
           const auto ruta = RutaVideoIW(*dm, v);
-          if (!ruta.empty() && dbz3::video::Reproducir(ruta, dm->subtitulos[size_t(v)])) {   // el original
+          // DBZ3_IW_ESCENA: escena de MOTOR decodificada (generar.py) en vez del video/respaldo, para probarla.
+          const bool forzar = std::getenv("DBZ3_IW_ESCENA") != nullptr;
+          if (!forzar && !ruta.empty() && dbz3::video::Reproducir(ruta, dm->subtitulos[size_t(v)])) {   // el original
             REXLOG_INFO("dbz3 misiones: iw: video de la historia {} ({}): reproduciendo", v, ruta.filename().string());
             g_iw_tras_video = x;
             g_iw_esperando_video = true;
             ++g_cambio;
             return;
           }
-          dbz3::cinematica::Empezar(EscenaHistoriaIW(*dm, v));   // respaldo: con los modelos de B3
+          dbz3::cinematica::Empezar(EscenaHistoriaIW(*dm, v));   // respaldo: con los modelos de B3 (o la de motor)
         }
         SondaIW();
         if (x.iw == 3) VigilarFormaIW();
         if (x.iw == 4) VigilarEntreno2();
+        if (x.iw == 5 || x.iw == 6) VigilarEntrenoIW(x.iw);
         if (!Lanzar()) Publicar(kPantalla);   // otro combate pendiente: la tarjeta lo reintenta
       }
     } else if (pantalla_.Resultado(dl, io, t, pressed, info_, g_iw_res)) {
@@ -1788,6 +2109,37 @@ const char* Por() {
               "Budokai 1 and 2 modes: the Namek saga, the board, Fat Gotenks and Buu's absorptions.");
 }
 const bool g_hub = dbz3::hub::RegisterMode("pasarela", &Abrir, &Busy) && dbz3::hub::RegisterGate("pasarela", &Lista, &Por);
+
+// ---- Nave de Babidi: prueba I encadenada (frente 08). En B2 el rival cae y se levanta y el combate sigue, sin pantalla
+// VS; aqui el combate siguiente se pide en el fin del actual. sub_820FE9B0 (b2.c: dentro del fin de combate de B3,
+// corre antes que sub_821D3628) es lo unico que corre en el hilo del juego con el combate todavia nuestro
+// (hub::OwnBattle, g_phase = 3), que es cuando hub::ChainBattleEx lo acepta. La nave arranca el encadenado en
+// CombateNave (nave::Seguir) sin volver a pedirlo.
+DBZ3_HOOK(sub_820FE9B0, dbz3eu_sub_820FEAB0) {
+  if (dbz3::hub::OwnBattle() && g_modo == kNave && g_nave_prueba == 0 && g_fase == kLuchando && !g_nave_armada) {
+    std::lock_guard<std::mutex> lk(g_mu);   // el estado de la nave tambien lo toca el hilo que dibuja
+    const uint32_t mgr = REX_LOAD_U32(dbz3::GA(0x823D6CF4));
+    const int ganador = mgr ? int32_t(REX_LOAD_U32(mgr + 35136)) : -1;   // mgr+35136 = hueco del ganador (0 = jugador)
+    float vida_f = 0;
+    if (mgr) {
+      const uint32_t u = REX_LOAD_U32(mgr + 2096 + 6080);   // vida del jugador (X0 + 6080), como modos.cpp
+      std::memcpy(&vida_f, &u, 4);
+    }
+    int out[6] = {};
+    if (ganador == 0 && mgr && nave::Siguiente(out, int(vida_f))) {
+      const int escenario = out[2] < 0 ? -out[2] - 1 : EscenarioPorMapa(out[2]);
+      const int vida1 = out[3] > 0 ? -out[3] : 0;   // solo la inicial: la barra no se recupera
+      if (dbz3::hub::ChainBattleEx(out[0], out[1], escenario, true, out[4], vida1, 1000, 0, 0)) {
+        nave::Seguido(int(vida_f));
+        dbz3::hub::HoldChain(true);   // espera en negro hasta que la nave lo suelta (CombateNave -> Lanzar)
+        g_nave_armada = true;
+        REXLOG_INFO("dbz3 misiones: nave: prueba I: encadenado id {} contra id {} (escenario {}, vida {}, rival 1000)",
+                    out[0], out[1], escenario, vida1);
+      }
+    }
+  }
+  orig(ctx, base);
+}
 
 // Prueba: formas de cada personaje (tabla de combate 0x82329CF0 + 372 * ID: +208 cuantas, +212 + 20 * f: capsula,
 // ID del modelo, indice, tipo) y escenarios (0x82323760 + 92 * i: nombre, +0x10 mapa) en el registro.

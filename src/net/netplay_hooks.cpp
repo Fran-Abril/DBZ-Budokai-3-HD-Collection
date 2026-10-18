@@ -153,7 +153,7 @@ DBZ3_HOOK(sub_8221C178, dbz3eu_sub_8221A940) {
         // pruebas la lleva en las flechas): mientras dure el minijuego no le llega al juego y se la queda la camara
         // (iwmini::PalancaDerecha). La cruceta, igual: se quita y, con la palanca izquierda suelta, pasa a ella.
         if (dbz3::iwmini::Activo()) {
-          dbz3::iwmini::PalancaDerecha(int16_t(REX_LOAD_U16(out + 12)));
+          dbz3::iwmini::PalancaDerecha(int16_t(REX_LOAD_U16(out + 12)), int16_t(REX_LOAD_U16(out + 14)));
           REX_STORE_U32(out + 12, 0);
         }
         if (const uint16_t b = REX_LOAD_U16(out + 4); (b & 0x000F) && dbz3::iwmini::Activo()) {

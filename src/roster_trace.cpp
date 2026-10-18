@@ -16,12 +16,14 @@
 
 #include <rex/hook.h>
 #include <rex/cvar.h>
+#include <rex/logging.h>
 
 #include "generated/dbz3_init.h"
 #include "roster_ext.h"
 #include "guest_region.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 
@@ -301,4 +303,33 @@ void dbz3_trace_sub_82180AA0(PPCContext& ctx, uint8_t* base) {
     }
     dbz3::TraceLine(line);
   }
+}
+
+// Traza de voces (prueba, DBZ3_TEST_VOCES=1; R7 ginyu_janemba): que ID y "situacion" pide una voz de combate
+// (sub_820F3980: r4 ID, r5 situacion -> tabla 0x823280B0) y que ADX se abre al final (sub_82081FE8: r4 =
+// fichero<<16 | entrada). Sirve para comprobar de quien es la voz que suena sin oirla.
+namespace {
+bool VocesTrace() {
+  static const bool on = std::getenv("DBZ3_TEST_VOCES") != nullptr;
+  return on;
+}
+}  // namespace
+
+REX_HOOK_RAW(sub_820F3980) {
+  if (VocesTrace()) {
+    const int32_t id = ctx.r4.s32, sit = ctx.r5.s32;
+    int32_t adx = -9;
+    if (id >= 0 && id < 122 && sit >= 0 && sit < int32_t(REX_LOAD_U32(0x82328298 + 4 * id))) {
+      if (const uint32_t blk = REX_LOAD_U32(0x823280B0 + 4 * id)) adx = int32_t(REX_LOAD_U32(blk + 4 * sit));
+    }
+    REXLOG_INFO("dbz3 voces: id {} situacion {} -> adx {} (lr {:08X})", id, sit, adx, uint32_t(ctx.lr));
+  }
+  __imp__sub_820F3980(ctx, base);
+}
+
+REX_HOOK_RAW(sub_82081FE8) {
+  if (VocesTrace())
+    REXLOG_INFO("dbz3 voces: stream fichero {} entrada {} (lr {:08X})", ctx.r4.u32 >> 16, ctx.r4.u32 & 0xFFFF,
+                uint32_t(ctx.lr));
+  __imp__sub_82081FE8(ctx, base);
 }

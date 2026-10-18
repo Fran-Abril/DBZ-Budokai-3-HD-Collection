@@ -23,6 +23,7 @@ partir del de su donante (mismas secuencias y huecos) con sus propios sonidos:
     gritos = "iw:JANENBA"    # sus grabaciones de Infinite World, repartidas por duracion
     gritos = "sb2:GHF"       # su banco de Shin Budokai, tono a hueco (sb_voces.py)
     gritos = "wav:gritos"    # los .wav de esa carpeta del mod (voces de Heroes, importar.py), por duracion
+    gritos = "sdbh:GRD"      # las voces de Heroes World Mission del jugador (CueSheet_BC<clave>), por duracion
     gritos = "donante"       # los del donante (por defecto si no hay fuente)
     gritos = "ninguno"       # sin gritos (silencio)
 """
@@ -396,6 +397,11 @@ def wav_pool(folder, rms=7000.0):
             pool.append(resample(x.astype(np.int16), w.getframerate()))
     if not pool:
         raise ValueError("sin .wav de 16 bits en %s" % folder)
+    return norm_pool(pool, rms)
+
+
+def norm_pool(pool, rms=7000.0):
+    """Baja a la vez todas las grabaciones si la mediana de su volumen pasa de `rms` (la de IW)."""
     med = float(np.median([np.sqrt(np.mean(x.astype(np.float64) ** 2)) for x in pool]))
     if med > rms:
         pool = [(x.astype(np.float64) * (rms / med)).astype(np.int16) for x in pool]

@@ -14,6 +14,7 @@
 #include "launcher/settings.h"
 #include "mods.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
@@ -23,11 +24,18 @@
 #include <vector>
 
 #include <rex/hook.h>
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
 
 #include "generated/dbz3_init.h"
 #include "eu_map.h"
+
+// Modo opcional "zonas B de B2" (frente 07): al caer por el borde se pasa a la zona B del escenario
+// (el mod de la zona B lo declara en su stage.toml con `zona_b = <entrada del escenario A>`).
+REXCVAR_DEFINE_BOOL(dbz3_escenarios_zonas_b, false, "DBZ3/Mods",
+                    "Al caer por el borde se pasa a la zona B del escenario (si su mod la trae; "
+                    "stage.toml `zona_b`; desactivado = el ring out acaba el combate como siempre)");
 
 namespace dbz3::escenarios {
 namespace {
@@ -36,6 +44,12 @@ constexpr dbz3::GA kRecs = 0x82323760, kTemas = 0x82323D80;
 constexpr uint32_t kRec = 92;
 constexpr int kAnfitrion = 16;   // R&R BASE: grupos de objetos vacios y tema generico
 
+// Ring out (medido, tagteam.cpp DBZ3_TEST_RINGOUT): el aviso mgr+35569 = hueco del ganador + 1 lo pone
+// el juego al caer alguien del ring y sub_820FD678 (cada fotograma de la pelea) lo da como fin (motivo 4).
+constexpr dbz3::GA kMgrPtr = 0x823D6CF4;
+constexpr uint32_t kAvisoRing = 35569;
+constexpr uint32_t kEstadoCombate = 35128;   // mgr+35128: 4 = pelea, 5 = fin (modos.cpp, tagteam.cpp)
+
 struct Alta {
   std::string mod, nombre, titulo;   // nombre: el del registro (<= 15); titulo: el del rotulo
   uint32_t entrada = 0, id_se = 45, menu = 0;   // menu: #AZT con la bola, la vista y el rotulo (selector)
@@ -43,15 +57,19 @@ struct Alta {
   bool niebla = false;   // R8: niebla propia (campos de IW: la del #MCF), "RRGGBBAA,inicio,fin" en stage.toml
   uint32_t niebla_color = 0;
   float niebla_ini = 0, niebla_fin = 0;
+  uint32_t zona_b = 0;   // frente 07: esta alta es la zona B del alta cuya `entrada` es este numero (0 = no)
+  bool oculta = false;   // fuera del selector del Duelo (campos de IW: solo para sus minijuegos); `selector = false`
 };
 rex::memory::Memory* g_mem = nullptr;
 std::vector<Alta> g_altas;
+uint32_t g_visibles = 0;   // altas con casilla en el selector: las primeras de g_altas (las ocultas van al final)
 int g_activa = -1;               // alta puesta en el registro anfitrion (-1 = ninguna)
 uint8_t g_orig[kRec];            // registro original del anfitrion
 uint32_t g_orig_tema = 0;
 constexpr dbz3::GA kNieblas = 0x823232A0;   // entradas de niebla de 20 B (color, 2 floats, inicio, fin): clima.cpp
 uint32_t g_niebla = 0;                       // entrada de niebla prestada mientras el alta esta puesta (0 = ninguna)
 uint8_t g_orig_niebla[20];
+uint32_t g_obj_combate = 0;                  // obj del escenario del combate (sub_820C26E0): para recargarlo
 
 std::string Limpia(std::string s) {
   const auto h = s.find('#');
@@ -122,16 +140,50 @@ int Traducir(uint8_t* base, int i) {
   return i;
 }
 
+// Frente 07: obj del escenario del combate (lo da sub_820C26E0), para poder recargar el escenario al
+// pasar de zona (como hace el juego original de B2 al caer por el borde: recarga el escenario sin tocar
+// el combate, FUN_001b95b0 en b2.c).
+void RecordarObj(uint32_t obj) { g_obj_combate = obj; }
+
+// Registro del alta que es la zona B del alta v (su stage.toml lleva `zona_b = entrada de v`), o -1.
+int ZonaBDe(int v) {
+  if (v < kSerie || v >= Total()) return -1;
+  const uint32_t entrada = g_altas[size_t(v - kSerie)].entrada;
+  for (size_t k = 0; k < g_altas.size(); ++k)
+    if (g_altas[k].zona_b == entrada) return kSerie + int(k);
+  return -1;
+}
+
+// Ring out con zona B (dbz3_escenarios_zonas_b): el alta cargada tiene zona B -> se recarga el escenario
+// del combate con el bin de la zona B (su objeto 0 es la otra zona; las camaras de su objeto 0 son las de
+// la transicion de B2). Devuelve true si ha hecho el cambio (el llamador consume el aviso de ring out).
+bool PasarZonaB(PPCContext& ctx, uint8_t* base) {
+  const int zb = ZonaBDe(g_activa);
+  if (zb < 0 || !g_obj_combate) return false;
+  const int j = Traducir(base, zb);   // pone el alta de la zona B en el anfitrion
+  REX_STORE_U16(g_obj_combate + 340, uint16_t(j));
+  PPCContext c = ctx;
+  c.r3.u64 = g_obj_combate;
+  DBZ3_CALL_EU(sub_820C26E0)(c, base);   // carga del escenario (la regenerada: sin re-entrar en el hook)
+  REX_STORE_U16(g_obj_combate + 340, uint16_t(zb));   // como el hook: el combate sigue pidiendo el alta
+  REXLOG_INFO("dbz3 escenarios: ring out (aviso {}): zona B '{}' (registro {}, entrada {}) cargada en el combate",
+              REX_LOAD_U8(REX_LOAD_U32(kMgrPtr) + kAvisoRing), g_altas[size_t(zb - kSerie)].nombre, zb,
+              g_altas[size_t(zb - kSerie)].entrada);
+  return true;
+}
+
 }  // namespace
 
 int Total() { return kSerie + int(g_altas.size()); }
+int Visibles() { return int(g_visibles); }
 
-int CampoIW(int campo) {   // altas de mod center hd/campos_iw.py: su carpeta de mod es "Campo IW <campo>"
-  const std::string mod = "Campo IW " + std::to_string(campo);
+int PorMod(const std::string& mod) {
   for (size_t i = 0; i < g_altas.size(); ++i)
     if (g_altas[i].mod == mod) return kSerie + int(i);
   return -1;
 }
+
+int CampoIW(int campo) { return PorMod("Campo IW " + std::to_string(campo)); }   // altas de mod center hd/campos_iw.py
 
 // Nombres oficiales: los rotulos del selector (data_<idioma>.afs 2043, textura 0, una fila por casilla),
 // copiados a texto. Fila de cada registro: las variantes (ISLAND B, TOWN B, NAMEC B, KAIOU B y EARTH, que
@@ -196,6 +248,8 @@ void CargarDeMods(rex::memory::Memory* memory) {
       else if (k == "id_se") a->id_se = uint32_t(std::strtoul(v.c_str(), nullptr, 10));
       else if (k == "tema") a->tema = std::atoi(v.c_str());
       else if (k == "menu") a->menu = uint32_t(std::strtoul(v.c_str(), nullptr, 10));
+      else if (k == "zona_b") a->zona_b = uint32_t(std::strtoul(v.c_str(), nullptr, 10));
+      else if (k == "selector") a->oculta = v == "false" || v == "no" || v == "0";
       else if (k == "niebla")
         a->niebla = std::sscanf(v.c_str(), "%x,%f,%f", &a->niebla_color, &a->niebla_ini, &a->niebla_fin) == 3;
     }
@@ -206,7 +260,18 @@ void CargarDeMods(rex::memory::Memory* memory) {
                          a.entrada, a.tema);
     return mal;
   });
-  if (g_altas.size() > 23) g_altas.resize(23);   // carrusel de 24 (escenarios_sel_gen.inc) con el "?"
+  if (g_altas.size() > 23) g_altas.resize(23);
+  // Campos de IW (campos_iw.py): llanuras para los minijuegos, no escenarios de Duelo. Las ocultas van al final
+  // y las visibles caben en el carrusel de 24 (escenarios_sel_gen.inc kSelMax) = 12 del juego + 11 + el "?";
+  // antes los 8 campos llenaban el carrusel y dejaban fuera las altas siguientes (Montanas nevadas de B2).
+  for (auto& a : g_altas)
+    if (a.mod.rfind("Campo IW", 0) == 0) a.oculta = true;
+  std::stable_partition(g_altas.begin(), g_altas.end(), [](const Alta& a) { return !a.oculta; });
+  g_visibles = uint32_t(std::count_if(g_altas.begin(), g_altas.end(), [](const Alta& a) { return !a.oculta; }));
+  if (g_visibles > 11) {
+    REXLOG_WARN("dbz3 escenarios: {} escenarios nuevos y el selector solo tiene sitio para 11", g_visibles);
+    g_visibles = 11;
+  }
   for (auto& a : g_altas)
     if (!a.menu) a.menu = a.entrada + 100;
   // las tablas viven en .data: escribibles para prestar el registro anfitrion
@@ -226,6 +291,7 @@ void CargarDeMods(rex::memory::Memory* memory) {
 DBZ3_HOOK_EU(sub_820C26E0) {
   const uint32_t obj = ctx.r3.u32;
   const int i = int16_t(REX_LOAD_U16(obj + 340));
+  dbz3::escenarios::RecordarObj(obj);   // frente 07: para recargar el escenario al pasar de zona
   const int j = dbz3::escenarios::Traducir(base, i);
   dbz3::clima::EscenarioPedido();
   if (j != i) REX_STORE_U16(obj + 340, uint16_t(j));
@@ -307,6 +373,7 @@ namespace {
 #endif
 
 using dbz3::escenarios::g_altas;
+using dbz3::escenarios::g_visibles;
 constexpr uint32_t kCasillasSerie = 13;   // 0..11 escenarios, 12 = "?"
 constexpr dbz3::GA kGlobalSel = 0x8245F25C;   // estructura del selector: +20 tarea (+48 = datos)
 
@@ -350,7 +417,7 @@ void Tablas(uint8_t* base) {
     REX_STORE_U8(fb0 + 2 * c + 1, REX_LOAD_U8(dbz3::GA(0x82020FB0) + 2 * src + 1));
   }
   for (uint32_t c = 0; c < 12; ++c) REX_STORE_U32(tr + 4 * c, REX_LOAD_U32(dbz3::GA(0x82373384) + 4 * c));
-  for (uint32_t k = 0; k < g_altas.size(); ++k) {
+  for (uint32_t k = 0; k < g_visibles; ++k) {
     const uint16_t r = uint16_t(dbz3::escenarios::kSerie + k);
     REX_STORE_U16(tr + 4 * (kCasillasSerie + k), r);
     REX_STORE_U16(tr + 4 * (kCasillasSerie + k) + 2, r);
@@ -358,7 +425,7 @@ void Tablas(uint8_t* base) {
   dbz3_esc_f94 = f94;
   dbz3_esc_fb0 = fb0;
   dbz3_esc_trans = tr;
-  dbz3_esc_limite = 12 + uint32_t(g_altas.size());
+  dbz3_esc_limite = 12 + g_visibles;
 }
 
 // Copia de un sprite del #ACA (hasta el siguiente de la tabla) con sus punteros internos rebasados y su
@@ -412,7 +479,7 @@ void PonerBanco(PPCContext& ctx, uint8_t* base, uint32_t banco) {
 void dbz3_esc_instalar(PPCContext& ctx, uint8_t* base, uint32_t d) {
   if (!Ext() || !d) return;
   Tablas(base);
-  const size_t na = g_altas.size();
+  const size_t na = g_visibles;
   g_azt.assign(na, 0);
   for (size_t k = 0; k < na && k < g_cargas.size(); ++k) {
     const uint32_t h = g_cargas[k];
@@ -468,7 +535,8 @@ void dbz3_esc_banco(PPCContext& ctx, uint8_t* base, uint32_t d, bool nuevo) {
 DBZ3_HOOK_EU(sub_8219C7B0) {
   if (Ext()) {
     g_cargas.clear();
-    for (const auto& a : g_altas) g_cargas.push_back(Llamar(ctx, base, DBZ3_CALL_EU(sub_82083968), a.menu, 0, 0));
+    for (uint32_t k = 0; k < g_visibles; ++k)
+      g_cargas.push_back(Llamar(ctx, base, DBZ3_CALL_EU(sub_82083968), g_altas[k].menu, 0, 0));
   }
   orig(ctx, base);
 }
@@ -513,7 +581,7 @@ DBZ3_HOOK_EU(sub_8219E268) {
   };
   for (uint32_t b = 0; b < 12; ++b)
     if (mascara >> b & 1) poner(b);
-  for (uint32_t k = 0; k < g_altas.size(); ++k) poner(kCasillasSerie + k);
+  for (uint32_t k = 0; k < g_visibles; ++k) poner(kCasillasSerie + k);
   if (mascara >> 12 & 1) poner(12);
   REX_STORE_U8(d + 609, uint8_t(n));
   REX_STORE_U32(d + 632, n ? 65536u / (n * 12) : 0);
@@ -577,3 +645,28 @@ DBZ3_SEL(8219F2A8)
 DBZ3_SEL(8219F350)
 DBZ3_SEL(8219E828)
 #undef DBZ3_SEL
+
+// ---------------------------------------------------------------------------------------------------
+// RING OUT CON ZONA B (frente 07, mod opcional dbz3_escenarios_zonas_b). En el original de B2, al caer un
+// luchador por el borde el guion del escenario llama a FUN_001b95b0 (opcode 0x80 'call_ext', indice 0x40):
+// recarga el escenario con la otra variante (la zona B) sin tocar el combate. En B3 ese aviso lo pone el
+// juego en mgr+35569 (hueco del ganador + 1) y lo consumen las funciones de fin del combate (motivo 4).
+// El gancho va en sub_82114910: comprueba mgr+35569 y los estados de combate (3/4/5/8) al entrar; con la
+// cvar activada y una zona B en el alta cargada, el aviso se consume (el combate sigue) y se recarga el
+// escenario del combate con el bin de la zona B (cuyo objeto 0 es la otra zona y cuyas camaras del objeto
+// 0 son las de la transicion de B2). Con la cvar en false (por defecto) el ring out acaba el combate como
+// siempre. [H] que sub_82114910 corra en el fotograma del ring out: lee el aviso y los estados de pelea
+// (generated/dbz3_recomp.42.cpp:8277-8318) y la llama el flujo del combate (sub_8210E700).
+// ---------------------------------------------------------------------------------------------------
+// El gancho de sub_82114910 es uno solo (iw_minijuegos.cpp, tope de distancia de B3): lo llama al entrar.
+namespace dbz3::escenarios {
+void ComprobarZonaB(PPCContext& ctx, uint8_t* base);
+}
+void dbz3::escenarios::ComprobarZonaB(PPCContext& ctx, uint8_t* base) {
+  if (REXCVAR_GET(dbz3_escenarios_zonas_b)) {
+    const uint32_t mgr = REX_LOAD_U32(dbz3::escenarios::kMgrPtr);
+    if (mgr && REX_LOAD_U32(mgr + dbz3::escenarios::kEstadoCombate) == 4 &&
+        REX_LOAD_U8(mgr + dbz3::escenarios::kAvisoRing) && dbz3::escenarios::PasarZonaB(ctx, base))
+      REX_STORE_U8(mgr + dbz3::escenarios::kAvisoRing, 0);   // el aviso se consume: el combate sigue
+  }
+}

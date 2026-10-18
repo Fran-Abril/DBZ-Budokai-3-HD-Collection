@@ -311,10 +311,15 @@ def cmd_mod(a):
 # los 6 campos de IW y los escenarios de B1/B2 probados en el juego. Nada del juego viaja en el Kit; un fallo no
 # para nada (sale 0 y lo dice en el registro: el launcher juega igual).
 # ---------------------------------------------------------------------------------------------------------
-VERSION = 9   # subir si cambia el resultado del conversor: se rehacen en el equipo del jugador
+VERSION = 12  # 12: nombres de g3/g4/g6 corregidos con PCSX2 (R7 b2_integracion). 11: B2 sin animaciones ni camaras de destruccion (R7 escenarios).   subir si cambia el resultado del conversor: se rehacen en el equipo del jugador
 B12 = (("b2", 2, "Templo de Kami", "Templo de Kami"),          # (juego, grupo, carpeta, rotulo): docs/14_frentes/
-       ("b2", 7, "Montanas nevadas", "Montañas nevadas"),       # escenarios.md (los otros grupos, sin probar o
-       ("b1", 3, "Paramo al atardecer", "Páramo al atardecer"))  # con cierres conocidos)
+       ("b2", 7, "Montanas nevadas", "Montañas nevadas"),       # escenarios.md. R7: probados en combate los B2
+       ("b2", 0, "Base Red Ribbon B2", "Base de la Red Ribbon (B2)"),   # 0, 2, 3, 4, 6, 7 y 8. Fuera: g1 (se cierra
+       ("b2", 3, "Namek B2", "Planeta Namek (B2)"),                    # al dibujar, lr 0x8208E5AC) y g5 (suelo
+       ("b2", 4, "Llanura B2", "Llanura (B2)"),                        # negro). R7: escenario de B2 0-12 -> grupo
+       ("b2", 6, "Islas B2", "Islas (B2)"),                            # (ELF 0x372AB0): 4 8 5 1 0 7 2 6 3 4 8 0 7
+       ("b2", 8, "Calle de la ciudad B2", "Calle de la ciudad (B2)"),
+       ("b1", 3, "Paramo al atardecer", "Páramo al atardecer"))
 
 
 def _sello(ruta):

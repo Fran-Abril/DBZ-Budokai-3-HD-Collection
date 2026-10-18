@@ -109,6 +109,15 @@ void CallarVozB1();
 // con lo demas). Volumen 0..1. CallarAdxPs2 corta todos los que suenan.
 void OirAdxPs2(const std::filesystem::path& juego, const std::string& afs, int entrada, float volumen);
 void CallarAdxPs2();
+// Musica (ADX estereo en bucle) de los modos de PS2: una a la vez; la nueva corta la anterior.
+void OirMusicaPs2(const std::filesystem::path& juego, const std::string& afs, int entrada, float volumen);
+void CallarMusicaPs2();
+// Efecto corto PS-ADPCM (VAG) de un banco IECS: entrada `cuerpo` del AFS = datos, `cuerpo`+1 = indice; `id` = sonido del
+// banco. Los del mismo `tipo` (0..7) se cortan entre si. periodo_ms > 0: se repite cada tanto hasta cortarlo.
+// solo_decodificar: valida y registra el recurso sin abrir salida de audio (pruebas silenciadas).
+void OirSonidoPs2(const std::filesystem::path& juego, const std::string& afs, int cuerpo, int id, int tipo, float volumen,
+                  int periodo_ms = 0, bool solo_decodificar = false);
+void CallarSonidosPs2();
 
 // Infinite World (ficha 02 C): titulo y texto de una mision (imagenes de DATA_USA.AFS de la copia del jugador).
 struct MisionIW {
@@ -175,6 +184,7 @@ std::string NombreDe(int id);
 struct Reglas {
   int nivel_com = -1;         // nivel de la IA del COM (mgr+35573: 0 Novato, 1 Experto, 2 Avanzado); -1 el de serie
   float ki_rival = 0;         // ki inicial del rival en barras de B1 (300 = 3); 0 = el de serie
+  float ki_jugador = 0;       // ki inicial del jugador del registro del original (300 = 3 barras); 0 = el de serie
   float armadura_rival = 0;   // parte del dano al rival que se anula (0.5 = la mitad): Androide 16
   bool solo_ki = false;       // el jugador solo hace dano con ki (golpes al 25 %): Mr. Satan herido
   float ki_lento = 0;         // parte del ki que gana el jugador que se pierde (0.5): Piccolo
@@ -198,6 +208,7 @@ struct Reglas {
 struct Fin {
   int ganador = -1;           // -1 = no acabo (salio desde la pausa o no empezo)
   int vida[2] = {0, 0}, vida_max[2] = {0, 0};
+  int ki[2] = {0, 0};         // ki al acabar (mismo indice que vida; la leyenda lo arrastra: 0xFFFF de B1)
   int segundos = -1;          // tiempo que sobraba; -1 sin limite
   bool empezo = false;
   int golpes = 0;             // golpes que quitaron vida al rival

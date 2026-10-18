@@ -95,6 +95,13 @@ struct Terreno {
   float x0 = 0, z0 = 0;
   int nx = 0, nz = 0;
   bool wcf = false;   // triangulos del #WCF (si no, la malla de suelo del #AMO)
+  // Mundo que da la vuelta (R7 quinta tanda): bits 1 (x) y 2 (z) de la palabra +0x10 del #MCF del campo (hijo 0), que
+  // Stage_ParseResourceBundle (EU 0x307060) copia a cdb8+0x630 y Node_WrapPositionInGrid (EU 0x305300) usa. Leido de
+  // DATA_CMN: 897/903/906/909 = 7, 900 = 0xB (envuelven x y z), 884 = 8 (no). Ventana [x0, x1) = la del juego
+  // [lo, lo + tamano] de la rejilla de piezas (Node_BuildGridFromModel); ponytail: aqui el borde del #WCF (las piezas de
+  // terreno lo cubren entero), no la rejilla de nombres de piezas.
+  uint32_t envolver = 0;
+  float x1 = 0, z1 = 0;
   std::vector<uint32_t> ini, lista;
   std::vector<Tri> tris;
   template <class F>
@@ -323,6 +330,9 @@ const Terreno* Construir(int campo) {
   }
   t->nx = int((x1 - t->x0) / kCelda) + 1;
   t->nz = int((z1 - t->z0) / kCelda) + 1;
+  t->x1 = x1, t->z1 = z1;
+  if (const auto mcf = P::HijoAmb(cmn.Entrada(size_t(campo)), 0); mcf.size() >= 0x14 && std::memcmp(mcf.data(), "#MCF", 4) == 0)
+    std::memcpy(&t->envolver, &mcf[0x10], 4), t->envolver &= 3;
   auto celdas = [&](const Tri& r, auto&& f) {
     const int i0 = int((std::min({r.a[0], r.b[0], r.c[0]}) - t->x0) / kCelda);
     const int i1 = int((std::max({r.a[0], r.b[0], r.c[0]}) - t->x0) / kCelda);
@@ -337,8 +347,9 @@ const Terreno* Construir(int campo) {
   t->lista.resize(t->ini.back());
   std::vector<uint32_t> llenas(t->ini.begin(), t->ini.end() - 1);
   for (uint32_t k = 0; k < t->tris.size(); ++k) celdas(t->tris[k], [&](size_t c) { t->lista[llenas[c]++] = k; });
-  REXLOG_INFO("dbz3 suelo_iw: campo {}: {} triangulos ({}), x {:.0f}..{:.0f}, z {:.0f}..{:.0f}, rejilla {}x{}", campo,
-              t->tris.size(), t->wcf ? "#WCF" : "malla del #AMO, sin #WCF", t->x0, x1, t->z0, z1, t->nx, t->nz);
+  REXLOG_INFO("dbz3 suelo_iw: campo {}: {} triangulos ({}), x {:.0f}..{:.0f}, z {:.0f}..{:.0f}, rejilla {}x{}, envuelve {}",
+              campo, t->tris.size(), t->wcf ? "#WCF" : "malla del #AMO, sin #WCF", t->x0, x1, t->z0, z1, t->nx, t->nz,
+              t->envolver);
   return t;
 }
 
@@ -421,7 +432,11 @@ void Prueba(uint8_t* base, uint32_t x) {
       if (++sig > marcas.size()) REXLOG_INFO("dbz3 suelo_iw: prueba: fin del camino en ({:.0f}, {:.0f})", px, pz);
       return;
     }
-    const float paso = std::min(0.1f, d);
+    static const float largo = [] {   // DBZ3_SUELO_PRUEBA_PASO: paso mas largo (R7: llegar al borde y envolver)
+      const char* v = std::getenv("DBZ3_SUELO_PRUEBA_PASO");
+      return v ? float(std::atof(v)) : 0.1f;
+    }();
+    const float paso = std::min(largo, d);
     px += dx / d * paso, pz += dz / d * paso;
   }
   for (const uint32_t o : kCopias) StoreF(base, x + o, px), StoreF(base, x + o + 8, pz);
@@ -546,14 +561,15 @@ void Paredes(uint8_t* base) {
     Bueno& b = g_bueno[k];
     const float px = LoadF(base, x + 64), py = LoadF(base, x + 68), pz = LoadF(base, x + 72);
     const float alto = Alto(base, x);
-    if (REX_LOAD_U8(x + kOculto) || !b.vale || !activas || std::hypot(px - b.x, pz - b.z) > kSalto) {
-      b = {true, px, py, pz, alto};   // pivote de P4, puesto a mano (salida, relevo) o sin paredes
+    if (REX_LOAD_U8(x + kOculto)) {   // pivote de P4
+      b = {true, px, py, pz, alto};
       continue;
     }
     float nx = px, ny = py, nz = pz;
+    const bool barre = b.vale && activas && std::hypot(px - b.x, pz - b.z) <= kSalto;   // si no: puesto a mano o sin paredes
     const float r = kRadioPared, centro[3] = {b.x, b.y + kBajoEsfera + r, b.z};
-    Barrer(t, centro, px - b.x, pz - b.z, r, nx, nz);
-    if (std::fabs(nx - px) > 1e-3f || std::fabs(nz - pz) > 1e-3f) {
+    if (barre) Barrer(t, centro, px - b.x, pz - b.z, r, nx, nz);
+    if (barre && (std::fabs(nx - px) > 1e-3f || std::fabs(nz - pz) > 1e-3f)) {
       ny = b.y;
       t->Suelo(nx, nz, b.y + b.alto, ny);
       for (const uint32_t o : kCopias)
@@ -562,6 +578,25 @@ void Paredes(uint8_t* base) {
       if (avisos < 40 && ++avisos)
         REXLOG_INFO("dbz3 suelo_iw: pared: luchador {} (H {:.1f}) de ({:.0f}, {:.0f}) a ({:.0f}, {:.0f}) queda en ({:.0f}, {:.0f})",
                     k, b.alto, b.x, b.z, px, pz, nx, nz);
+    }
+    // Node_WrapPositionInGrid: fuera de [lo, hi) se suma o resta un periodo (un salto, no un tope). Como va sobre el
+    // sitio del luchador tras la logica, cubre el andar, el scatto y el desplazamiento de la raiz de las poses
+    // (Char_ApplyPoseRootMotion tambien envuelve). ponytail: sin las copias vecinas del campo en pantalla (IW pinta la
+    // rejilla envuelta, Node_RenderVisibleGrid): se ve el borde del terreno antes del salto.
+    bool envuelto = false;
+    auto envuelve = [&](float& v, float lo, float hi) {
+      const float p = hi - lo;
+      if (p < 100.0f) return;
+      if (v < lo) v += p, envuelto = true;
+      else if (v >= hi) v -= p, envuelto = true;
+    };
+    if (t->envolver & 1) envuelve(nx, t->x0, t->x1);
+    if (t->envolver & 2) envuelve(nz, t->z0, t->z1);
+    if (envuelto) {
+      t->Suelo(nx, nz, ny + alto, ny);
+      for (const uint32_t o : kCopias)
+        StoreF(base, x + o, nx), StoreF(base, x + o + 4, ny), StoreF(base, x + o + 8, nz);
+      REXLOG_INFO("dbz3 suelo_iw: envoltura: luchador {} pasa al otro lado, ({:.0f}, {:.0f})", k, nx, nz);
     }
     b = {true, nx, ny, nz, alto};
   }

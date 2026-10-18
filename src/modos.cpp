@@ -83,6 +83,7 @@ namespace dbz3::modos {
 
 // Texto en el idioma del juego (es, en, fr, de, it; el resto en ingles).
 const char* L(const char* es, const char* en, const char* fr, const char* de, const char* it) {
+  if (const char* o = dbz3::i18n::Otro(en)) return o;   // pt / ja
   const char* c = dbz3::i18n::LangCode();
   return !std::strcmp(c, "es") ? es : !std::strcmp(c, "fr") ? fr : !std::strcmp(c, "de") ? de
                                       : !std::strcmp(c, "it") ? it : en;

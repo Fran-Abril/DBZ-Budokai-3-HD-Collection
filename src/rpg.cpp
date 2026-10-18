@@ -48,7 +48,7 @@ namespace S = dbz3::ingame::style;
 using M::L;
 
 constexpr uint16_t kUp = 0x0001, kDown = 0x0002, kLeft = 0x0004, kRight = 0x0008, kLb = 0x0100, kRb = 0x0200,
-                   kA = 0x1000, kB = 0x2000;
+                   kA = 0x1000, kB = 0x2000, kX = 0x4000, kY = 0x8000;   // X/Y: moveset del heroe (frente 10)
 
 uint32_t Hash(uint32_t a, uint32_t b) {   // mezcla entera (semilla, paso): lo mismo da lo mismo
   uint32_t h = a * 0x9E3779B1u ^ (b * 0x85EBCA6Bu + 0x7F4A7C15u);
@@ -97,6 +97,7 @@ void Escribir(std::ostream& o);
 int Cuerpo();
 int Traje();
 int EstiloId();
+int MovesetId();   // frente 10: donante del moveset (-1: el del estilo)
 int Saga();
 int Nivel();
 int NivelAntes();   // antes de la ultima saga
@@ -1419,9 +1420,9 @@ void DibujarM100(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
 
 // Modo Heroe (beta): creacion del heroe (heroe.cpp). Arriba/abajo la fila, izquierda/derecha la cambia, LB/RB cambian
 // el estilo (carrusel de abajo) desde cualquier fila, A en "Empezar" lanza la mision con ese cuerpo, traje y estilo
-// (bonus y tecnicas si es maestro); B vuelve al selector.
+// (bonus y tecnicas si es maestro); B vuelve al selector. Frente 10: la fila Moveset elige el donante de los golpes.
 void DibujarHeroe(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
-  constexpr int kFilas = 5;   // raza, cuerpo, apariencia, estilo, empezar
+  constexpr int kFilas = 6;   // raza, cuerpo, apariencia, estilo, moveset, empezar
   g_cursor = std::clamp(g_cursor, 0, kFilas - 1);
   if (p & (kUp | kDown | kLeft | kRight | kLb | kRb)) g_aviso.clear();
   if (p & kUp) g_cursor = (g_cursor + kFilas - 1) % kFilas;
@@ -1448,13 +1449,13 @@ void DibujarHeroe(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
                      "Erschaffe deinen Helden (Beta)", "Crea il tuo eroe (beta)"));
   std::vector<std::string> filas;
   for (int f = 0; f < kFilas; ++f) filas.push_back(H::Fila(f));
-  constexpr float paso = 44;   // mas apretada que la de siempre (52): debajo cabe el carrusel de estilos
+  constexpr float paso = 40;   // 6 filas: mas apretada que la de siempre (52) para que debajo quepa el carrusel
   const float y_lista = Lista(dl, a, D::kTop, filas, g_cursor, t, {}, D::kRow, D::kX0, D::kX1, paso);
-  if (g_cursor < kFilas - 1 && g_cursor != 3) {   // flechas del juego en la fila que se cambia (el estilo, en su carrusel)
+  if (g_cursor < kFilas - 1 && g_cursor != 3) {   // flechas de la fila que se cambia (el estilo, en su carrusel)
     const float y = D::kTop + D::kPad + paso * (float(g_cursor) + 0.5f);
     S::Arrows(dl, a.At(D::kX0 - 10, y - paso * 0.5f), a.At(D::kX1 + 10, y + paso * 0.5f), 36 * a.s, t);
   }
-  CarruselEstilos(dl, a, y_lista + 40, std::min(y_lista + 40 + 124, D::kBottom), t, g_cursor == 3);
+  CarruselEstilos(dl, a, y_lista + 22, std::min(y_lista + 22 + 124, D::kBottom), t, g_cursor == 3);
   // esquina de arriba a la derecha: el cuerpo elegido y el luchador de su estilo (cara del marcador), dentro de kLine
   const int cuerpo = H::Cuerpo(), estilo = H::EstiloId();
   constexpr float c0 = D::kCornerY0, c1 = D::kTop - 24, cy = (c0 + c1) * 0.5f, ch = c1 - c0 - 2 * D::kLine - 4;
@@ -1475,17 +1476,23 @@ void DibujarHeroe(ImDrawList* dl, const S::Area& a, float t, uint16_t p) {
         {"Apariencia: el traje de ese cuerpo.", "Look: the costume of that body.", "Apparence : le costume de ce corps.",
          "Aussehen: das Kostüm dieses Körpers.", "Aspetto: il costume di quel corpo."},
         {},   // estilo: su texto va aparte (T::T)
+        {},   // moveset: su texto va aparte (T::T)
         {"Empieza la misión: 3 combates. Cada victoria da experiencia y sube el nivel.",
          "Start the mission: 3 fights. Each win gives experience and raises the level.",
          "Commence la mission : 3 combats. Chaque victoire donne de l'expérience et fait monter le niveau.",
          "Starte die Mission: 3 Kämpfe. Jeder Sieg gibt Erfahrung und erhöht das Level.",
          "Inizia la missione: 3 scontri. Ogni vittoria dà esperienza e fa salire il livello."}};
     const auto& h = kAyuda[std::clamp(g_cursor, 0, kFilas - 1)];
-    b += std::string(1, '\n') + (g_cursor == 3 ? T::T("Estilo: cómo peleas (los golpes de otro luchador). La estrella marca a "
-                                                    "un maestro, que da bonus.",
-                                                    "Style: how you fight (another fighter's moves). The star marks a "
-                                                    "master, who gives a bonus.")
-                                                : L(h[0], h[1], h[2], h[3], h[4]));
+    b += std::string(1, '\n') +
+         (g_cursor == 3 ? T::T("Estilo: cómo peleas (los golpes de otro luchador). La estrella marca a "
+                               "un maestro, que da bonus.",
+                               "Style: how you fight (another fighter's moves). The star marks a "
+                               "master, who gives a bonus.")
+          : g_cursor == 4 ? T::T("Moveset: de quién son los golpes (sus animaciones, combos y cámara). El estilo pone "
+                                 "la vida, el daño y las transformaciones.",
+                                 "Moveset: whose moves you use (their animations, combos and camera). The style "
+                                 "keeps health, damage and transformations.")
+                          : L(h[0], h[1], h[2], h[3], h[4]));
   }
   Bocadillo(dl, a, b);
   S::HelpLine(dl, a.At(600, 868), 38 * a.s,
@@ -1786,7 +1793,13 @@ void DibujarEntre(ImDrawList* dl, const S::Area& a, float t, uint16_t p, const M
         REXLOG_INFO("dbz3 rpg: heroe: estilo {} para el combate {}", r.jugador, r.ganados + 1);
         p &= uint16_t(~(kLb | kRb));
       }
-      l.push_back(H::LineaNivel(r.ganados));
+      if (!cargando && (p & (kX | kY))) {   // frente 10: otro moveset donante (X/Y) para el combate siguiente
+        H::Mover(4, (p & kY) ? +1 : -1);
+        Guardar();
+        REXLOG_INFO("dbz3 rpg: heroe: moveset {} para el combate {}", H::MovesetId(), r.ganados + 1);
+        p &= uint16_t(~(kX | kY));
+      }
+      l.push_back(H::LineaNivel(r.ganados) + "  -  " + H::Fila(4));
     }
     const float y_lineas = Lineas(dl, a, D::kTop, l);
     if (r.modo == M::kHeroe) {
@@ -1823,9 +1836,11 @@ void DibujarEntre(ImDrawList* dl, const S::Area& a, float t, uint16_t p, const M
               : r.modo == M::kHeroe                ? L("¡A luchar!", "Fight!", "Au combat !", "Kämpfen!", "Combatti!")
                                                    : L("Siguiente", "Next", "Suivant", "Weiter", "Avanti")},
         {"B", L("Guardar y salir", "Save and exit", "Sauver et quitter", "Speichern und raus", "Salva ed esci")}};
-    if (r.modo == M::kHeroe) {   // LB/RB cambian el estilo del carrusel
+    if (r.modo == M::kHeroe) {   // LB/RB cambian el estilo del carrusel; X/Y, el moveset donante (frente 10)
       ayuda.push_back({"LB", T::T("Estilo -", "Style -")});
       ayuda.push_back({"RB", T::T("Estilo +", "Style +")});
+      ayuda.push_back({"X", T::T("Moveset -", "Moveset -")});
+      ayuda.push_back({"Y", T::T("Moveset +", "Moveset +")});
     }
     D::Help(dl, a, ayuda);
   }

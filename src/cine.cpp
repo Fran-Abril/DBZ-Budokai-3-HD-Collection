@@ -240,11 +240,13 @@ void Plano(uint32_t f, V3 p1, V3 p2, float s1, float s2, V3 ojo_juego, V3 obj_ju
 
 }  // namespace
 
-void Camara(uint8_t* base, const float ojo[3], const float obj[3]) {
+void Camara(uint8_t* base, const float ojo[3], const float obj[3], float giro) {
   const uint32_t mgr = REX_LOAD_U32(dbz3::GA(0x823D6CF4));
   if (!mgr) return;
   const V3 e{ojo[0], ojo[1], ojo[2]}, o{obj[0], obj[1], obj[2]};
-  const V3 f = Unit(o - e), d = Unit(Cruz(f, {0, 1, 0})), u = Cruz(d, f), a = f * -1.0f;
+  const V3 f = Unit(o - e), d0 = Unit(Cruz(f, {0, 1, 0})), u0 = Cruz(d0, f), a = f * -1.0f;
+  const float cg = std::cos(giro), sg = std::sin(giro);
+  const V3 d = d0 * cg - u0 * sg, u = u0 * cg + d0 * sg;   // giro de derecha/arriba alrededor de f
   PonV(base, mgr + 0x190, e, 1.0f);
   PonV(base, mgr + 0x1A0, o, 1.0f);
   const float m[16] = {d.x, u.x, a.x, 0, d.y, u.y, a.y, 0, d.z, u.z, a.z, 0, -Punto(d, e), -Punto(u, e), -Punto(a, e), 1};

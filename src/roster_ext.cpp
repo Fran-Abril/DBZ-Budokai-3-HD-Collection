@@ -41,6 +41,8 @@
 //   modelos_por_traje = 1   # opcional
 //   anm = [3993]            # moveset por forma        cam = 3994
 //   idioma = [37, 84]       # lang_usa (+0x24, +0x28)   tecnicas = 3995   aura = 33
+//   aura_formas = [0, 3, 4, 0]  # opcional: tipo de aura de cada forma (char96 formas[f] +4, 0..5);
+//                           # sin la clave, la del donante. Lo lee el juego en combate (sub_82136588)
 //   hud = [10, 113]         # select = [14 valores: x, y, z, escala, rx, ry, rz (P1) y P2]
 //   casilla = 10            # (pruebas) reasigna esta casilla EXISTENTE al ID
 //   nombre = "JANEMBA"      # nombre interno (IDs sin registro de nombre, 44-63)
@@ -84,6 +86,8 @@
 
 #include "generated/dbz3_init.h"
 #include "guest_region.h"
+
+REXCVAR_DECLARE(std::string, dbz3_iso_path);
 
 #include <algorithm>
 #include <array>
@@ -328,14 +332,17 @@ void AppendCostume(Guest& g, uint32_t id, uint32_t costume, uint32_t model_idx, 
   const uint32_t old_list = g.U32(c96 + 8), old_lips = g.U32(c96 + 12);
   if (!ncos || !old_list) return;
   const uint32_t want = std::max(ncos, costume + 1);
+  // R7 slots: la lista nueva conserva el relleno de ApplyCharacter (kPadCostumes = 8 trajes, repitiendo el 1.o):
+  // una casilla nueva lee el traje guardado de su anfitrion, que puede pasar de los reales (fallo de la 1.4.1).
+  const uint32_t cap = std::max<uint32_t>(want, 8);
   uint32_t list = old_list, lips = old_lips;
   if (want > ncos) {
-    list = g.Alloc(want * per * 12);
-    lips = g.Alloc(want * lpc * 8);
+    list = g.Alloc(cap * per * 12);
+    lips = g.Alloc(cap * lpc * 8);
     if (!list || !lips) return;
     g.Copy(list, old_list, ncos * per * 12);
     if (old_lips) g.Copy(lips, old_lips, ncos * lpc * 8);
-    for (uint32_t c = ncos; c < want; ++c) {
+    for (uint32_t c = ncos; c < cap; ++c) {
       for (uint32_t k = 0; k < per; ++k) {   // traje 1 del personaje, sin cache
         g.Copy(list + 12 * (c * per + k), old_list + 12 * k, 8);
       }
@@ -389,6 +396,12 @@ void ApplyExtraCostume(Guest& g, const toml::table& t, const std::string& mod, u
                 costume + 1, id, f, fid_id, mi, fid);
   }
   g_extra_costumes[id].fetch_add(1);
+  // aplicar_estudios (entrega 15): AddExtraCostumes solo cuenta id < 44 (tabla nativa por casilla); la rueda de una
+  // casilla nueva (44-63) usa CostumeCountOf, que fijaba ApplyCharacter sin este traje: se le suma aqui.
+  if (id >= 44 && id < 64 && g_costume_count[id].load() > 0) {
+    g_costume_count[id].store(int(g.U8(c96 + 4)));
+    REXLOG_INFO("dbz3 roster [{}]: casilla nueva id {}: la rueda cuenta {} trajes", mod, id, g.U8(c96 + 4));
+  }
 }
 
 void ApplyCharacter(Guest& g, const toml::table& t, const std::string& mod) {
@@ -454,13 +467,25 @@ void ApplyCharacter(Guest& g, const toml::table& t, const std::string& mod) {
   if (lang.size() >= 2) g.W32(c372 + 0x28, uint32_t(lang[1]));
 
   // 2) tablas por ID (donante salvo que se declare)
+  // Un -1 del donante significa "sin recurso" (IDs recortados: Guldo, Zarbon...), no un fid:
+  // no se copia (antes se copiaba 0xFFFFFFFF y podia pisar el valor de otro mod del mismo ID).
   auto per_id32 = [&](uint32_t table, const char* key) {
     int64_t v = Int(t[key], -1);
-    if (v < 0 && donor >= 0) v = int64_t(g.U32(table + uint32_t(donor) * 4));
+    if (v < 0 && donor >= 0) {
+      const uint32_t dv = g.U32(table + uint32_t(donor) * 4);
+      if (dv == 0xFFFFFFFFu) {
+        REXLOG_WARN("dbz3 roster [{}]: id {}: {} del donante ({}) vacio: sin recurso", mod, id, key, donor);
+      } else {
+        v = int64_t(dv);
+      }
+    }
     if (v >= 0) g.W32(table + uint32_t(id) * 4, uint32_t(v));
   };
   per_id32(kAura, "aura");
   per_id32(kBsp, "tecnicas");
+  // Diagnostico (v1.5.x): fid de aura y de tecnicas con el que queda el ID (RUNBOOK 11/12).
+  REXLOG_INFO("dbz3 roster [{}]: id {}: aura fid {} tecnicas fid {}", mod, id,
+              g.U32(kAura + uint32_t(id) * 4), g.U32(kBsp + uint32_t(id) * 4));
   // voces de combate: propias, las de otro ID o las del donante (sin esto, mudo)
   {
     const auto own = Ints(t["voces"]);
@@ -640,6 +665,16 @@ void ApplyCharacter(Guest& g, const toml::table& t, const std::string& mod) {
       const uint32_t e = c96 + 16 + 8 * f + 2;
       const uint32_t m = f < mf.size() ? uint32_t(std::max<int64_t>(0, mf[f])) : g.U8(e);
       if (m != 0xFF) g.W8(e, uint8_t(std::min(m, per - 1)));
+    }
+    // aura de cada forma: char96 formas[f] +4/+5 (s16 que lee sub_82136588 en combate y
+    // sub_82136C58 en la vista previa: 0 = sin aura de forma, 3 = aura de transformacion,
+    // 4 = la de SSJ2 con rayos). Sin la clave queda la del donante (copiada arriba).
+    // Encargo 11: [H] pendiente de medir en el juego (RUNBOOK, tests 11-1/11-2).
+    const auto af = Ints(t["aura_formas"]);
+    for (uint32_t f = 0; f < af.size() && f < 8; ++f) {
+      const int64_t v = std::clamp<int64_t>(af[f], 0, 5);
+      g.W16(c96 + 16 + 8 * f + 4, uint16_t(v));
+      REXLOG_INFO("dbz3 roster [{}]: id {}: forma {} aura tipo {}", mod, id, f, v);
     }
   }
 
@@ -1027,7 +1062,13 @@ void ApplyAtLaunch(rex::memory::Memory* memory) {
   REXLOG_INFO("dbz3 roster: imagen {}", eu ? "EU/PAL" : "US/NA");
   InitializeForms();
   std::error_code ec;
+  // ISO sin la copia iso_datos (fallo de copia / poco espacio): los overrides de data_usi/data_cmn no se sirven, y
+  // las casillas nuevas saldrian en blanco y el juego caeria al pisarlas. El launcher ya avisa de "sin mods".
+  const std::string iso = REXCVAR_GET(dbz3_iso_path);
+  const bool sin_overrides = !iso.empty() && std::filesystem::is_regular_file(iso, ec) && !dbz3::settings::IsoDataCacheValid();
+  if (sin_overrides) REXLOG_WARN("dbz3 roster: ISO sin copia de datos para mods: no se anaden casillas nuevas");
   for (const auto& info : ListMods(false)) {
+    if (sin_overrides) break;
     if (!info.enabled) continue;
     const auto file = ModsRoot() / info.name / "roster.toml";
     if (!std::filesystem::is_regular_file(file, ec)) continue;

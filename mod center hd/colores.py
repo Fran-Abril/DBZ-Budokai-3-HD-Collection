@@ -141,6 +141,40 @@ def azt_retint(b, z, hue):
     return k
 
 
+def retint_modelo(hd_bin, giro):
+    """Modelo HD (#AMB con #AZT de DXT3) con el tono GIRADO `giro` grados (no fijado: el verde del Saibaman pasa a rojo y
+    sus ojos rojos a azul, como un recolor). Lo gris (saturacion < 0,15) no cambia. -> (bin, texturas cambiadas)."""
+    from PIL import Image  # noqa: PLC0415
+    from texture_b3 import encode_dxt3  # noqa: PLC0415
+    b = bytearray(hd_bin)
+    k = 0
+    for magic, z, _ in list(blocks(b)):
+        if magic != b"#AZT":
+            continue
+        n, idx = struct.unpack_from(">II", b, z + 0x10)
+        for t in range(n):
+            o = struct.unpack_from(">I", b, z + idx + 4 * t)[0]
+            if not o:
+                continue
+            do, dl = struct.unpack_from(">II", b, z + o + 0x14)
+            dds = b[z + do:z + do + dl]
+            if dds[84:88] != b"DXT3" or struct.unpack_from("<I", dds, 28)[0] > 1:
+                continue
+            img = np.array(Image.open(io.BytesIO(bytes(dds))).convert("RGBA")).astype(np.float32) / 255.0
+            rgb = img[..., :3]
+            mx, mn = rgb.max(-1), rgb.min(-1)
+            sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1e-6), 0)
+            hsv = np.array(Image.fromarray((rgb * 255).astype(np.uint8)).convert("HSV")).astype(np.int32)
+            hsv[..., 0] = np.where(sat >= 0.15, (hsv[..., 0] + int(round(giro / 360.0 * 256))) % 256, hsv[..., 0])
+            nuevo = np.array(Image.fromarray(hsv.astype(np.uint8), "HSV").convert("RGB"))
+            out = np.concatenate([nuevo, (img[..., 3:] * 255).astype(np.uint8)], -1)
+            data = bytes(dds[:128]) + encode_dxt3(out)
+            if len(data) <= len(dds):
+                b[z + do:z + do + len(data)] = data
+                k += 1
+    return bytes(b), k
+
+
 # ---------------------------------------------------------------- colores sueltos
 def ctr_retint(b, c, hue):
     """#CTR del aura: n registros de 0x60 desde +0x10, colores RGB en +0x10 y +0x50 del registro."""

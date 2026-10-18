@@ -36,6 +36,30 @@ clave = "c:super baby vegeta 2"
 donante = 7
 preset = "original"
 
+# R6 (1.5.1): los tres personajes de Infinite World que faltaban para cubrir sus misiones (Super 17: misiones 74 y 75;
+# Pikkon: 87; Gran Saiyaman 2: 92; y sus combates del Fighter's Road). Por pulir, como los demas: modelo y golpes de IW
+# sobre el donante mas parecido de B3.
+[imp_iw_super17]
+nombre = "Super 17"
+fuente = "iw"
+clave = "c:super 17"
+donante = 29
+preset = "original"
+
+[imp_iw_pikkon]
+nombre = "Pikkon"
+fuente = "iw"
+clave = "c:pikkon"
+donante = 11
+preset = "original"
+
+[imp_iw_gran_saiyaman2]
+nombre = "Gran Saiyaman 2"
+fuente = "iw"
+clave = "c:great saiyaman 2"
+donante = 5
+preset = "original"
+
 # El mod publicado usa el modelo y las bocas del port de la comunidad (modelos/janemba.bin); la
 # receta da el modelo de Infinite World con los golpes de ese port.
 [cut_janemba]

@@ -94,6 +94,10 @@ class ModPipeline {
     std::vector<std::string> options;  // --opcion clave=valor
   };
   void ImportCharacter(const ImportRequest& r);
+  // Pack de Infinite World (Nova's Mods): crea con importar.py "oficial" las recetas de `install` (con la copia de
+  // IW del jugador: no se reparte nada del juego) y aparta a mods_respaldo/ las de `remove` (activas o desactivadas;
+  // nunca se borra). Con un trabajo en curso no hace nada.
+  void RunOfficialPorts(const std::vector<std::string>& install, const std::vector<std::string>& remove);
   // Tag Team: equipo de 2-4 personajes de B3 (roster_build.py equipo -> mods/equipo_*).
   void CreateTeam(const std::vector<int>& members, const std::string& name);
   void ClearOutput();

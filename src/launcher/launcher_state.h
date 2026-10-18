@@ -150,6 +150,17 @@ class LauncherDialog : public rex::ui::ImGuiDialog {
   void StartIsoPrep(bool then_play);
   void DrawPs2Box();
   std::string ps2_msg_;   // resultado de la ultima ISO de PS2 elegida
+  // Pack de Infinite World (Nova's Mods): estado de cada receta de IW (importar.py oficiales) y casillas (true = la quiero)
+  struct PackFila {
+    std::string id, nombre;
+    bool listo = false, instalado = false;
+  };
+  void DrawPackIW();
+  std::vector<PackFila> pack_filas_;
+  std::map<std::string, bool> pack_quiero_;
+  bool pack_consulta_ = false;
+  int pack_gen_ = -1;
+  std::string pack_msg_;
   int novas_tipo_ = 0;    // Nova's Mods: 0 todos, 1 personajes, 2 historias, 3 texturas
   void DrawIsoPrepBox();
   std::shared_ptr<IsoPrep> iso_prep_;

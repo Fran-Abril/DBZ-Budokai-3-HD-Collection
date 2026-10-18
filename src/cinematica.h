@@ -6,6 +6,7 @@
 // Para la Leyenda de Mr. Satan (pasarela.cpp) y despues IW y B2. Ver docs/16_pasarela_modos/01_leyenda_mr_satan.md.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -26,6 +27,13 @@ struct Paso {
   pasarela::Imagen texto;         // subtitulo: imagen del juego de origen (charla 669 de B1...)
   std::string linea;              // o texto propio (si no hay imagen)
   std::vector<int> voces;         // entradas de ADX_JP.AFS de B1 (pasarela::OirVozB1) que suenan con el paso
+  // Escena de MOTOR de IW (tablas del ELF de la copia del jugador, volcadas con
+  // studies 3/ENTREGAS/04_iw_escenas_motor/generar.py): duracion real de la linea en cuadros de 60 Hz
+  // (tabla de clips del banco; 0 = usar segundos) y camara del clip de la linea, por cuadro.
+  // {cuadro, x, y, z} para ojo/objetivo; {cuadro, radianes} para fov/roll. Vacio = camara de plano.
+  int cuadros = 0;
+  std::vector<std::array<float, 4>> cam_ojo, cam_obj;
+  std::vector<std::array<float, 2>> cam_fov, cam_roll;
 };
 // Y+B mantenidos (XInput, mando virtual del lado; como la pose del relevo del Tag Team, acciones 20/21). ponytail:
 // medido 2026-10-16 al empezar la pelea: da la accion 15 unos 40 cuadros y vuelve a 0, sin carga visible. Sin usar.

@@ -39,7 +39,8 @@ struct ModInfo {
   // Human-readable file count inside the mod (0 when empty).
   int file_count = 0;
   // Problems a non-technical user can fix (the launcher words them): kind + detail.
-  enum Problem { kEmpty = 1, kNested, kMissingFile, kBadTextureName, kBadTextureSize, kBadToml };
+  // kRoster: aviso del ultimo montaje de personajes/trajes (mods/roster_avisos.txt), texto ya redactado.
+  enum Problem { kEmpty = 1, kNested, kMissingFile, kBadTextureName, kBadTextureSize, kBadToml, kRoster };
   std::vector<std::pair<int, std::string>> problems;
 };
 

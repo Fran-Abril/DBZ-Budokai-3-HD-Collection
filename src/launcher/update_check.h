@@ -54,6 +54,10 @@ std::string LatestReleaseUrl();
 // headers, each ending in CRLF. Returns the body of a 200 response, or "".
 std::string HttpGet(const wchar_t* host, const wchar_t* path, const wchar_t* headers = nullptr);
 
+// Motivo del ultimo fallo de red ("auto: error 12007, sistema: error 12029, curl: ...") o "" si la ultima
+// peticion salio bien. Para el aviso del launcher y para que el jugador lo copie al pedir ayuda.
+std::string LastNetworkError();
+
 // HTTPS download straight to a file (streamed: zips of several GB never sit in RAM).
 // Redirects are followed by hand and `headers` are only sent to the first host (GitHub's
 // signed asset links reject the API token). `append` adds to the end of `out` (split zips).

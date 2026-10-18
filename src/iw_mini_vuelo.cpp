@@ -131,6 +131,12 @@ struct Juego {
   // estado (hilo del juego)
   float x = 0, z = 0, vel = 0, medidor = 0, congelado = 0, t568 = 0, t56c = 0, t_ms = 0;
   int yaw = 0, estado = 0, restantes = 0, monedas = 0, puntos = 0, cuadros = 0;
+  int cam_yaw = -1;   // R7: rumbo de la camara, sigue a yaw a 1/16 por cuadro (Viewer_UpdateOrbitCamera L427262)
+  // aplicar_estudios (entrega 16 P2): +0x604 cabeceo (palanca derecha Y) y +0x608 balanceo (palanca X) del visor de vuelo
+  int cabeceo = -0x800, balanceo = 0;
+  float cam_x = 0, cam_y = 0;   // ejes de Pad_GetStickAxes de este cuadro (0 fuera del mando)
+  float zoom = 0, zoom_meta = 0;   // R7: +0x610 / +0x614 del visor de vuelo (distancia extra y su meta)
+  int est_cam = 0;
   int virada = 0, media = 0;   // cuadros que quedan de la virada (0x321, 22) y de la media vuelta (0x32D, 44)
   size_t siguiente = 0;   // v0: punto de control visible
   bool abierta = false, colocado = false, fin = false, superado = false;
@@ -273,6 +279,7 @@ void Reiniciar(Juego& j) {
   j.vel = j.t568 = j.t56c = j.congelado = j.t_ms = 0;
   j.medidor = j.medidor0;
   j.monedas = j.puntos = j.cuadros = 0;
+  j.cabeceo = -0x800, j.balanceo = 0;   // CameraFocusWhileFlying(52.2, -0x800): +0x604 = pitch, +0x608 = 0
   j.restantes = j.n_control;
   j.siguiente = 0;
   j.abierta = j.fin = j.superado = false;
@@ -562,6 +569,11 @@ void PasoVuelo(uint8_t* base) {
     float h = iwvuelo::EjeIW(px), v = iwvuelo::EjeIW(py);
     bool r1 = (g_pad.b12 & kR1) != 0;
     if (j.auto_) Piloto(j, h, v, r1);
+    // Pad_GetStickAxes (EU 0x3394F0): X = la mayor de las dos palancas (+0xD8/+0xDA), Y = palanca derecha (+0xD9)
+    j.cam_x = h;
+    // Y de la palanca derecha (netplay_hooks.cpp la pasa con la X a iwmini::PalancaDerecha), a la escala de h/v (s8).
+    // ponytail: signo sin medir contra IW (arriba = mirar arriba); si sale al reves, cambiar el signo aqui.
+    j.cam_y = dbz3::iwmini::PalancaDerechaY() / 256;
     const float ax = j.x, az = j.z;
     Volar(j, h, v, r1);
     if (static const bool poses = !std::getenv("DBZ3_IW_VUELO"); poses) dbz3::anim::Bucle(x0, PoseVuelo(j, h, v));
@@ -583,8 +595,9 @@ void PasoVuelo(uint8_t* base) {
     if (!j.fin && j.v == 0 && j.t_ms >= float(j.rango_s[4]) * 1000.0f) Acabar(base, mgr, j, false, "TIEMPO");
     static int traza = 0;
     if (++traza % 120 == 0)
-      REXLOG_INFO("dbz3 r12: ({:.0f}, {:.0f}) giro {} estado {} vel {:.1f} medidor {:.3f} t {:.1f} s quedan {}", j.x,
-                  j.z, j.yaw, j.estado, j.vel, j.medidor, j.t_ms / 1000.0f, j.restantes);
+      REXLOG_INFO("dbz3 r12: ({:.0f}, {:.0f}) giro {} estado {} vel {:.1f} medidor {:.3f} t {:.1f} s quedan {} zoom {:.1f} "
+                  "cabeceo {} balanceo {}",
+                  j.x, j.z, j.yaw, j.estado, j.vel, j.medidor, j.t_ms / 1000.0f, j.restantes, j.zoom, j.cabeceo, j.balanceo);
   }
   Rival(j);
   // los dos luchadores de B3 donde dice el vuelo, mirando hacia su marcha, sin KO; camara de CameraFocusWhileFlying
@@ -620,8 +633,34 @@ void PasoVuelo(uint8_t* base) {
   StoreF(base, x1 + kVida, LoadF(base, x1 + kVidaMax));
   const float pie[3] = {p.x, p.y, p.z};
   float ojo[3], obj[3];
-  iwvuelo::CamaraVuelo(pie, j.yaw, ojo, obj);
-  dbz3::cine::Camara(base, ojo, obj);
+  // R7: la camara de IW no gira de golpe con el rumbo: +0x600 += (rumbo - camara) >> 4 por cuadro (EU L427262-298).
+  // aplicar_estudios (Viewer_UpdateOrbitCamera EU L427242-427281, dt = 1 cuadro): cabeceo += -96 * Y, limitado a
+  // [-0x1400, +0xC00]; balanceo hacia -2048 * X a 1/8 en los estados 2/3/5/6 y decae 7/8 en el resto.
+  // ponytail: la X de la palanca derecha no se mira (netplay_hooks se la da a iwmini::PalancaDerecha); vale la izquierda.
+  j.cabeceo = std::clamp(int(int16_t(uint16_t(j.cabeceo + int(int16_t(int(j.cam_y * -96.0f)))))), -0x1400, 0xC00);
+  if (j.estado == 2 || j.estado == 3 || j.estado == 5 || j.estado == 6)
+    j.balanceo += (int(int16_t(int(j.cam_x * -2048.0f))) - j.balanceo) >> 3;
+  else
+    j.balanceo = j.balanceo * 7 >> 3;
+  j.cam_x = j.cam_y = 0;
+  j.cam_yaw = j.cam_yaw < 0 ? j.yaw : (j.cam_yaw + (int(int16_t(uint16_t((j.yaw - j.cam_yaw) & 0xFFFF))) >> 4)) & 0xFFFF;
+  // R7 quinta tanda, zoom de IW (Viewer_UpdateOrbitCamera EU L427252-427326; valores de L427394-427401): distancia =
+  // 52,2 + z, z va hacia la meta m a +5 por cuadro (subiendo) y -1 (bajando); con z o m negativos, +0,5 / -1. Al entrar
+  // en el impulso (estados 5/6, Viewer_StatePoseBank5/6) m = +28 (80,2); en 2/3/5/6 al llegar a 28 m = 0; fuera de 5/6
+  // m > 0 pasa a 0. ponytail: sin m = -10 (42,2, picado 0x32E del estado 4, que el port no tiene).
+  {
+    const bool imp = j.estado == 5 || j.estado == 6, era = j.est_cam == 5 || j.est_cam == 6;
+    if (imp && !era) j.zoom_meta = 28.0f;
+    if ((j.estado == 3 || imp) ? 28.0f - 0.1f <= j.zoom : j.zoom <= -10.0f + 0.1f) j.zoom_meta = 0;
+    if (!imp && j.zoom_meta > 0) j.zoom_meta = 0;
+    const bool neg = j.zoom < 0 || j.zoom_meta < 0;
+    const float sube = neg ? 0.5f : 5.0f, baja = 1.0f;
+    j.zoom = j.zoom < j.zoom_meta ? std::min(j.zoom + sube, j.zoom_meta) : std::max(j.zoom - baja, j.zoom_meta);
+    j.est_cam = j.estado;
+  }
+  iwvuelo::CamaraVuelo(pie, j.cam_yaw, ojo, obj, 8.0f, 52.2f + j.zoom, j.cabeceo);
+  // FlyingZaxis(-roll) (L427328). [H] el signo: medido solo a ojo en capturas.
+  dbz3::cine::Camara(base, ojo, obj, -float(j.balanceo) / 65536.0f * 6.2831853f);
 }
 
 namespace {

@@ -8,7 +8,8 @@
 // Pasos: presentacion con la dificultad (Novato/Experto/Avanzado, como el titulo de B1) -> por cada retador: charla de
 // Mr. Satan (desde el 2.o) -> tarjeta del combate con el aviso del original -> combate (conector nativo
 // dbz3::hub::RequestBattleEx, src/hub.cpp; Cell Jr: 5 seguidos) -> resultado con los puntos -> ... -> final.
-// Reglas del original: las de la tabla por el conector (vida que no se recupera, 60 s, sin tiempo, 5 Cell Jr. de
+// Reglas del original: las de la tabla por el conector (vida que no se recupera, ki inicial del jugador del registro
+// (300 = 3 barras; en Krilin y Gohan, el que traia, 0xFFFF), 60 s, sin tiempo, 5 Cell Jr. de
 // 1000, formas iniciales) y las que B1 tiene en codigo por memoria del luchador mientras se pelea (VigilarCombate):
 // ki inicial del rival, armadura del Androide 16, Mr. Satan herido contra Trunks (solo el ki hace dano), ki lento
 // contra Piccolo (valores propios: los de B1 no estan en su codigo, docs/14_frentes/pasarela.md), y el nivel de la IA
@@ -667,6 +668,12 @@ void VigilarCombate(const char* quien, const Reglas& r, std::function<void(const
         }
         const float k0 = LoadF(base, x0 + kKi), k1 = LoadF(base, x1 + kKi), m1 = LoadF(base, x1 + kKiMax);
         if (r.ki_rival > 0) StoreF(base, x1 + kKi, std::min(m1 > 0 ? m1 : 1e9f, r.ki_rival * kKiBarra));
+        if (r.ki_jugador > 0) {   // registro de B1 (+0x2C): el ki con el que empieza el jugador (300 = 3 barras)
+          const float m0 = LoadF(base, x0 + kKiMax);
+          StoreF(base, x0 + kKi, std::min(m0 > 0 ? m0 : 1e9f, r.ki_jugador * kKiBarra));
+          REXLOG_INFO("dbz3 {}: ki del jugador al empezar {:.0f} ({:.1f} barras de B1)", quien, LoadF(base, x0 + kKi),
+                      r.ki_jugador);
+        }
         if (r.ki_cero) StoreF(base, x0 + kKi, 0);
         if (const uint32_t pad = REX_LOAD_U16(x0 + 5028); r.sin_bloqueo && !g_dir && pad < 4) {   // X+5028 = mando
           g_mgr = mgr;
@@ -919,6 +926,7 @@ void VigilarCombate(const char* quien, const Reglas& r, std::function<void(const
         for (int k = 0; k < 2; ++k) {
           f.vida[k] = int(LoadF(base, x0 + kXPaso * uint32_t(k) + kVida));
           f.vida_max[k] = int(LoadF(base, x0 + kXPaso * uint32_t(k) + kVidaMax));
+          f.ki[k] = int(LoadF(base, x0 + kXPaso * uint32_t(k) + kKi));
         }
         const int32_t limite = int32_t(REX_LOAD_U32(mgr + kLimite));
         f.segundos = limite > 0 ? std::max(0, int((float(limite) - LoadF(base, mgr + kPasado)) / 60.0f)) : -1;
@@ -1036,6 +1044,7 @@ std::shared_ptr<const DatosB1> g_d;   // datos del modo en curso
 std::vector<Paso> g_pasos;
 int g_fase = kNada, g_paso = 0, g_intentos = 0;
 int g_vida_ganada = 0;   // vida de Mr. Satan al ganar el ultimo combate (para los que no la recuperan)
+int g_ki_ganada = -1;    // ki de Mr. Satan al ganar el ultimo combate (registro 0xFFFF: el que traia; -1 = ninguno)
 int g_dificultad = 0;    // 0 Novato, 1 Experto, 2 Avanzado (nivel del COM)
 int g_puntos = 0;        // de esta partida
 int g_ronda_pts = 0;     // del ultimo retador (la pantalla del resultado)
@@ -1107,7 +1116,8 @@ int NivelComB3(int dificultad, int ronda) {
 }
 
 // Reglas que B1 tiene en codigo (satanmode.c) segun el retador: Androide 16 (B1 16) "dificil de danar", Trunks (5)
-// "manos y piernas heridas: ataca con ki", Piccolo (6) "cuesta reunir ki". Ki inicial del rival: el de la tabla.
+// "manos y piernas heridas: ataca con ki", Piccolo (6) "cuesta reunir ki". Ki inicial del rival: el de la tabla; el del
+// jugador tambien (+0x2C): lo pone Lanzar (300 = 3 barras; 0xFFFF, como la vida de Krilin y Gohan, = el que traia).
 // (Los multiplicadores de B1 no estan en el ejecutable: no hay lectura de la ronda en el codigo del combate; ver
 // docs/14_frentes/pasarela.md "Reglas del original".)
 Reglas ReglasDe(const CombateB1& c, int dificultad, int ronda) {
@@ -1194,6 +1204,20 @@ bool Lanzar() {   // con g_mu: el combate del paso actual, con las reglas del or
   const int forma2 = FormaB3(c.rival, c.forma);
   if (p.vez == 0 && p.ronda > 0) dbz3::cinematica::Empezar(Escena(p.ronda, c.rival));
   Reglas r = ReglasDe(c, g_dificultad, p.ronda);
+  // Ki del jugador del registro de B1 (+0x2C): 300 = 3 barras, igual que el rival; 0xFFFF (Krilin y Gohan, las mismas
+  // fichas que la vida que no se recupera) = el que traia. El hilo de los 5 Cell Jr. es un solo combate seguido en
+  // B1 (cantidad de la tabla): tambien sigue de uno al siguiente.
+  const bool ki_sigue = c.ki_jugador == 0xFFFF || p.vez > 0;
+  std::string ki_de;
+  if (ki_sigue && g_ki_ganada >= 0) {
+    r.ki_jugador = float(g_ki_ganada) / kKiBarra;
+    ki_de = c.ki_jugador == 0xFFFF ? "el que traia, 0xFFFF del registro" : "el que traia (Cell Jr. seguido)";
+  } else if (!ki_sigue && c.ki_jugador > 0) {
+    r.ki_jugador = float(c.ki_jugador) / 100.0f;
+    ki_de = "registro " + std::to_string(c.ki_jugador);
+  } else {
+    ki_de = "sin anterior (no se toca)";
+  }
   r.puntos_b1 = true;
   if (!dbz3::hub::RequestBattleEx(kJugador, c.rival, escenario, true, tiempo, vida1, vida2, 0, forma2)) return false;
   r.traza = std::getenv("DBZ3_PASARELA_TRAZA") != nullptr;   // pruebas: vida y ki de los dos cada segundo
@@ -1202,6 +1226,7 @@ bool Lanzar() {   // con g_mu: el combate del paso actual, con las reglas del or
               "ki lento {:.2f}", p.ronda + 1, p.vez + 1, c.cantidad, kJugador, c.rival, c.rival_b1, c.forma, forma2,
               escenario, c.escenario_nombre, tiempo, vida1, vida2, kDificultad[g_dificultad], r.nivel_com, r.ki_rival,
               r.armadura_rival, r.solo_ki, r.ki_lento);
+  REXLOG_INFO("dbz3 pasarela: ki del jugador del original (paso {}): {:.1f} barras ({})", g_paso + 1, r.ki_jugador, ki_de);
   CallarVozB1();
   CallarAdxPs2();
   Publicar(kLuchando);
@@ -1214,6 +1239,7 @@ bool Lanzar() {   // con g_mu: el combate del paso actual, con las reglas del or
     if (f.ganador == 0) {
       const int pts = PuntosB1(f);
       g_vida_ganada = f.vida[0];
+      g_ki_ganada = f.ki[0];
       g_puntos += pts;
       const Paso& p = g_pasos[size_t(g_paso)];
       const bool ultima_vez = p.vez + 1 >= std::max(1, g_d->combates[size_t(p.ronda)].cantidad);

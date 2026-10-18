@@ -5889,12 +5889,18 @@ ADV_TABS = [("setup", "Entorno", "Environment"), ("mods", "Mods", "Mods"), ("imp
             ("characters", "Personajes", "Characters"), ("create", "Crear", "Create"),
             ("stories", "Historias", "Stories"),
             ("textures", "Texturas", "Textures"), ("swap", "Cambio de modelo", "Model swap"),
+            ("biblioteca", "Biblioteca", "Library"),
             ("tools", "Herramientas", "Tools"), ("hex", "Hex", "Hex"), ("diag", "Diagnóstico", "Diagnostics"),
             ("help", "Ayuda", "Help")]
 PAGE_CLASSES = {"home": HomePage, "setup": SetupPage, "mods": ModsPage, "importer": ImporterPage,
                 "characters": CharactersPage, "create": CreatePage, "stories": StoriesPage,
                 "textures": TexturesPage, "swap": SwapPage,
                 "tools": ToolsPage, "hex": HexPage, "diag": DiagPage, "help": HelpPage}
+try:   # R6 1.5.1: biblioteca de animaciones (buscar, ver un fotograma, guardar recetas de cambio de golpe)
+    from pagina_biblioteca import BibliotecaPage  # noqa: E402
+    PAGE_CLASSES["biblioteca"] = BibliotecaPage
+except Exception:  # noqa: BLE001  sin numpy o sin la biblioteca: el Kit sigue sin esa pestana
+    ADV_TABS = [t for t in ADV_TABS if t[0] != "biblioteca"]
 
 
 class App:

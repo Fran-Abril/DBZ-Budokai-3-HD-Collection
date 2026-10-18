@@ -158,6 +158,9 @@ def cmd_publicar(a):
         if m.get("congelado"):
             if not os.path.isfile(zpath):
                 sys.exit("El mod congelado %s no tiene su zip publicado en %s" % (mid, zpath))
+        elif a.solo and mid not in a.solo and not os.path.isfile(zpath) and not big:
+            print("sin publicar todavia (fuera del catalogo): %s" % mid)   # p. ej. uno preparado para mas tarde
+            continue
         elif not a.solo or mid in a.solo:
             if not os.path.isdir(src):
                 sys.exit("No encuentro el mod %s en %s" % (mid, a.mods))

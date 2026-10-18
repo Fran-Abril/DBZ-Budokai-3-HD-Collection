@@ -1,3 +1,6 @@
+#include <cctype>
+#include <chrono>
+#include <algorithm>
 // dbz3 - Model swap pipeline integration (project-side).
 
 #include "mod_pipeline.h"
@@ -722,6 +725,48 @@ void ModPipeline::EditCapsules(const std::string& mod, const std::vector<std::st
 }
 
 void ModPipeline::ImporterQuery(const std::vector<std::string>& args) {
+  RunAsync(ImporterScript(), args);
+}
+
+void ModPipeline::RunOfficialPorts(const std::vector<std::string>& install, const std::vector<std::string>& remove) {
+  if (IsRunning()) return;
+  auto valido = [](const std::string& id) {   // id de receta: letras, cifras y _ (nunca una opcion ni una ruta)
+    return !id.empty() && std::all_of(id.begin(), id.end(), [](unsigned char ch) { return std::isalnum(ch) || ch == '_'; });
+  };
+  for (const auto* lista : {&install, &remove})
+    for (const std::string& id : *lista)
+      if (!valido(id)) return;
+  ClearOutput();
+  std::error_code ec;
+  const std::filesystem::path root = ModsOutDir(), respaldo = root.parent_path() / "mods_respaldo";
+  const std::string marca = std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+                                               std::chrono::system_clock::now().time_since_epoch()).count());
+  for (const std::string& id : remove) {
+    for (const std::string& dir : {id, id + ".disabled"}) {
+      if (!std::filesystem::is_directory(root / dir, ec)) continue;
+      std::filesystem::create_directories(respaldo, ec);
+      std::filesystem::rename(root / dir, respaldo / (dir + "_" + marca), ec);
+      if (ec) {
+        REXLOG_WARN("dbz3: pack IW: no se pudo apartar {} ({})", id, ec.message());
+        AppendOutput("ERROR: " + id + ": " + ec.message() + "\n");
+        generation_.fetch_add(1);
+        return;
+      }
+      REXLOG_INFO("dbz3: pack IW: {} apartado en mods_respaldo", id);
+    }
+  }
+  if (install.empty()) {
+    generation_.fetch_add(1);   // sin herramienta: este es el fin del trabajo para el launcher
+    return;
+  }
+  std::vector<std::string> args = {"oficial"};
+  args.insert(args.end(), install.begin(), install.end());
+  args.push_back("--mods");
+  args.push_back(root.string());
+  if (const std::string us = UsDir(); !us.empty()) {
+    args.push_back("--us");
+    args.push_back(us);
+  }
   RunAsync(ImporterScript(), args);
 }
 

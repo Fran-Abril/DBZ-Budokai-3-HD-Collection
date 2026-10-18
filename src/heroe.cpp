@@ -4,6 +4,11 @@
 // tecnicas, capsulas, voz) con el MODELO del cuerpo: mientras dura la partida del heroe, el registro de combate del
 // estilo (char372 +212 + 20*forma: +2 ID cuyo modelo se carga, +4 su forma en char96) apunta al modelo del cuerpo
 // (Vestir/Quitar; es lo mismo que el cambio de modelo B3->B3 nativo validado, pero en memoria y solo en esa partida).
+// Frente 10 (studies 3): el MOVESET tambien es cambiable. Un donante (otro ID) aporta sus golpes al registro del
+// estilo: los 8 fids ANM del moveset (char372 +0), el CAM (+0x20: combos y camara) y su banco de gritos (+0x24/+0x28),
+// y sus capsulas por defecto (char96 +80) se suman a las del combate para que salgan sus especiales. Su modelo NO se
+// toca (el donante se lee, nunca se escribe). Se elige en el carrusel del apartado del heroe (rpg.cpp) y se guarda en
+// rpg.toml (heroe_moveset); se aplica en el combate siguiente (Vestir corre en cada Reglas/StartPropio).
 // Bucle de runs: sagas de 3 combates encadenadas; cada combate ganado da experiencia, el nivel sube vida y dano.
 // Lo usa rpg.cpp (vista kHeroeP y el reto kHeroe) con su candado puesto. Guardado: claves heroe_* de rpg.toml.
 #include <rex/logging.h>
@@ -155,11 +160,13 @@ constexpr int kNumSagas = int(std::size(kSagas));
 constexpr int kAlt2[kNumSagas][3] = {{43, 43, 19}, {43, 43, 20}, {28, 43, 30}, {43, 37, 43}};
 
 int g_raza = 0, g_cuerpo = 0, g_traje = 0, g_estilo = 0;
+int g_moveset = -1;   // frente 10: ID cuyo moveset (ANM+CAM+idioma) pelea el heroe; -1 = el del estilo
 constexpr int kNivelMax = 20, kExpNivel = 3;   // nivel = 1 + exp / 3, hasta el 20
 int g_exp = 0, g_saga = 0;   // combates ganados (todas las partidas) y saga siguiente (crece sin tope: vueltas)
 
 // ---- Memoria del guest (solo imagen US: firma "_charasel.cpp", como roster_ext.cpp) ----
 constexpr uint32_t kChar372 = 0x82329CF0;
+constexpr uint32_t kChar96 = 0x8234ABB8;   // registro por ID (96 B): +80 = lista de capsulas por defecto (n + 7 u16)
 constexpr uint32_t kIdToSlot = 0x82020668;
 constexpr uint32_t kCostumeCounts = 0x8245F150;
 constexpr uint32_t kSignature = 0x82020700;
@@ -169,6 +176,7 @@ uint8_t* Base() {
   return b && std::memcmp(b + kSignature, "_charasel.cpp", 13) == 0 ? b : nullptr;
 }
 uint32_t Be32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3]; }
+uint16_t Be16(const uint8_t* p) { return uint16_t(p[0]) << 8 | p[1]; }
 
 void W32(uint8_t* p, uint32_t v) { p[0] = uint8_t(v >> 24), p[1] = uint8_t(v >> 16), p[2] = uint8_t(v >> 8), p[3] = uint8_t(v); }
 void W16(uint8_t* p, uint32_t v) { p[0] = uint8_t(v >> 8), p[1] = uint8_t(v); }
@@ -187,8 +195,8 @@ uint32_t FilaCara(uint8_t* b, uint32_t id, uint32_t traje) {
   return any;
 }
 
-struct Puesto {   // lo original del estilo mientras lleva el cuerpo del heroe
-  int estilo = -1, cuerpo = -1, traje = -1;
+struct Puesto {   // lo original del estilo mientras lleva el cuerpo (y el moveset) del heroe
+  int estilo = -1, cuerpo = -1, traje = -1, moveset = -1;
   uint8_t c372[372];
   std::vector<std::pair<uint32_t, uint32_t>> caras;   // fila de la tabla de caras -> su fichero original
 } g_puesto;
@@ -201,10 +209,40 @@ void Quitar() {
     REXLOG_INFO("dbz3 heroe: estilo {} vuelve a su modelo", g_puesto.estilo);
   }
   g_puesto.caras.clear();
-  g_puesto.estilo = g_puesto.cuerpo = g_puesto.traje = -1;
+  g_puesto.estilo = g_puesto.cuerpo = g_puesto.traje = g_puesto.moveset = -1;
 }
 
-// El luchador `estilo` carga en combate el modelo de `cuerpo` (su forma base) y su cara en el marcador.
+// Frente 10: un ID sirve de moveset donante si tiene registro de combate con moveset en la forma base (su fid #AMB
+// de char372 +0; 0 y 0xFFFFFFFF son "sin moveset", como en los recortados 22-26/31). Los IDs de mods (>= 44) valen
+// cuando su mod esta instalado (roster_ext ya relleno su char372). El donante solo se LEE.
+bool MovesetValido(int id) {
+  if (id < 0 || id >= 64) return false;
+  uint8_t* b = Base();
+  if (!b) return false;
+  const uint32_t fid = Be32(b + kChar372 + uint32_t(id) * 372);
+  return fid != 0 && fid != 0xFFFFFFFFu;
+}
+// Carrusel del moveset (rpg.cpp, fila Moveset / X-Y entre combates): -1 (el del estilo) y los donantes validos en
+// orden de ID, saltando el propio estilo (elegirlo no haria nada: su registro ya es el del estilo).
+int MovesetCiclo(int d) {
+  int lista[65], n = 0;
+  const int estilo = kEstilos[g_estilo].id;
+  lista[n++] = -1;
+  for (int id = 0; id < 64 && n < 65; ++id) {
+    if (id != estilo && MovesetValido(id)) lista[n++] = id;
+  }
+  int k = 0;
+  for (int i = 0; i < n; ++i) {
+    if (lista[i] == g_moveset) {
+      k = i;
+      break;
+    }
+  }
+  return lista[(k + d % n + n) % n];
+}
+
+// El luchador `estilo` carga en combate el modelo de `cuerpo` (su forma base) y su cara en el marcador, con el
+// moveset del donante si hay uno elegido (frente 10).
 // Transformaciones: el cuerpo no tiene modelo (ni cara, ni aura) para las formas del estilo, asi que con otro cuerpo
 // las formas 1+ piden una capsula que el estilo no puede llevar (char372 +212+20f = capsula que exige la forma):
 // el heroe pelea en su forma base, sin transformaciones a medias. Con su propio cuerpo, todo como siempre.
@@ -213,7 +251,11 @@ void Quitar() {
 // y otro numero (55/56) y podria pedir un sonido que no existe. Altura: ver Altura().
 void Vestir(int estilo, int cuerpo, int traje) {
   if (estilo == cuerpo || estilo < 0 || estilo >= 44 || cuerpo < 0 || cuerpo >= 44) return Quitar();
-  if (g_puesto.estilo == estilo && g_puesto.cuerpo == cuerpo && g_puesto.traje == traje) return;
+  const int donante = (g_moveset >= 0 && g_moveset != estilo && MovesetValido(g_moveset)) ? g_moveset : -1;
+  if (g_puesto.estilo == estilo && g_puesto.cuerpo == cuerpo && g_puesto.traje == traje &&
+      g_puesto.moveset == donante) {
+    return;
+  }
   Quitar();
   uint8_t* b = Base();
   if (!b) return;
@@ -221,6 +263,13 @@ void Vestir(int estilo, int cuerpo, int traje) {
   const uint8_t* rc = b + kChar372 + uint32_t(cuerpo) * 372;
   if (!Be32(r) || !Be32(rc)) return;   // sin registro de combate (recortados)
   std::memcpy(g_puesto.c372, r, 372);
+  if (donante >= 0) {   // moveset del donante: sus 8 ANM por forma, su CAM (combos/camara) y su idioma (gritos)
+    const uint8_t* rd = b + kChar372 + uint32_t(donante) * 372;
+    for (uint32_t f = 0; f < 8; ++f) W32(r + 4 * f, Be32(rd + 4 * f));
+    W32(r + 0x20, Be32(rd + 0x20));
+    W32(r + 0x24, Be32(rd + 0x24));
+    W32(r + 0x28, Be32(rd + 0x28));
+  }
   const uint32_t nf = std::clamp<uint32_t>(Be32(r + 0xD0), 1, 8);
   const uint32_t tapon = estilo == 27 ? 6 : 96;   // capsula de otro (Kamehameha de Goku / Second Form de Freezer)
   for (uint32_t f = 0; f < nf; ++f) {
@@ -238,8 +287,12 @@ void Vestir(int estilo, int cuerpo, int traje) {
   g_puesto.estilo = estilo;
   g_puesto.cuerpo = cuerpo;
   g_puesto.traje = traje;
+  g_puesto.moveset = donante;
   REXLOG_INFO("dbz3 heroe: estilo {} ({}) con el cuerpo {} ({}) traje {}, {} formas (1+ bloqueadas), {} filas de cara",
               estilo, M::Nombre(estilo), cuerpo, M::Nombre(cuerpo), traje + 1, nf, g_puesto.caras.size());
+  if (donante >= 0) {
+    REXLOG_INFO("dbz3 heroe: moveset {} ({}) para el estilo {} en este combate", donante, M::Nombre(donante), estilo);
+  }
 }
 
 const Fisico& CuerpoAct() { return kRazas[g_raza].cuerpos[g_cuerpo]; }
@@ -257,6 +310,7 @@ void Ajustar() {
   g_cuerpo = std::clamp(g_cuerpo, 0, kRazas[g_raza].n - 1);
   g_traje = std::clamp(g_traje, 0, TrajesDe(CuerpoAct()) - 1);
   g_estilo = std::clamp(g_estilo, 0, kNumEstilos - 1);
+  g_moveset = std::clamp(g_moveset, -1, 63);   // validez del donante: MovesetValido (mods instalados) al aplicarlo
 }
 const Estilo& EstiloDeId(int id) {
   for (const Estilo& e : kEstilos) {
@@ -280,6 +334,7 @@ void Leer(const toml::table& t) {
   g_cuerpo = int(t["heroe_cuerpo"].value_or(int64_t(0)));
   g_traje = int(t["heroe_traje"].value_or(int64_t(0)));
   g_estilo = int(t["heroe_estilo"].value_or(t["heroe_maestro"].value_or(int64_t(0))));   // antes: maestro (0-5)
+  g_moveset = int(t["heroe_moveset"].value_or(int64_t(-1)));   // frente 10: donante del moveset (-1: el del estilo)
   g_exp = std::max(0, int(t["heroe_exp"].value_or(int64_t(0))));
   g_saga = std::max(0, int(t["heroe_saga"].value_or(int64_t(0))));
   Ajustar();
@@ -287,12 +342,13 @@ void Leer(const toml::table& t) {
 void Escribir(std::ostream& o) {
   o << "heroe_raza = " << g_raza << "\nheroe_cuerpo = " << g_cuerpo << "\nheroe_traje = " << g_traje
     << "\nheroe_estilo = " << g_estilo << "\nheroe_maestro = " << std::min(g_estilo, kNumMaestros - 1)
-    << "\nheroe_exp = " << g_exp << "\nheroe_saga = " << g_saga << "\n";
+    << "\nheroe_moveset = " << g_moveset << "\nheroe_exp = " << g_exp << "\nheroe_saga = " << g_saga << "\n";
 }
 
 int Cuerpo() { return CuerpoAct().id; }
 int Traje() { return g_traje; }
 int EstiloId() { return kEstilos[g_estilo].id; }
+int MovesetId() { return g_moveset; }   // frente 10: donante elegido (-1: el del estilo)
 int Saga() { return g_saga; }
 int Nivel() { return std::min(kNivelMax, 1 + g_exp / kExpNivel); }
 int g_nivel_antes = 0;   // nivel antes de la ultima saga (pantalla final: subida de nivel)
@@ -312,13 +368,14 @@ void ElegirEstilo(int id) {
   }
 }
 
-// Filas de la pantalla de creacion: 0 raza, 1 cuerpo, 2 apariencia, 3 estilo (4 = empezar, en rpg.cpp).
+// Filas de la pantalla de creacion: 0 raza, 1 cuerpo, 2 apariencia, 3 estilo, 4 moveset (5 = empezar, en rpg.cpp).
 void Mover(int fila, int dir) {
   switch (fila) {
     case 0: g_raza = Ciclo(g_raza, dir, kNumRazas), g_cuerpo = g_traje = 0; break;
     case 1: g_cuerpo = Ciclo(g_cuerpo, dir, kRazas[g_raza].n), g_traje = 0; break;
     case 2: g_traje = Ciclo(g_traje, dir, TrajesDe(CuerpoAct())); break;
     case 3: g_estilo = Ciclo(g_estilo, dir, kNumEstilos); break;
+    case 4: g_moveset = MovesetCiclo(dir); break;   // frente 10: donante valido +- d (-1: el del estilo)
     default: break;
   }
   Ajustar();
@@ -335,6 +392,10 @@ std::string Fila(int fila) {
     case 3:
       return std::string(L("Estilo: ", "Style: ", "Style : ", "Stil: ", "Stile: ")) + M::Nombre(EstiloId()) +
              (g_estilo < kNumMaestros ? L(" (maestro)", " (master)", " (maître)", " (Meister)", " (maestro)") : "");
+    case 4:
+      return std::string(L("Moveset: ", "Moveset: ", "Moveset : ", "Moveset: ", "Moveset: ")) +
+             (g_moveset < 0 ? M::Nombre(EstiloId()) + T::T(" (el del estilo)", " (the style's own)")
+                            : M::Nombre(g_moveset));
     default: return L("¡Empezar la misión!", "Start the mission!", "Commencer la mission !", "Mission starten!",
                       "Inizia la missione!");
   }
@@ -387,6 +448,34 @@ M::Reglas Reglas(int estilo, int extra, int traje) {
   if (x.hab) {
     g.ncaps = 1;
     g.caps[0] = x.hab;   // se suma a las suyas
+  }
+  // Frente 10: con moveset donante, sus capsulas por defecto (char96 +80) se suman a las del combate (hasta 7) para
+  // que salgan sus especiales (el #CCM exige la capsula w8). El tapon de las formas 1+ no entra nunca (Vestir ya lo
+  // deja en el registro del estilo). [H] las capsulas de un mod dependen de su importacion (roster_ext).
+  uint8_t* b = Base();
+  if (b && g_moveset >= 0 && g_moveset != estilo && MovesetValido(g_moveset)) {
+    const uint8_t* c96 = b + kChar96 + uint32_t(g_moveset) * 96;
+    const uint32_t tapon = estilo == 27 ? 6 : 96;
+    int n = std::max(g.ncaps, 0);
+    const int base = n;
+    for (uint32_t k = 0, nc = std::min<uint32_t>(Be16(c96 + 80), 7); k < nc && n < 7; ++k) {
+      const uint16_t cap = Be16(c96 + 82 + 2 * k);
+      if (cap == 0 || cap == tapon) continue;
+      bool dup = false;
+      for (int i = 0; i < n; ++i) dup = dup || g.caps[i] == cap;
+      if (!dup) g.caps[n++] = cap;
+    }
+    if (n > base) {
+      g.ncaps = n;
+      static int ultimo[2] = {-2, -2};   // el HUD relee las reglas cada cuadro: la linea sale una vez por cambio
+      if (ultimo[0] != g_moveset || ultimo[1] != estilo) {
+        ultimo[0] = g_moveset;
+        ultimo[1] = estilo;
+        REXLOG_INFO("dbz3 heroe: capsulas del moveset {} ({}) sumadas al estilo {}: {}+{} = {} ({} {} {} {} {} {} {})",
+                    g_moveset, M::Nombre(g_moveset), estilo, base, n - base, n, g.caps[0], g.caps[1], g.caps[2],
+                    g.caps[3], g.caps[4], g.caps[5], g.caps[6]);
+      }
+    }
   }
   return g;
 }

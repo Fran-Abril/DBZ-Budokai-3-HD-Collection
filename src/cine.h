@@ -15,7 +15,8 @@ int16_t Mando(uint8_t* base, int lado);
 // este fotograma (llamar al empezar el dibujo). Ojo: el juego parte de su ojo anterior; para volver a la suya,
 // fundirse con ella (no alejarla en cada fotograma: se va lejos).
 bool LeerCamara(uint8_t* base, float ojo[3], float obj[3]);
-void Camara(uint8_t* base, const float ojo[3], const float obj[3]);
+// giro: balanceo en radianes alrededor del eje de vision (0 = arriba del mundo; el vuelo de IW lo usa).
+void Camara(uint8_t* base, const float ojo[3], const float obj[3], float giro = 0.0f);
 
 // Ganchos (clima.cpp): combate nuevo (sub_820C26E0) y cada fotograma de escenario con el estado del combate
 // (mgr+35128) y los fotogramas en estado 4.
