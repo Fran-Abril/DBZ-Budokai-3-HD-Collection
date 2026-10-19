@@ -5,7 +5,12 @@
 // Budokai 3 (dbz3::ingame::style, marcos naranjas, letra turquesa), como el resto de pantallas del HUB.
 #include "heroe_ui.h"
 
+#if defined(_WIN32)
 #include <windows.h>
+#else
+#include <cstdlib>
+using DWORD = unsigned long;   // Linux: Lanzar va por std::system
+#endif
 
 #include <imgui.h>
 
@@ -72,6 +77,7 @@ std::mutex g_gen_mu;
 std::set<std::string> g_generando, g_fallidas;   // con g_gen_mu
 
 bool Lanzar(const std::wstring& cmd, DWORD* code) {
+#if defined(_WIN32)
   STARTUPINFOW si{};
   si.cb = sizeof(si);
   si.dwFlags = STARTF_USESHOWWINDOW;
@@ -90,6 +96,11 @@ bool Lanzar(const std::wstring& cmd, DWORD* code) {
   CloseHandle(pi.hThread);
   CloseHandle(pi.hProcess);
   return true;
+#else
+  const int r = std::system(fs::path(cmd).string().c_str());   // sin consola que ocultar
+  *code = r == 0 ? 0 : 1;
+  return r != -1;
+#endif
 }
 
 // python + vista_heroe.py --solo id_traje en un hilo (sin consola). Interpretes: DBZ3_PYTHON, python/ junto al exe
