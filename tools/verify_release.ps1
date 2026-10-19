@@ -177,6 +177,12 @@ if ($Version -ne "" -and (Test-Path -LiteralPath $zip)) {
         if (-not ($z.Entries | Where-Object { $_.FullName -match "mods_nativos[\\/]partida_100[\\/]data\.bin$" })) {
             $errors += "el zip no lleva mods_nativos/partida_100 (la partida al 100% saldria en gris)"
         }
+        # 1.5.1.2: escenarios de PS2 y Modo Heroe sin Kit ni Python instalados
+        foreach ($need in @("python[/\\]python\.exe$", "mod center hd[/\\]campos_iw\.py$", "mod center hd[/\\]escenarios_convertir\.py$",
+                            "mod center hd[/\\]iso\.py$", "mod center hd[/\\]importar\.py$", "mod center hd[/\\]cac[/\\]vista_heroe\.py$",
+                            "awo_tools[/\\]amo2awo\.py$", "awo_tools[/\\]ps2hd\.py$", "python[/\\]Lib[/\\]site-packages[/\\]PIL[/\\]Image\.py$")) {
+            if (-not ($z.Entries | Where-Object { $_.FullName -match $need })) { $errors += "el zip no lleva '$need' (escenarios de PS2 / Modo Heroe sin Kit)" }
+        }
         # Residuos de ejecucion: una carpeta de datos/user_data/logs/iso_cache
         # delataria que se empaqueto la carpeta con la que se jugo, no una limpia.
         $runtime_residue = $z.Entries | Where-Object {

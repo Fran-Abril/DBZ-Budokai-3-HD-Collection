@@ -115,15 +115,17 @@ def _texel_pelo(tx, uvs, objetivo=None, tris_uv=None):
 def _bloque_libre(tx, mask, excluir, ancho=4):
     """Texel (u, v) del centro de un bloque 4x4 alineado, entero dentro de `mask`, distinto del bloque `excluir` (bx, by)."""
     h, w = tx.shape[:2]
+    excl = excluir if isinstance(excluir, (set, frozenset)) else {excluir}
     for by in range(0, h // ancho):
         for bx in range(0, w // ancho):
-            if (bx, by) != excluir and mask[by * ancho:(by + 1) * ancho, bx * ancho:(bx + 1) * ancho].all():
+            if (bx, by) not in excl and mask[by * ancho:(by + 1) * ancho, bx * ancho:(bx + 1) * ancho].all():
                 return bx, by
     return None
 
 
-def _pintar_bloque_dxt3(data, tex, bx, by, rgb):
-    """Pone el bloque (bx, by) de la textura DXT3 `tex` del #AMB `data` (bytearray) a un color liso (conserva el alfa)."""
+def _pintar_bloque_dxt3(data, tex, bx, by, rgb, alfa=None):
+    """Pone el bloque (bx, by) de la textura DXT3 `tex` del #AMB `data` (bytearray) a un color liso (conserva el alfa,
+    salvo con `alfa` = nibble 0..15: es la banda de la rampa toon)."""
     import texture_b3 as tb  # noqa: PLC0415
     _, texs = tb.parse_azt(bytes(data))
     t = next(x for x in texs if x["idx"] == tex)
@@ -133,7 +135,32 @@ def _pintar_bloque_dxt3(data, tex, bx, by, rgb):
     o = t["bitmap_abs"] + (by * (w // 4) + bx) * 16
     c = ((int(round(rgb[0] * 31)) << 11) | (int(round(rgb[1] * 63)) << 5) | int(round(rgb[2] * 31))) & 0xFFFF
     data[o + 8:o + 16] = struct.pack("<HHI", c, c, 0)
+    if alfa is not None:
+        data[o:o + 8] = bytes([(alfa << 4) | alfa]) * 8
     return True
+
+
+def _bloques_calvo(model, tex_idx, tx, n):
+    """Calvos (sin pelo nativo): `n` bloques 4x4 de la textura `tex_idx` que ningun triangulo del cuerpo cubre (ni a un bloque
+    de distancia: el filtrado no los mezcla con la piel), y el nibble de alfa (banda toon) mas comun de los texeles cubiertos.
+    Devuelve ([(bx, by)], alfa_nibble) (menos de n bloques si no hay sitio)."""
+    from PIL import Image, ImageDraw  # noqa: PLC0415
+    h, w = tx.shape[:2]
+    im = Image.new("L", (w, h), 0)
+    d = ImageDraw.Draw(im)
+    for i, tri in enumerate(model.tris):
+        if model.mats[model.tri_mat[i]]["tex"] == tex_idx:
+            d.polygon([(float((u % 1) * w), float((v % 1) * h)) for u, v in model.uv[tri]], fill=1)
+    cub = np.asarray(im) > 0
+    bh, bw = h // 4, w // 4
+    blk = cub[:bh * 4, :bw * 4].reshape(bh, 4, bw, 4).any(axis=(1, 3))
+    gr = blk.copy()
+    for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)):
+        gr |= np.roll(blk, (dy, dx), (0, 1))
+    libres = [(int(x), int(y)) for y, x in zip(*np.nonzero(~gr))]
+    libres = libres[::-1][:n]                       # los del final de la textura (suelen ser relleno)
+    alfas = (tx[..., 3][cub] * 15 + 0.5).astype(int) if tx.shape[2] > 3 and cub.any() else np.array([8])
+    return libres, int(np.bincount(alfas, minlength=16).argmax())
 
 
 def _decimar(P, N, tris, limite):
@@ -162,16 +189,34 @@ def _decimar(P, N, tris, limite):
     return nP, nN, nt
 
 
-def injertar(amb, model, pelo_mask, Q, QN, tris_ut, presupuesto=WINDOW_BUDGET, rgb1=None, rgb2=None):
+def _soldar(ex):
+    """Suelda los vertices iguales (posicion + normal) de una pieza extra: una caja de 36 pasa a 24."""
+    P, N, uniq, idx = np.asarray(ex["P"], float), np.asarray(ex["N"], float), {}, []
+    for p_, n_ in zip(P, N):
+        idx.append(uniq.setdefault((tuple(np.round(p_, 4)), tuple(np.round(n_, 2))), len(uniq)))
+    nP, nN = np.zeros((len(uniq), 3)), np.zeros((len(uniq), 3))
+    for i, r in enumerate(idx):
+        nP[r], nN[r] = P[i], N[i]
+    tris = [tuple(idx[v] for v in t) for t in ex["tris"]]
+    return {"P": nP, "N": nN, "tris": tris, "rgb": ex["rgb"]}
+
+
+def injertar(amb, model, pelo_mask, Q, QN, tris_ut, presupuesto=WINDOW_BUDGET, rgb1=None, rgb2=None, cara_mask=None,
+             extras=None):
     """amb: #AMB del cuerpo (bytes, con las texturas ya tenidas). model: model_render.Model del cuerpo (del bin
     ORIGINAL; fija el orden de triangulos de pelo_mask). pelo_mask: bool por triangulo de model.tris (True = pelo
     nativo, se quita). Q/QN: posiciones/normales (n x 3, espacio modelo del cuerpo) de los vertices de la pieza y
     tris_ut: sus triangulos (indices a Q). rgb1/rgb2: colores objetivo (0..1) del pelo 1 (base) y 2 (puntas, el 40 %
-    de arriba) ya cocidos en la textura; None = el que haya. Devuelve (bytes, resumen)."""
+    de arriba) ya cocidos en la textura; None = el que haya. cara_mask: bool por triangulo (zona "cara"): si el cuerpo es
+    CALVO (sin pelo nativo) el peinado va al draw de la cara y su color se pinta en un bloque libre de esa textura.
+    extras: piezas rigidas a la cabeza ademas del pelo (scouter): [{"P", "N", "tris", "rgb"}] (espacio modelo, color liso
+    en un bloque libre de la textura del anfitrion). Sin pieza de pelo (tris_ut vacio) no se quita ni se anade pelo. Devuelve (bytes, resumen)."""
     import model_render as mr  # noqa: PLC0415
     td = triangulos_por_draw(model)
     assert len(td) == len(model.tris), "orden de triangulos distinto del Model (%d != %d)" % (len(td), len(model.tris))
     pelo_mask = np.asarray(pelo_mask, bool)
+    if not len(tris_ut):
+        pelo_mask = np.zeros_like(pelo_mask)   # sin peinado nuevo el nativo se queda
     avb = AwgVertexBuffer._parse(bytes(amb))
     dt = DrawTable(avb)
     ss = SkinSlots(avb)
@@ -184,9 +229,16 @@ def injertar(amb, model, pelo_mask, Q, QN, tris_ut, presupuesto=WINDOW_BUDGET, r
     kept = collections.defaultdict(list)        # draw -> triangulos que se quedan
     for (di, t), es in zip(td, pelo_mask):
         (quitados if es else kept)[di].append(t)
+    extras = [_soldar(ex) for ex in (extras or [])]
+    n_extra = sum(len(ex["P"]) for ex in extras)
+    calvo = False
     if not quitados:
-        return bytes(amb), {"pelo": "el cuerpo no tiene pelo propio: sin injerto en combate (calvo)"}
-    host = max(quitados, key=lambda d: len(quitados[d]))
+        cuenta = collections.Counter(di for (di, _), es in zip(td, cara_mask if cara_mask is not None else []) if es)
+        if not cuenta:
+            return bytes(amb), {"pelo": "el cuerpo no tiene pelo propio ni cara: sin injerto en combate (calvo)"}
+        calvo = True
+        quitados[cuenta.most_common(1)[0][0]] = []
+    host = max(quitados, key=lambda d: len(quitados[d])) if not calvo else next(iter(quitados))
     hd = dt.draws[host]
 
     # --- hueso y espacio local del injerto
@@ -211,7 +263,24 @@ def injertar(amb, model, pelo_mask, Q, QN, tris_ut, presupuesto=WINDOW_BUDGET, r
     m2 = mr.Model(bytes(amb))
     mat = dt.materials[hd["material"]]
     u2 = v2 = None
-    if mat["tex"] < len(m2.tex):
+    if calvo:                      # sin pelo nativo: bloques libres de la textura de la cara, pintados lisos
+        u0 = v0 = 0.5
+        tx = m2.tex[mat["tex"]] if mat["tex"] < len(m2.tex) else None
+        col1 = rgb1 or (0.13, 0.09, 0.06)
+        if tx is not None:
+            h_, w_ = tx.shape[:2]
+            usadas = (2 if rgb2 is not None else 1) if len(tris_ut) else 0
+            bls, alfa = _bloques_calvo(model, mat["tex"], tx, usadas)
+            if not usadas:
+                pass
+            elif bls and _pintar_bloque_dxt3(avb.data, mat["tex"], bls[0][0], bls[0][1], col1, alfa):
+                u0, v0 = (bls[0][0] * 4 + 2) / w_, (bls[0][1] * 4 + 2) / h_
+                resumen["calvo"] = "bloque liso %s alfa %d" % (bls[0], alfa)
+                if rgb2 is not None and len(bls) > 1 and _pintar_bloque_dxt3(avb.data, mat["tex"], bls[1][0], bls[1][1], rgb2, alfa):
+                    u2, v2 = (bls[1][0] * 4 + 2) / w_, (bls[1][1] * 4 + 2) / h_
+            else:
+                resumen["calvo"] = "SIN bloque libre / textura no DXT3: color de la piel"
+    elif mat["tex"] < len(m2.tex):
         tris_h = quitados[host]
         uvs = [tuple(model.uv[v]) for t in tris_h for v in t]
         tuv = [[tuple(model.uv[v]) for v in t] for t in tris_h]
@@ -230,11 +299,37 @@ def injertar(amb, model, pelo_mask, Q, QN, tris_ut, presupuesto=WINDOW_BUDGET, r
     else:
         u0, v0 = 0.5, 0.5
     resumen["uv"] = tuple(round(float(x), 4) for x in ((u0, v0) + (() if u2 is None else (u2, v2))))
+    uv_extra = []
+    if extras:                     # color liso de cada pieza extra (scouter): bloques libres de la textura del anfitrion
+        tx = m2.tex[mat["tex"]] if mat["tex"] < len(m2.tex) else None
+        usadas = (2 if rgb2 is not None else 1) if (calvo and len(tris_ut)) else 0
+        bls = []
+        if tx is not None:
+            h_, w_ = tx.shape[:2]
+            todos, alfa = _bloques_calvo(model, mat["tex"], tx, usadas + len(extras))
+            bls = todos[usadas:]
+            mask = getattr(_texel_pelo, "mask", None)
+            if len(bls) < len(extras) and mask is not None and not calvo:   # textura llena: bloques DENTRO del pelo nativo
+                ocu = {(int(u0 * w_) // 4, int(v0 * h_) // 4)} | ({(int(u2 * w_) // 4, int(v2 * h_) // 4)} if u2 is not None else set())
+                while len(bls) < len(extras):
+                    b_ = _bloque_libre(tx, mask, ocu)
+                    if not b_:
+                        break
+                    ocu.add(b_)
+                    bls.append(b_)
+                alfa = 0
+        for k, ex in enumerate(extras):
+            uv = (0.5, 0.5)
+            if k < len(bls) and _pintar_bloque_dxt3(avb.data, mat["tex"], bls[k][0], bls[k][1], ex["rgb"], alfa):
+                uv = ((bls[k][0] * 4 + 2) / w_, (bls[k][1] * 4 + 2) / h_)
+            else:
+                resumen["extra%d" % k] = "SIN bloque libre / no DXT3: color de la piel"
+            uv_extra.append(uv)
 
     # --- vertices del injerto en el espacio local del hueso, soldados (pos + normal)
     Q = np.asarray(Q, float)
     QN = np.asarray(QN, float)
-    usados = np.unique(np.asarray(tris_ut).reshape(-1))
+    usados = np.unique(np.asarray(tris_ut, int).reshape(-1))
     remap0 = {int(o): i for i, o in enumerate(usados)}
     Pu, Nu = Q[usados], QN[usados]
     tu = [tuple(remap0[int(v)] for v in t) for t in tris_ut]
@@ -260,36 +355,52 @@ def injertar(amb, model, pelo_mask, Q, QN, tris_ut, presupuesto=WINDOW_BUDGET, r
         else:
             refs_final.update(v for v in _rango_draw(avb, d) if v != 0xFFFF)
     libres = sorted({v for di in quitados for t in quitados[di] for v in t} - refs_final)
-    cap = max(presupuesto, avb.n) - (avb.n - len(libres))   # ventanas que caben sin pasar el tope
-    if len(nP) > max(cap, 64):
-        nP, nN, tu = _decimar(nP, nN, tu, max(cap, 64))
-        resumen["decimado"] = len(nP)
-    grupo = np.zeros(len(nP), int)       # 0 = pelo 1 (base), 1 = pelo 2 (puntas)
-    if u2 is not None:
-        y = nP[:, 1]
-        corte = y.min() + 0.6 * (y.max() - y.min())
-        dup, nt2, nP2, nN2, g2 = {}, [], [], [], []
-        for t in tu:
-            g = 1 if np.mean([y[i] for i in t]) > corte else 0
-            tri = []
-            for i in t:
-                k = (i, g)
-                if k not in dup:
-                    dup[k] = len(nP2)
-                    nP2.append(nP[i]); nN2.append(nN[i]); g2.append(g)
-                tri.append(dup[k])
-            nt2.append(tuple(tri))
-        nP, nN, tu, grupo = np.array(nP2), np.array(nN2), nt2, np.array(g2)
+    tope = max(presupuesto, avb.n)
+    lim = tope - (avb.n - len(libres)) - n_extra      # ventanas de pelo que caben sin pasar el tope
+    nP0, nN0, tu0 = nP, nN, tu
+    for _ in range(8):   # decima y, si el reparto en dos colores (vertices duplicados) pasa el tope, vuelve a decimar
+        nP, nN, tu = nP0, nN0, tu0
+        if len(nP) > max(lim, 64):
+            nP, nN, tu = _decimar(nP, nN, tu, max(lim, 64))
+            resumen["decimado"] = len(nP)
+        grupo = np.zeros(len(nP), int)       # 0 = pelo 1 (base), 1 = pelo 2 (puntas)
+        if u2 is not None and len(nP):
+            y = nP[:, 1]
+            corte = y.min() + 0.6 * (y.max() - y.min())
+            dup, nt2, nP2, nN2, g2 = {}, [], [], [], []
+            for t in tu:
+                g = 1 if np.mean([y[i] for i in t]) > corte else 0
+                tri = []
+                for i in t:
+                    k = (i, g)
+                    if k not in dup:
+                        dup[k] = len(nP2)
+                        nP2.append(nP[i]); nN2.append(nN[i]); g2.append(g)
+                    tri.append(dup[k])
+                nt2.append(tuple(tri))
+            nP, nN, tu, grupo = np.array(nP2), np.array(nN2), nt2, np.array(g2)
+        exceso = avb.n + max(0, len(nP) + n_extra - len(libres)) - tope
+        if exceso <= 0 or lim <= 64:
+            break
+        lim -= exceso
+    resumen['puntas'] = int(grupo.sum())
+    for k, ex in enumerate(extras or []):      # piezas extra: grupo 2+k
+        eP, eN = np.asarray(ex["P"], float), np.asarray(ex["N"], float)
+        base = len(nP)
+        nP = np.concatenate([nP, eP]) if len(nP) else eP
+        nN = np.concatenate([nN, eN]) if len(nN) else eN
+        tu = list(tu) + [tuple(int(v) + base for v in t) for t in ex["tris"]]
+        grupo = np.concatenate([grupo, np.full(len(eP), 2 + k, int)])
+        resumen["extra_ventanas"] = resumen.get("extra_ventanas", 0) + len(eP)
     # coordenadas locales
     R = np.array(inv)[:3, :3]
     loc = (nP @ R.T) + np.array(inv)[:3, 3]
     nl = nN @ R.T
     nl /= np.maximum(np.linalg.norm(nl, axis=1), 1e-9)[:, None]
     H = len(loc)
-    resumen['puntas'] = int(grupo.sum())
     ventanas = []
     for i in range(H):
-        ventanas.append({"pos": tuple(loc[i]), "w": 1.0, "bone": slot, "nrm": tuple(nl[i]), "uv": (u2, v2) if grupo[i] else (u0, v0)})
+        ventanas.append({"pos": tuple(loc[i]), "w": 1.0, "bone": slot, "nrm": tuple(nl[i]), "uv": (u0, v0) if grupo[i] == 0 else (u2, v2) if grupo[i] == 1 else uv_extra[grupo[i] - 2]})
     destino = list(libres[:H])
     n_nuevas = max(0, H - len(destino))
     base_nueva = avb.n

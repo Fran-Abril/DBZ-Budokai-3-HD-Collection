@@ -78,7 +78,15 @@ RES_FILES = ["Budokai_3_Capsules_IDs.txt", "Dragon Ball Z Infinite World Capsule
              "Character IDs (INFINITE WORLD).rtf"]
 
 
-def kit_modules():
+# Zip del juego (tools/make_release.ps1 -> --game-stage): lo que el launcher y el juego lanzan SIN Kit instalado
+# (escenarios de PS2 al pulsar Jugar, vista previa/traje del Modo Heroe, personajes de mods). Mismas rutas que
+# el Kit: si el Kit se descomprime encima nada cambia.
+GAME_ENTRIES = ["campos_iw", "escenarios_convertir", "iso", "importar", "vista_heroe", "roster_build",
+                "swap_b3", "texture_b3", "texture_pack", "texture_dump_import", "capsulas", "colores", "gritos",
+                "hornada_support", "voces", "model_render"]
+
+
+def kit_modules(entries=None):
     """Local modules reached from the entry scripts (imports inside functions too)."""
     dirs = [os.path.join(ROOT, "mod center hd"), os.path.join(ROOT, "mod center hd", "cac"), os.path.join(ROOT, "awo_tools")]
 
@@ -88,7 +96,7 @@ def kit_modules():
             if os.path.exists(p):
                 return p
         return None
-    seen, todo = set(), [find(e) for e in KIT_ENTRIES + KIT_EXTRA_TOOLS]
+    seen, todo = set(), [find(e) for e in (entries or KIT_ENTRIES + KIT_EXTRA_TOOLS)]
     while todo:
         p = todo.pop()
         if not p or p in seen:
@@ -218,8 +226,41 @@ def kit_pack(ver, stage, dry=False):
     return out
 
 
+def game_stage(stage):
+    """Anade al stage del zip del juego los scripts (con sus imports), sus datos y el Python portatil minimo."""
+    mch = os.path.join(stage, "mod center hd")
+    awo = os.path.join(stage, "awo_tools")
+    os.makedirs(os.path.join(mch, "cac"), exist_ok=True)
+    os.makedirs(awo, exist_ok=True)
+    n = 0
+    for p in kit_modules(GAME_ENTRIES):
+        d = os.path.basename(os.path.dirname(p))
+        dst = os.path.join(mch, "cac") if d == "cac" else mch if d == "mod center hd" else awo
+        shutil.copyfile(p, os.path.join(dst, os.path.basename(p)))
+        n += 1
+    for sub in ("studio", "fonts"):
+        src = os.path.join(ROOT, "mod center hd", sub)
+        if os.path.isdir(src):
+            shutil.copytree(src, os.path.join(mch, sub), dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+    for f in KIT_DATA:
+        shutil.copyfile(os.path.join(ROOT, "mod center hd", f), os.path.join(mch, f))
+    for f in AWO_DATA:
+        shutil.copyfile(os.path.join(ROOT, "awo_tools", f), os.path.join(awo, f))
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import make_python_bundle  # noqa: PLC0415
+    py = os.path.join(stage, "python")
+    if os.path.isdir(py):
+        raise SystemExit("ya existe %s" % py)
+    make_python_bundle.build(stage, slim=True)
+    if not make_python_bundle.check(py, slim=True):
+        raise SystemExit("python portatil: la comprobacion fallo")
+    print("zip del juego: %d scripts + python portatil (numpy+Pillow)" % n)
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--game-stage", metavar="DIR",
+                    help="anade al stage de make_release.ps1 los scripts de PS2/Modo Heroe y el Python portatil; no hace mas")
     ap.add_argument("--version", default="1.4.2")
     ap.add_argument("--solo", choices=("kit", "personajes"),
                     help="build only one pack (the other one is reused from an earlier release)")
@@ -227,6 +268,8 @@ def main():
                     help="stage the Kit in a temp folder and list its mod center hd/ files (no python bundle, no zip, "
                          "release_packs/ untouched); fails if third-party art would ship")
     a = ap.parse_args()
+    if a.game_stage:
+        return game_stage(a.game_stage)
     if a.dry_run:
         tmp = tempfile.mkdtemp(prefix="kit_dry_")
         try:

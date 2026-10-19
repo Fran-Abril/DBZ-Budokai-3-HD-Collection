@@ -75,7 +75,7 @@ int CapsulaDeB2(int id_b2);   // pasarela_nave.cpp
 int CapsulaAlAzar(int grupo, int personaje_b2);   // FUN_002835F0: 0 = ninguna
 bool CapsulaNueva(int id_b2);
 void GanarCapsula(int id_b2);
-void VentanaPremio(ImDrawList* dl, const dbz3::ingame::style::Area& a, int id_b2, float cuadros);
+bool VentanaPremio(ImDrawList* dl, const dbz3::ingame::style::Area& a, int id_b2, float cuadros, uint16_t pressed, bool auto_on);
 }
 namespace dbz3::pasarela::b2 {
 namespace {
@@ -186,6 +186,9 @@ struct Datos {
   // < 0 = apagada (bitfield del ELF 0x699260). T5 (0x27F3A0): {fila de T4 del ultimo contacto, suceso (5 = cualquiera),
   // script, cuantas banderas, banderas...}: lo que pasa tras ese combate.
   std::vector<std::vector<int>> t4, t5;
+  // s9b: banderas de la fase (ELF 0x234930, b2.c:188418): al empezar la fase de cero, las banderas 0..cuantas-1 se ponen
+  // al valor de la tabla de bytes del #YDW (+0xB0); las demas (hasta 960) siguen de las fases anteriores.
+  std::vector<uint8_t> band_ini;
   std::vector<std::vector<std::array<int, 6>>> guiones;
   std::vector<Imagen> mapa, fichas, iconos, adornos, loc;
   std::vector<Imagen> shen_frases, shen_marco;   // Shenron: frases (DATA_<idioma> 537) y ventana (CMN 850)
@@ -414,6 +417,8 @@ bool Cargar(int fase) {
   d.ancho = float(u32(0x0C));
   d.alto = float(u32(0x10));
   d.cols = std::max(1, int(u32(0x14) / 256));
+  for (int k = 0, cuantas = u16(0x1C); k < cuantas && k < 960 && 0xB0 + size_t(k) < y.size(); ++k)
+    d.band_ini.push_back(y[0xB0 + size_t(k)]);
   for (uint32_t k = 0; k < n1; ++k) {
     const size_t o = o1 + 52 * size_t(k);
     Casilla c;
@@ -652,9 +657,13 @@ bool Cargar(int fase) {
               d.goku ? "si" : "no");
   if (std::getenv("DBZ3_TEST_B2_DUMP")) {   // PRUEBA: vuelca piezas, disparadores y guiones de la fase
     for (const Ficha& f : d.piezas)
-      REXLOG_INFO("dbz3 b2 dump: pieza {} pj {} ficha {} bando {} mov {} ({}) casilla {}", f.n, f.c, f.idx, f.bando,
-                  f.mov, f.mov_p, f.casilla);
-    for (const auto& t : d.t3) REXLOG_INFO("dbz3 b2 dump: t3 {} {} {} {} {}", t[0], t[1], t[2], t[3], t[4]);
+      REXLOG_INFO("dbz3 b2 dump: pieza {} pj {} ficha {} bando {} mov {} ({}) casilla {} estado0 {} barras {}", f.n, f.c,
+                  f.idx, f.bando, f.mov, f.mov_p, f.casilla, f.estado0, f.barras_max);
+    for (const auto& t : d.t3) {
+      std::string l;
+      for (int v : t) l += std::to_string(v) + " ";
+      REXLOG_INFO("dbz3 b2 dump: t3 {}", l);
+    }
     for (const auto& t : d.t4) {
       std::string l;
       for (int v : t) l += std::to_string(v) + " ";
@@ -821,6 +830,13 @@ void Empezar() {
   g_espera_x = false;
   g_subidas.clear();
   LeerBanderas();   // R7: las de las fases anteriores siguen (FUN_00238870 copia 0x693A1C -> 0x699260)
+  // s9b: ...salvo las 0..cuantas-1 de ESTA fase, que arrancan en el valor del #YDW (ELF 0x234930). Sin esto la 302 que
+  // dejaba la fase IV hacia perder la V al segundo rival (script 306: orden 43).
+  for (size_t k = 0; k < g_d.band_ini.size(); ++k) {
+    uint32_t& w = g_banderas[k >> 5];
+    if (g_d.band_ini[k]) w |= 1u << (k & 31);
+    else w &= ~(1u << (k & 31));
+  }
   g_musica = g_d.musica0;
   for (const auto& t : g_d.t3)   // disparadores del turno 1 (al empezar la fase)
     if (t[0] == -1 && t[1] == 0 && t[2] == 1 && Condiciones(t, 5)) Guion(t[3], 0);
@@ -873,6 +889,8 @@ void SucesosDeContacto(const Ficha& a, const Ficha& b) {
 void SucesosDeCombate(bool gana, bool fuera) {
   if (g_suceso < 0) return;
   const int cod = gana ? (fuera ? 4 : 1) : (fuera ? 3 : 2);
+  REXLOG_INFO("dbz3 tablero b2: resultado del suceso {}: codigo {} (banderas 301={} 302={} 305={})", g_suceso, cod,
+              Bandera(301), Bandera(302), Bandera(305));
   for (const auto& r : g_d.t5) {
     if (r[0] != g_suceso || (r[1] != 5 && r[1] != cod) || !Condiciones(r, 4)) continue;
     REXLOG_INFO("dbz3 tablero b2: tras el suceso {}: script {}", g_suceso, r[2]);
@@ -1537,7 +1555,13 @@ void FaseRival() {
       g_rival_paso = 2;
       g_rival_t = g_ahora;
       g_rival_espera = 0;
-      if (p <= 0) return;
+      // s9b: el rival que no se mueve tambien pasa por el final de su accion (FUN_00235c30 -> FUN_00236830, caso 6 ->
+      // FUN_0027F7E0): los disparadores de casilla (T3) se miran en la casilla en la que se queda. Asi el Cell de la fase V,
+      // puesto en la 7 por el guion 303, arranca su patrulla (guion 333) y deja libre el unico paso hacia la 22.
+      if (p <= 0) {
+        SucesosDeCasilla(r);
+        return;
+      }
       g_rival_lucha = FichaEn(p, false);   // entra en la casilla y, al llegar, combate
       EmpezarPaso(r, p, g_ahora);
       g_rival_espera = TiempoPaso(r);
@@ -1627,6 +1651,90 @@ void Buscar(int i) {
   FinDeAccion();
 }
 
+// s9b (solo para la prueba automatica): disparadores de casilla (T3) que ahora valen para la pieza n. Una "trampa" saca a
+// la pieza del tablero o la recoloca (ordenes 33 / 55 / 57 de su propio guion: fase V, casilla 12 sin la bandera 305 =
+// guion 312, vuelve a la 24); un "final" acaba la fase (ordenes 41 / 42, siguiendo los saltos 44: fase V, casilla 22 con
+// la 305). El automatico las evita / las busca; sin esto la fase V daba vueltas hasta agotar la prueba.
+bool GuionHace(int k, int n, int prof, bool final_) {
+  if (k < 0 || k >= int(g_d.guiones.size()) || prof > 4) return false;
+  for (const auto& o : g_d.guiones[size_t(k)]) {
+    if (final_ ? (o[1] == 41 || o[1] == 42) : ((o[1] == 33 || o[1] == 55 || o[1] == 57) && o[2] == n)) return true;
+    if (o[1] == 44 && GuionHace(o[2], n, prof + 1, final_)) return true;
+  }
+  return false;
+}
+// s9b: el combate de `a` contra el rival `r`, si lo gana, acaba en un guion que PIERDE la fase (orden 43)? (fase V: eliminar al
+// tercer subordinado con las banderas 301 y 302 = guion 306, Majin Bu). El automatico no da ese golpe.
+bool GuionPierde(int k, int prof) {
+  if (k < 0 || k >= int(g_d.guiones.size()) || prof > 4) return false;
+  for (const auto& o : g_d.guiones[size_t(k)]) {
+    if (o[1] == 43) return true;
+    if (o[1] == 44 && GuionPierde(o[2], prof + 1)) return true;
+  }
+  return false;
+}
+// Banderas cuyo conjunto hace perder: las de las condiciones de los sucesos de combate (T5) que acaban en un guion con orden 43.
+// Un contacto "cuesta" si su guion enciende una de ellas (fase V: 301 y 302; el tercer contacto con un subordinado pierde).
+// El lider (Goku) no acepta ese coste (los de los aliados solo cuentan al eliminar, T5 con codigo 4: que peleen ellos) y los
+// aliados lo aceptan mientras quede otra bandera sin encender.
+bool GuionEnciende(int k, const std::vector<int>& L, int prof) {
+  if (k < 0 || k >= int(g_d.guiones.size()) || prof > 4) return false;
+  for (const auto& o : g_d.guiones[size_t(k)]) {
+    if (o[1] == 1 && std::find(L.begin(), L.end(), o[2]) != L.end() && !Bandera(o[2])) return true;
+    if (o[1] == 44 && GuionEnciende(o[2], L, prof + 1)) return true;
+  }
+  return false;
+}
+bool Peligroso(const Ficha& a, const Ficha& r) {
+  int suceso = -1;
+  for (size_t i = 1; i < g_d.t4.size() && suceso < 0; ++i) {   // la misma busqueda que SucesosDeContacto
+    const auto& t = g_d.t4[i];
+    const int ca = t[0] ? PersonajeDe(t[0]) : -1, cb = t[1] ? PersonajeDe(t[1]) : -1;
+    bool vale;
+    if (ca < 0 && cb < 0) vale = false;
+    else if (cb < 0) vale = ca == a.c || ca == r.c;
+    else if (ca < 0) vale = cb == a.c || cb == r.c;
+    else vale = (ca == a.c && cb == r.c) || (ca == r.c && cb == a.c);
+    if (vale && (t[2] == 0 || t[2] == a.casilla || t[2] == r.casilla) && Condiciones(t, 7)) suceso = int(i);
+  }
+  if (suceso < 0) return false;
+  const int cod = r.barras - 1 <= 0 ? 4 : 1;   // gana el jugador, con o sin eliminar al rival
+  int guion = -1;
+  for (const auto& t : g_d.t5)
+    if (t[0] == suceso && (t[1] == 5 || t[1] == cod) && Condiciones(t, 4)) {
+      guion = t[2];
+      break;
+    }
+  if (guion < 0) return false;
+  static std::string ultimo;   // s9b: traza (solo cuando cambia) de por que un contacto se da por peligroso
+  const std::string clave = std::to_string(a.n) + ">" + std::to_string(r.n) + ":" + std::to_string(suceso) + "/" + std::to_string(guion) + "/" +
+                            std::to_string(Bandera(301)) + std::to_string(Bandera(302));
+  if (GuionPierde(guion, 0)) {
+    if (ultimo != clave) REXLOG_INFO("dbz3 tablero b2: peligro: {} contra {}: suceso {} cod {} -> guion {} PIERDE", Nombre(a), Nombre(r), suceso, cod, guion);
+    ultimo = clave;
+    return true;
+  }
+  std::vector<int> L;   // banderas que juntas hacen perder
+  for (const auto& t : g_d.t5)
+    if (GuionPierde(t[2], 0))
+      for (size_t k = 4; k < t.size(); ++k)
+        if (t[k] > 0 && std::find(L.begin(), L.end(), t[k]) == L.end()) L.push_back(t[k]);
+  if (L.empty() || !GuionEnciende(guion, L, 0)) return false;
+  int sin_encender = 0;
+  for (int b : L) sin_encender += !Bandera(b);
+  const bool peligro = (a.c == kGoku && a.bando == 4) || sin_encender <= 1;
+  if (peligro && ultimo != clave) REXLOG_INFO("dbz3 tablero b2: peligro: {} contra {}: suceso {} cod {} -> guion {} enciende banderas de derrota (sin encender {})", Nombre(a), Nombre(r), suceso, cod, guion, sin_encender);
+  if (peligro) ultimo = clave;
+  return peligro;
+}
+bool DisparadorDeCasilla(int c, const Ficha& f, bool final_) {
+  for (const auto& t : g_d.t3) {
+    if (t[2] != 0 || t[0] < 0 || (t[0] != 0 && t[0] != f.n) || t[1] != c || !Condiciones(t, 5)) continue;
+    return GuionHace(t[3], f.n, 0, final_);   // el primero que vale es el que corre (SucesosDeCasilla)
+  }
+  return false;
+}
+
 // Prueba (auto): la ficha elegida del jugador va primero a la Bola de la fase (y la busca si esta enterrada), despues al
 // jefe (por su casilla) y, si no se puede llegar, al rival mas cercano que pueda luchar en B3 (los que solo son de B2 se
 // saltan).
@@ -1656,10 +1764,15 @@ void Auto() {
         while (padre[size_t(p)] != f.casilla) p = padre[size_t(p)];
         return p;
       }
-      for (int v : g_d.casillas[size_t(c)].vec) {
-        if (v <= 0 || padre[size_t(v)] >= 0) continue;
+      // s9b: pisar la alfombra de Mr. Popo (tipo 3) te lleva a su destino (Mover): desde ella solo se sigue por ahi. Sin esto el
+      // camino mas corto de la fase IX pasaba por la 26 y volvia a la 11 para siempre.
+      std::vector<int> alfombra;
+      const Casilla& cc = g_d.casillas[size_t(c)];
+      if (c != f.casilla && cc.tipo == 3 && cc.destino > 0 && FichaEn(cc.destino, true) < 0) alfombra.push_back(cc.destino);
+      for (int v : alfombra.empty() ? std::vector<int>(std::begin(cc.vec), std::end(cc.vec)) : alfombra) {
+        if (v <= 0 || padre[size_t(v)] >= 0 || DisparadorDeCasilla(v, f, false)) continue;
         // un rival que solo es de B2 (Babidi en la fase V, inalcanzable como en el original) tapa su casilla
-        if (const int r = FichaEn(v, true); r >= 0 && B2aB3(g_f[size_t(r)].c) < 0) continue;
+        if (const int r = FichaEn(v, true); r >= 0 && (B2aB3(g_f[size_t(r)].c) < 0 || Peligroso(f, g_f[size_t(r)]))) continue;
         padre[size_t(v)] = c;
         cola.push_back(v);
       }
@@ -1667,24 +1780,65 @@ void Auto() {
     return -1;
   };
   int p = -1;
-  if (bola) p = paso([](int c) { return BolaEn(c) >= 0 && !g_buscada[size_t(c)]; });
+  // s9b: una casilla que acaba la fase para esta pieza (y cuyas banderas ya valen) va antes que nada
+  if (!jefe_antes) p = paso([&](int c) { return DisparadorDeCasilla(c, f, true); });
+  // s9b: los aliados despejan el camino del lider: el rival visible que tapa su ruta (sin contar rivales) hasta la casilla final
+  const bool lider = f.c == kGoku && f.bando == 4;
+  if (p < 0 && !lider && !jefe_antes) {
+    const Ficha* gk = nullptr;
+    for (const Ficha& x : g_f)
+      if (Activa(x) && x.jugador && x.c == kGoku && x.bando == 4) gk = &x;
+    int bloqueo = -1;
+    if (gk) {
+      const size_t n = g_d.casillas.size();
+      std::vector<int> padre(n, -1), cola{gk->casilla};
+      padre[size_t(gk->casilla)] = gk->casilla;
+      int meta = -1;
+      for (size_t q = 0; q < cola.size() && meta < 0; ++q) {
+        const int c = cola[q];
+        if (c != gk->casilla && DisparadorDeCasilla(c, *gk, true)) meta = c;
+        for (int v : g_d.casillas[size_t(c)].vec)
+          if (v > 0 && padre[size_t(v)] < 0 && !DisparadorDeCasilla(v, *gk, false)) {
+            padre[size_t(v)] = c;
+            cola.push_back(v);
+          }
+      }
+      for (int c = meta; c > 0 && c != gk->casilla; c = padre[size_t(c)]) {
+        const int r = FichaEn(c, true);
+        if (r >= 0 && B2aB3(g_f[size_t(r)].c) >= 0) bloqueo = c;   // el mas cercano al lider queda al final
+      }
+    }
+    if (bloqueo > 0) p = paso([&](int c) { return c == bloqueo; });
+  }
+  if (p < 0 && bola) p = paso([](int c) { return BolaEn(c) >= 0 && !g_buscada[size_t(c)]; });
   if (p < 0 && jefe) p = paso([](int c) { return c == g_f[size_t(g_jefe)].casilla; });
-  if (p < 0) p = paso([](int c) {
+  if (p < 0) p = paso([&](int c) {
     const int r = FichaEn(c, true);
-    return r >= 0 && B2aB3(g_f[size_t(r)].c) >= 0;
+    return r >= 0 && B2aB3(g_f[size_t(r)].c) >= 0 && !Peligroso(f, g_f[size_t(r)]);
   });
   // s9: sin Bola, jefe ni rival visible, el original obliga a BUSCAR: los rivales escondidos (Ginyu, Freezer en la fase 2)
   // solo salen al buscar en su casilla. Antes el automatico se quedaba quieto para siempre (128 turnos en la fase 2).
   if (p < 0) {
-    auto escondido = [](int c) {
-      if (g_buscada[size_t(c)]) return false;
+    // s9b: primero los escondidos de bando 6 (el "ayudante": Kaio-shin de la fase V, que abre el camino con su derrota); los
+    // demas despues. Buscar antes al subordinado mas cercano llevaba a eliminar a los tres y perder la fase V (guion 306).
+    for (int pasada = 0; pasada < 2 && p < 0; ++pasada) {
+      auto escondido = [&](int c) {
+        if (g_buscada[size_t(c)]) return false;
+        for (const Ficha& x : g_f)
+          if (!x.jugador && x.oculta && !x.fuera && x.casilla == c && !Peligroso(f, x) && (pasada == 1 || x.bando == 6))
+            return true;
+        return false;
+      };
+      if (escondido(f.casilla)) return Buscar(g_sel);
+      p = paso(escondido);
+    }
+    if (p < 0) {
+      std::string e;   // s9b: estado para saber por que (rivales y si son peligrosos para esta pieza)
       for (const Ficha& x : g_f)
-        if (!x.jugador && x.oculta && !x.fuera && x.casilla == c) return true;
-      return false;
-    };
-    if (escondido(f.casilla)) return Buscar(g_sel);
-    p = paso(escondido);
-    if (p < 0) REXLOG_INFO("dbz3 tablero b2: automatico: {} no tiene a donde ir", Nombre(f));
+        if (!x.fuera && (x.rival || x.oculta)) e += " " + Nombre(x) + "@" + std::to_string(x.casilla) + (x.oculta ? "(oculto)" : "") +
+                                                 (x.rival && !x.oculta && Peligroso(f, x) ? "(peligro)" : "");
+      REXLOG_INFO("dbz3 tablero b2: automatico: {} en {} no tiene a donde ir;{}", Nombre(f), f.casilla, e);
+    }
   }
   if (p > 0) return Mover(g_sel, p);
   f.movs = 0;
@@ -3386,6 +3540,122 @@ void Resultado(int ganador, int vida) {
   FinDeAccion();
 }
 
+// s9b: la ayuda de abajo del tablero del original (medida en PCSX2, savestates 3 y 4 de la fase I): una banda oscura y
+// difuminada de ~24 px de alto (y 394-417 del lienzo de 448) a todo el ancho, con las frases en blanco que pasan de derecha a
+// izquierda sin parar (~72 px/s = 1,2 px por cuadro; medido: 125 px en 1,7 s) y su boton delante. Cambia con el modo: elegir
+// ficha o elegir casilla destino. El marcador de madera ("DRAGON WORLD") la tapa por la izquierda cuando esta puesto.
+void AyudaMarquesina(ImDrawList* dl, const S::Area& a, float t) {
+  struct Frase {
+    const char* boton;
+    std::string texto;
+  };
+  const bool destino = g_dest > 0;
+  const std::vector<Frase> frases =
+      destino ? std::vector<Frase>{{"B", T::T("Quedarse quieto", "No Activity but Standing by")},
+                                   {"X", T::T("Buscar en la casilla", "Search Map Points")},
+                                   {"A", T::T("Ir a la casilla elegida", "Final Selection on the Map Point where You are Going")},
+                                   {"Y", T::T("Volver", "Back")},
+                                   {"", T::T("Elegir la casilla a la que ir", "Select the Map Point Where You are Going")}}
+              : std::vector<Frase>{{"", T::T("Elegir ficha y casilla", "Select a Play Character")},
+                                   {"LB", T::T("Radar del Dragón sí/no", "Dragon Radar on/off")},
+                                   {"RB", T::T("Cambiar de personaje", "Change Character")},
+                                   {"Y", T::T("Menú", "Menu")},
+                                   {"A", T::T("Elegir la ficha", "Final Selection on a Play Character")}};
+  const Lienzo L = LienzoDe(a);
+  const float xl = (!g_hud_oculto && g_radar) ? L.P(272, 0).x : 0.0f, xr = ImGui::GetIO().DisplaySize.x;   // la banda va a todo el ancho de la ventana
+  const float y0 = 394.0f, y1 = 418.0f, h = 20.0f * L.s;
+  ImFont* fuente = ImGui::GetFont();
+  const float tam = 18.0f * L.s;
+  // banda: 3 franjas (borde de arriba, centro, borde de abajo) para el difuminado
+  const float ya = L.P(0, y0).y, yb = L.P(0, y1).y, borde = 3.0f * L.s;
+  dl->PushClipRect(ImVec2(xl, ya - borde), ImVec2(xr, yb + borde), true);
+  dl->AddRectFilledMultiColor(ImVec2(xl, ya - borde), ImVec2(xr, ya + borde), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 96), IM_COL32(0, 0, 0, 96));
+  dl->AddRectFilled(ImVec2(xl, ya + borde), ImVec2(xr, yb - borde), IM_COL32(0, 0, 0, 96));
+  dl->AddRectFilledMultiColor(ImVec2(xl, yb - borde), ImVec2(xr, yb + borde), IM_COL32(0, 0, 0, 96), IM_COL32(0, 0, 0, 96), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
+  // largo de una vuelta
+  const float hueco = 70.0f * L.s;
+  std::vector<float> ancho;
+  float total = 0;
+  for (const Frase& f : frases) {
+    float w = fuente->CalcTextSizeA(tam, FLT_MAX, 0, f.texto.c_str()).x;
+    if (f.boton[0]) w += S::Glyph(nullptr, f.boton, ImVec2(), h) + 4.0f * L.s;
+    ancho.push_back(w);
+    total += w + hueco;
+  }
+  const float vel = 72.0f * L.s;
+  const float visible = xr - xl;
+  const float desde = xr - std::fmod(t * vel, total + visible);
+  const float cy = L.P(0, (y0 + y1) * 0.5f).y;
+  for (int vuelta = 0; vuelta < 2; ++vuelta) {
+    float x = desde + float(vuelta) * (total + visible);
+    for (size_t i = 0; i < frases.size(); ++i) {
+      const Frase& f = frases[i];
+      float xt = x;
+      if (x + ancho[i] > xl && x < xr) {
+        if (f.boton[0]) xt += S::Glyph(dl, f.boton, ImVec2(x, cy), h) + 4.0f * L.s;
+        const ImVec2 ts = fuente->CalcTextSizeA(tam, FLT_MAX, 0, f.texto.c_str());
+        const ImVec2 pos(xt, cy - ts.y * 0.5f);
+        dl->AddText(fuente, tam, ImVec2(pos.x + 1.2f * L.s, pos.y + 1.2f * L.s), IM_COL32(0, 0, 0, 200), f.texto.c_str());
+        dl->AddText(fuente, tam, pos, IM_COL32(245, 245, 245, 255), f.texto.c_str());
+      }
+      x += ancho[i] + hueco;
+    }
+  }
+  dl->PopClipRect();
+}
+
+// s9b: el menu del tablero (DWU_MMAIN, ELF 0x2A35F0) y su Si/No (DWU_YN*, 0x2A2C90), piezas del CMN 402. Sale de la funcion de
+// dibujo para poder abrirse en CUALQUIER momento de la fase (guiones, ventanas, eleccion de aliados, fase enemiga, tarjeta del
+// combate): antes solo se abria con el tablero libre y el jugador se quedaba sin poder salir. 1 = salir del modo.
+int MenuTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed) {
+    const Lienzo L = LienzoDe(a);
+    const float c = (t - g_menu_t) * 60.0f / Lento();
+    const ImU32 apagado = IM_COL32(110, 110, 130, 255);
+    dl->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize, IM_COL32(0, 0, 0, 90));
+    if (g_menu == 1 && c < 10) {   // la caja se abre (97: su alto de 0 a 0,8 en 10 cuadros)
+      DibHudSp(dl, 97, L, c);
+    } else if (g_menu == 2 && c < 10) {   // y la del Si/No (110: su ancho de 0 a 1)
+      DibHudSp(dl, 110, L, c);
+    } else if (g_menu == 1) {   // caja (98) con "Salir" (106) y "¿Reiniciar Mundo Dragon?" (107)
+      DibHudSp(dl, 98, L);
+      for (int i = 0; i < 2; ++i) DibHudSp(dl, 106 + i, L, -1, i == g_menu_sel ? IM_COL32_WHITE : apagado);
+    } else {   // caja (111), pregunta (113 + mensaje: salir / empezar de nuevo), "Si" (116), "No" (117) y la flecha (118)
+      DibHudSp(dl, 111, L);
+      DibHudSp(dl, 113 + g_menu_sel, L);
+      for (int i = 0; i < 2; ++i) DibHudSp(dl, 116 + i, L, -1, i == g_yn_sel ? IM_COL32_WHITE : apagado);
+      if (g_d.hud_ama.size() > 118) {   // ponytail: la flecha a la izquierda de la opcion (su ancla exacta, sin leer)
+        const Datos::Sprite &op = g_d.hud_ama[size_t(116 + g_yn_sel)], &fl = g_d.hud_ama[118];
+        DibHudSp(dl, 118, L, std::fmod(c, 15.0f), IM_COL32_WHITE, op.px + op.x0 - 18 - fl.px, op.py - fl.py);
+      }
+    }
+    S::HelpLine(dl, a.At(600, 878), 38 * a.s, {{"A", T::T("Aceptar", "OK")}, {"Y", T::T("Volver", "Back")}});
+    if (pressed & (kUp | kDown)) {
+      (g_menu == 1 ? g_menu_sel : g_yn_sel) ^= 1;
+    } else if (pressed & kA) {
+      if (g_menu == 1) {
+        g_menu = 2;
+        g_yn_sel = 1;   // el original empieza en "No" (+0x44 = 1)
+        g_menu_t = t;
+      } else if (g_yn_sel == 1) {
+        g_menu = 1;
+      } else if (g_menu_sel == 0) {
+        REXLOG_INFO("dbz3 tablero b2: menu: salir del Mundo Dragon");
+        g_menu = 0;
+        return 1;
+      } else {   // empezar de nuevo: el original borra la partida del Mundo Dragon (0x693A1C, 0x9C bytes)
+        REXLOG_INFO("dbz3 tablero b2: menu: reiniciar el Mundo Dragon");
+        g_menu = 0;
+        g_bolas = 0;
+        GuardarProgreso("tablero_b2_bolas", 0);
+        GuardarProgreso("tablero_b2_fase", 0);  GuardarBanderas(true);
+        if (Cargar(0)) Preparar();
+      }
+    } else if (pressed & (kY | kStart | kB)) {
+      g_menu = g_menu == 2 ? 1 : 0;
+    }
+    return 0;
+}
+
 // 0 nada, 1 salir, 2 combate: out = {jugador, rival (IDs de B3), mapa de B3, vida que le queda al jugador, vida del
 // rival (< 0 = solo la inicial), condicion de la casilla (1-5, ver T1)}.
 int DibujarTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool auto_on, int out[8]) {
@@ -3406,8 +3676,10 @@ int DibujarTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, 
     DibTarjeta(dl, a, t, (t - t0) * 60.0f, std::atoi(v), goku);
     return 0;
   }
-  if (g_estado == kJuego) CorrerHilos();
-  if (auto_on && !HilosOcupados() && !EscenaAbierta() && t - g_auto_t > 1.4f) {
+  uint16_t mando = pressed;   // s9b: con el menu abierto el resto de la pantalla no recibe pulsaciones ni avanza
+  if (g_menu > 0) pressed = 0;
+  if (g_estado == kJuego && g_menu == 0) CorrerHilos();
+  if (auto_on && g_menu == 0 && !HilosOcupados() && !EscenaAbierta() && t - g_auto_t > 1.4f) {
     g_auto_t = t;
     if (g_estado == kGanada || g_estado == kPerdida) pressed |= kA;
     else Auto();
@@ -3450,14 +3722,14 @@ int DibujarTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, 
   if (!prepara && g_mensajes.empty() && g_premio_id > 0) {   // orden 70: ventana "Get skill!" (la de la nave)
     if (g_premio_t < 0) g_premio_t = t;
     const float c = (t - g_premio_t) * 60.0f;
-    dbz3::pasarela::nave::VentanaPremio(dl, a, g_premio_id, c);
-    S::HelpLine(dl, a.At(600, 878), 34 * a.s, {{"A", T::T("Seguir", "Continue")}});
-    // A cierra la ventana (en el original, la ficha de la capsula que abre FUN_00292660 espera al boton). [H] el minimo de
-    // 30 cuadros antes de aceptar A: el cartel pide su segundo sonido a los 30 (FUN_002A3E90).
-    // PRUEBA: DBZ3_TEST_B2_VENTANA=s deja la ventana s segundos en la prueba automatica (para capturarla; 2,5 por defecto)
+    // s9b: cartel "Get skill!" y despues la ficha de la capsula (Skill Z Sheet), como en el original (medido en PCSX2): A salta el
+    // cartel, X / cruceta da la vuelta a la ficha y A / Y la cierran. [H] el minimo de 30 cuadros antes de aceptar A: el cartel
+    // pide su segundo sonido a los 30 (FUN_002A3E90).
+    // PRUEBA: DBZ3_TEST_B2_VENTANA=s deja la ventana s segundos en la prueba automatica (para capturarla; 4 por defecto)
     static const float auto_s = std::getenv("DBZ3_TEST_B2_VENTANA") ? float(std::atof(std::getenv("DBZ3_TEST_B2_VENTANA")))
-                                                                     : 2.5f;
-    if (((pressed & kA) && c >= 30) || (auto_on && t - g_premio_t > auto_s)) {
+                                                                     : 4.0f;
+    const bool cierra = dbz3::pasarela::nave::VentanaPremio(dl, a, g_premio_id, c, pressed, auto_on && t - g_premio_t > auto_s - 1.2f);
+    if (cierra) {
       dbz3::pasarela::nave::GanarCapsula(g_premio_id);
       REXLOG_INFO("dbz3 tablero b2: orden 8/70: ventana cerrada, capsula {} al inventario", g_premio_id);
       g_premio_id = 0;
@@ -3501,6 +3773,23 @@ int DibujarTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, 
   DibHud(dl, a, t);
   DibAviso(dl, a, t);
   DibEscena(dl, a, t, pressed);
+  if (g_estado == kJuego && !g_luchando) {   // s9b: salida siempre posible: Y (triangulo) abre el menu en cualquier momento;
+    // START tambien donde no es "aceptar" (guiones, ventanas, fase enemiga)
+    const bool start_libre = g_fase_rival || HilosOcupados() || EscenaAbierta() || !g_mensajes.empty() || g_premio_id > 0 ||
+                             g_espera_x;
+    if (g_menu == 0 && ((mando & kY) || ((mando & kStart) && start_libre)) && t - g_turno_t >= 0.6f) {
+      g_menu = 1;
+      g_menu_sel = 0;
+      g_menu_t = t;
+      REXLOG_INFO("dbz3 tablero b2: menu abierto");
+      pressed = 0;
+      mando = 0;
+    }
+    if (g_menu > 0) return MenuTablero(dl, a, t, mando) ? 1 : 0;
+    if (g_menu == 0 && (start_libre || g_elegir > 0)) {   // recordatorio de como salir donde la ayuda de abajo no sale
+      S::HelpLine(dl, a.At(1040, 878), 30 * a.s, {{"Y", T::T("Menú / Salir", "Menu / Quit")}});
+    }
+  }
   if (g_estado == kJuego && g_elegir > 0 && !EscenaAbierta() && g_mensajes.empty()) {
     // orden 69: como el original (tarea 0x2A2550), las fichas libres en fila y "quedan N"; A elige, las elegidas salen
     // al tablero en su casilla del #YDW. ponytail: el panel es propio (la ventana DWU del original, CMN 402, sin portar)
@@ -3930,59 +4219,10 @@ int DibujarTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, 
     return 2;
   }
   if (g_pend_j >= 0) return 0;
-  if (g_menu > 0) {   // menu del tablero (DWU_MMAIN, ELF 0x2A35F0) y su Si/No (DWU_YN*, 0x2A2C90), piezas del CMN 402
-    const Lienzo L = LienzoDe(a);
-    const float c = (t - g_menu_t) * 60.0f / Lento();
-    const ImU32 apagado = IM_COL32(110, 110, 130, 255);
-    dl->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize, IM_COL32(0, 0, 0, 90));
-    if (g_menu == 1 && c < 10) {   // la caja se abre (97: su alto de 0 a 0,8 en 10 cuadros)
-      DibHudSp(dl, 97, L, c);
-    } else if (g_menu == 2 && c < 10) {   // y la del Si/No (110: su ancho de 0 a 1)
-      DibHudSp(dl, 110, L, c);
-    } else if (g_menu == 1) {   // caja (98) con "Salir" (106) y "¿Reiniciar Mundo Dragon?" (107)
-      DibHudSp(dl, 98, L);
-      for (int i = 0; i < 2; ++i) DibHudSp(dl, 106 + i, L, -1, i == g_menu_sel ? IM_COL32_WHITE : apagado);
-    } else {   // caja (111), pregunta (113 + mensaje: salir / empezar de nuevo), "Si" (116), "No" (117) y la flecha (118)
-      DibHudSp(dl, 111, L);
-      DibHudSp(dl, 113 + g_menu_sel, L);
-      for (int i = 0; i < 2; ++i) DibHudSp(dl, 116 + i, L, -1, i == g_yn_sel ? IM_COL32_WHITE : apagado);
-      if (g_d.hud_ama.size() > 118) {   // ponytail: la flecha a la izquierda de la opcion (su ancla exacta, sin leer)
-        const Datos::Sprite &op = g_d.hud_ama[size_t(116 + g_yn_sel)], &fl = g_d.hud_ama[118];
-        DibHudSp(dl, 118, L, std::fmod(c, 15.0f), IM_COL32_WHITE, op.px + op.x0 - 18 - fl.px, op.py - fl.py);
-      }
-    }
-    S::HelpLine(dl, a.At(600, 878), 38 * a.s, {{"A", T::T("Aceptar", "OK")}, {"Y", T::T("Volver", "Back")}});
-    if (pressed & (kUp | kDown)) {
-      (g_menu == 1 ? g_menu_sel : g_yn_sel) ^= 1;
-    } else if (pressed & kA) {
-      if (g_menu == 1) {
-        g_menu = 2;
-        g_yn_sel = 1;   // el original empieza en "No" (+0x44 = 1)
-        g_menu_t = t;
-      } else if (g_yn_sel == 1) {
-        g_menu = 1;
-      } else if (g_menu_sel == 0) {
-        REXLOG_INFO("dbz3 tablero b2: menu: salir del Mundo Dragon");
-        g_menu = 0;
-        return 1;
-      } else {   // empezar de nuevo: el original borra la partida del Mundo Dragon (0x693A1C, 0x9C bytes)
-        REXLOG_INFO("dbz3 tablero b2: menu: reiniciar el Mundo Dragon");
-        g_menu = 0;
-        g_bolas = 0;
-        GuardarProgreso("tablero_b2_bolas", 0);
-        GuardarProgreso("tablero_b2_fase", 0);  GuardarBanderas(true);
-        if (Cargar(0)) Preparar();
-      }
-    } else if (pressed & (kY | kStart | kB)) {
-      g_menu = g_menu == 2 ? 1 : 0;
-    }
-    return 0;
-  }
+  if (g_menu > 0) return 0;   // el menu ya se atendio arriba (MenuTablero)
   // botones de B2 (ELF, control del tablero): cruz mueve, cuadrado busca, circulo (B) pasa, triangulo o Start (Y) abren el
   // menu, L1 esconde o saca el marcador de abajo. RB cambia de ficha (propio).
-  S::HelpLine(dl, a.At(870, 878), 38 * a.s, {{"A", T::T("Mover", "Move")}, {"X", T::T("Buscar", "Search")},
-                                             {"B", T::T("Pasar", "Pass")}, {"LB", T::T("Radar", "Radar")},
-                                             {"RB", T::T("Personaje", "Character")}, {"Y", T::T("Menú", "Menu")}});
+  AyudaMarquesina(dl, a, t);
   if (t - g_turno_t < 0.6f) return 0;   // entrada del rombo del turno: sin mandos (asi no se encadenan turnos con B)
   if (pressed & (kY | kStart)) {
     g_menu = 1;

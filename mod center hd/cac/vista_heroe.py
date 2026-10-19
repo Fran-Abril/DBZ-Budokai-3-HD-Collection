@@ -550,7 +550,36 @@ def pintar_logo(out, model, P, zonas, ti, logo, disco):
     return n
 
 
-def injertar_ficha(amb, pieza, model=None, P=None, zonas=None, c1=CERO, c2=CERO):
+def scouter_extras(model, P, zonas):
+    """El scouter de la vista previa (lente + pieza de la oreja + brazo: tres cajas) como piezas rigidas a la cabeza
+    para injertar_pelo (color liso: la lente es verde opaca, no translucida). Mismas medidas que ficha_malla."""
+    cara = [i for i, z in enumerate(zonas) if z == "cara"]
+    if not cara:
+        return []
+    vs = np.unique(model.tris[cara].reshape(-1))
+    flo, fhi = P[vs].min(0), P[vs].max(0)
+    w = fhi[0] - flo[0]
+    y = flo[1] + (fhi[1] - flo[1]) * 0.55
+    ojo = np.array([flo[0] + w * 0.22, y, fhi[2] + w * 0.04])
+    oreja = np.array([flo[0] - w * 0.02, y, (flo[2] + fhi[2]) / 2 + w * 0.12])
+    brazo = (oreja + ojo) / 2
+    cajas = [((0.15, 0.95, 0.35), _caja(ojo, w * 0.2, w * 0.13, w * 0.015)),
+             ((0.75, 0.75, 0.8), _caja(oreja, w * 0.06, w * 0.16, w * 0.14)),
+             ((0.75, 0.75, 0.8), _caja(brazo, abs(ojo[0] - oreja[0]) / 2, w * 0.02,
+                                       abs(ojo[2] - oreja[2]) / 2 + w * 0.02))]
+    out = []
+    for rgb, tris in cajas:
+        Pp, Nn, tt = [], [], []
+        for (a, b, c, n) in tris:
+            k = len(Pp)
+            Pp += [a[0], b[0], c[0]]
+            Nn += [n, n, n]
+            tt.append((k, k + 1, k + 2))
+        out.append({"P": np.array(Pp), "N": np.array(Nn, float), "tris": tt, "rgb": rgb})
+    return out
+
+
+def injertar_ficha(amb, pieza, model=None, P=None, zonas=None, c1=CERO, c2=CERO, scouter=0, reserva=0):
     """Combate: el peinado UT (pieza) pegado a la cabeza del #AMB del cuerpo, con el pelo nativo quitado
     (awo_tools/injertar_pelo.py). `amb` ya lleva los colores de la ficha cocidos. Devuelve (bytes, resumen)."""
     import injertar_pelo as ip  # noqa: PLC0415
@@ -561,9 +590,20 @@ def injertar_ficha(amb, pieza, model=None, P=None, zonas=None, c1=CERO, c2=CERO)
         P, _ = model.posed(pose)
     if zonas is None:
         zonas = zonas_ficha(model, P)
-    pm, PP, PN, u, esc, Q = ajustar_pelo(model, P, zonas, pieza, pose)
+    if pieza:
+        pm, PP, PN, u, esc, Q = ajustar_pelo(model, P, zonas, pieza, pose)
+        tris_ut = pm.tris
+    else:                      # solo scouter: sin peinado nuevo (el pelo nativo se queda)
+        Q = PN = np.zeros((0, 3))
+        tris_ut = []
     rgb = lambda c: None if tuple(c) == CERO else tuple(float(x) for x in _hsv_rgb(*[np.array(x) for x in objetivo(c)]))  # noqa: E731
-    return ip.injertar(amb, model, [z == "pelo" for z in zonas], Q, PN, pm.tris, rgb1=rgb(c1), rgb2=rgb(c2))
+    return ip.injertar(amb, model, [z == "pelo" for z in zonas], Q, PN, tris_ut, rgb1=rgb(c1), rgb2=rgb(c2),
+                       cara_mask=[z == "cara" for z in zonas], presupuesto=ip.WINDOW_BUDGET - reserva,
+                       extras=scouter_extras(model, P, zonas) if scouter else None)
+
+
+# ficha.ropa -> prenda de Xenoverse (HUM_<item>_Bust del data.cpk del jugador); 0 = la nativa del cuerpo
+PRENDAS = {1: {"item": "500", "malla": "dougi", "lod": "02", "rgb": (0.93, 0.45, 0.06)}}
 
 
 def combate_bin(amb, ficha, juego=None):
@@ -636,14 +676,28 @@ def combate_bin(amb, ficha, juego=None):
     r.update(texturas_tenidas=hechas, no_dxt3=saltadas)
     pelo = int(ficha.get("pelo", 0))
     pieza = buscar_pelo(juego, pelo) if pelo > 0 else None
-    if pieza:   # peinado UT en el combate: geometria nueva pegada a la cabeza (Via B, TABLE de paleta intacta)
+    scouter = int(ficha.get("scouter", 0))
+    if pieza or scouter:   # peinado UT / scouter en el combate: geometria nueva pegada a la cabeza (TABLE de paleta intacta)
         try:
-            amb2, ri = injertar_ficha(bytes(amb), pieza, model, P, zonas, c1, c2)
+            amb2, ri = injertar_ficha(bytes(amb), pieza, model, P, zonas, c1, c2, scouter,
+                                      reserva=450 if int(ficha.get("ropa", 0)) in PRENDAS else 0)   # ventanas para la prenda
             amb, r["pelo"] = bytearray(amb2), ri
         except Exception as e:   # noqa: BLE001 (sin injerto: el combate sale con el pelo nativo tenido)
             r["pelo"] = "FALLO %s: %s" % (type(e).__name__, e)
-    elif pelo > 0:
+    if pelo > 0 and not pieza:
         r["pelo"] = "pieza %d no encontrada: pelo nativo" % pelo
+    prenda = PRENDAS.get(int(ficha.get("ropa", 0)))
+    if prenda:   # studies 9b: prenda real de Xenoverse (del data.cpk del jugador), multi-hueso, con su textura
+        try:
+            import ropa_xeno as rx  # noqa: PLC0415
+            c0 = tuple(partes[0])
+            rgb = tuple(float(x) for x in _hsv_rgb(*[np.array(x) for x in objetivo(c0)])) if c0 != CERO else prenda["rgb"]
+            amb2, rr = rx.injertar_prenda(bytes(amb), rgb, prenda["item"], prenda["malla"], prenda["lod"])
+            amb, r["ropa"] = bytearray(amb2), rr
+        except FileNotFoundError as e:   # sin Xenoverse instalado: se queda la ropa nativa
+            r["ropa"] = "sin prenda: %s" % e
+        except Exception as e:   # noqa: BLE001
+            r["ropa"] = "FALLO %s: %s" % (type(e).__name__, e)
     return bytes(amb), r
 
 
@@ -674,6 +728,14 @@ def escribir_personaje_propio(juego, slot, ficha, args_txt, datos, r, fid):
         if os.path.isdir(d):
             open(os.path.join(d, ".disabled"), "w").close()
     r.update(fid=fid, mod=mod, id_pedido=ID_HEROE, donante=int(ficha.get("donante", 0)), nombre=nombre)
+    # studies 9b: su cara (ui/_vista/icono.png, del propio modelo) para la franja de la escena de saga (pasarela::CaraDe)
+    try:
+        import subprocess  # noqa: PLC0415
+        cmd = [sys.executable, rb.__file__, "vista", "--mods", os.path.join(juego, "mods"), "--mod", MOD_HEROE,
+               "--solo", "icono"]
+        r["cara"] = "ok" if subprocess.run(cmd, capture_output=True, timeout=120).returncode == 0 else "FALLO"
+    except Exception as e:   # noqa: BLE001 (sin cara propia: la franja usa la del cuerpo)
+        r["cara"] = "FALLO %s" % e
     return r
 
 

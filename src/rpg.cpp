@@ -993,6 +993,11 @@ bool CombateDeJefe(const Run& r) {
   const std::string n = H::NotaCombate(r.tecnicas, r.ganados);
   return n == "jefe" || n == "gigante" || n == "pierde" || r.ganados == H::Combates(r.tecnicas) - 1;
 }
+// studies 9b: el retrato de las escenas es el del propio heroe (ID propio, su icono renderizado de su modelo); sin el, el del cuerpo
+int CaraHeroe() {
+  const int id = H::IdPropio();
+  return id >= 0 ? id : H::Cuerpo();
+}
 void EscenaJefe(const Run& r, dbz3::cinematica::Escena& e) {
   namespace C = dbz3::cinematica;
   int id = 0, vida = 0, esc = 0;
@@ -1021,7 +1026,8 @@ void EscenaJefe(const Run& r, dbz3::cinematica::Escena& e) {
   p.segundos = 4.5f;
   p.plano = C::kLado1;
   p.anim[0] = C::kPoseEntrada1;
-  p.cara = H::Cuerpo();
+  p.cara = CaraHeroe();
+  p.cara_alt = H::Cuerpo();
   p.linea = L("¡Voy a devolver la paz a la Tierra, cueste lo que cueste!",
               "I will bring peace back to Earth, whatever it takes!",
               "Je ramenerai la paix sur Terre, quoi qu'il en coute !",
@@ -1041,7 +1047,8 @@ void EscenaSaga(const Run& r, dbz3::cinematica::Escena& e) {
     C::Paso p;
     p.segundos = 4.5f;
     p.plano = C::kGeneral;
-    p.cara = H::Cuerpo();
+    p.cara = CaraHeroe();
+    p.cara_alt = H::Cuerpo();
     p.linea = l;
     e.pasos.push_back(p);
   }

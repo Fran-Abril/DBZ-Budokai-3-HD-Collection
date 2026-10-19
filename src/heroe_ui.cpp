@@ -646,7 +646,8 @@ void PedirCombate() {
   REXLOG_INFO("dbz3 heroe: el heroe propio de la ficha {}: se monta ({})", H::FichaNumero(), args);
   const std::string con_donante = args + ";donante=" + Num(H::DonanteCombate());
   GenerarCon("combate_" + ClaveFicha(args),
-             L"--ficha \"" + fs::path(con_donante).wstring() + L"\" --combate " + fs::path(Num(H::FichaNumero())).wstring(),
+             // studies 9b: UTF-8 -> UTF-16 (fs::path(std::string) usa la pagina ANSI y rompe los acentos del nombre)
+             L"--ficha \"" + fs::u8path(con_donante).wstring() + L"\" --combate " + fs::path(Num(H::FichaNumero())).wstring(),
              hecho);
 }
 

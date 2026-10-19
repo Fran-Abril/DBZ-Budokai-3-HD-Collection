@@ -132,3 +132,14 @@ Sin las imágenes del banco (ISO de otra región con otra disposición) el modo 
 | ~~Cinemáticas de entrada y final~~ | revisado (ronda 3): la ISO europea **no trae ningún vídeo** (ni PSS/SFD/IPU/M2V, ni dentro de los AFS; el ELF no nombra ninguno; listado en `E:\DBZ3HD_trabajo\D\`). La "entrada" (`SATAN DEMO MAIN`) y el final (`SATAN CLEAR MAIN`, "# CLEAR #") son pantallas del motor con las imágenes 666/668/669, que ya se enseñan: título con "Pulsa START" (666 #5) → letrero de dificultad → charlas → resultado → total (668 #18). Los créditos (`endcredits.c`) son los generales del juego, no del modo. La 669 #20 ("Estos son tus puntos y la contraseña") y #21 (web de 2002) no se usan: la contraseña era para una web que ya no existe | — |
 | ~~Voces de Mr. Satán en las charlas~~ | hecho (P3, 2026-10-16): la voz japonesa del original (mapa en §2.1) suena en cada charla y en el título (ADX decodificado en marcha; Windows, por winmm, aparte de la mezcla del juego) | — |
 | ISO americana de B1 | probar la firma de la tabla y del banco (no hay copia en disco) | bajo |
+
+## Escenas 3D de introducción (s9b, 2026-10-19; medidas con PCSX2 a cámara lenta)
+La entrada de B1 sí tiene escenas 3D (la nota "no trae vídeos" de arriba solo habla de vídeos). La ronda 1 lleva la escena larga de
+los Juegos de Cell (~60 s: reportero, ring, Cell, Goku, el coche y Mr. Satán con mochila y humo) y de la 2 a la 11 el combate trae la
+presentación normal de B1: Mr. Satán desde abajo con los brazos abiertos (~2,6 s, sube desde negro) y el retador de cerca (~2,3 s) y
+"READY?". En el puerto (`pasarela.cpp`, `EscenaCell`, `TomasPresentacion`): las dos tomas van al final de cada escena (tras la
+charla en 3D) con la cámara en el marco de los luchadores (`cinematica::Paso::rel`); la ronda 1 lleva una versión recortada de los
+Juegos de Cell con solo Mr. Satán y el ring (el motor de B3 tiene dos luchadores por combate: faltan Cell, Goku, el reportero y el
+coche). Pendiente: Cell/Goku con un combate previo "solo escena" (Goku contra Cell) y el ring de Cell intacto de B1
+(`escenarios_convertir.py mod 11 --juego b1` ya convierte; el juego solo pinta el objeto 0 de las altas: faltan el suelo del ring y
+las columnas, que van en el objeto 1).

@@ -110,8 +110,10 @@ def find_iso(*patterns):
 def iw_dir():
     """Infinite World: carpeta extraida o ISO (cualquier region)."""
     # sin distinguir mayusculas (Linux): "infinite world", ".ISO"...
-    hits = sorted((p for p in glob.glob(os.path.join(PS2, "*")) if "infinite world" in os.path.basename(p).lower()),
-                  key=lambda p: not os.path.isdir(p))
+    import iso  # noqa: PLC0415  (ruta_destino: el '.ruta' que deja "Elegir ISO" del launcher)
+    hits = sorted((iso.ruta_destino(p) for p in glob.glob(os.path.join(PS2, "*")) if "infinite world" in os.path.basename(p).lower()),
+                  key=lambda p: not (p and os.path.isdir(p)))
+    hits = [p for p in hits if p]
     return next((p for p in hits if os.path.isdir(os.path.join(p, "USR")) or os.path.isdir(os.path.join(p, "usr"))
                  or p.lower().endswith(".iso")), None)
 

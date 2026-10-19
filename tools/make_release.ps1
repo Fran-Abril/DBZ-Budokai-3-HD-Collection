@@ -218,17 +218,28 @@ if (Test-Path -LiteralPath $modcenter) {
     New-Item -ItemType Directory -Path $cacd -Force | Out-Null
     $vh = Join-Path $modcenter "cac\vista_heroe.py"
     if (Test-Path -LiteralPath $vh) { Copy-Item -LiteralPath $vh (Join-Path $cacd "vista_heroe.py") }
+    # studies 9b: prenda de Xenoverse (lee el data.cpk del propio jugador; no se publica nada del juego)
+    $rx = Join-Path $modcenter "cac\ropa_xeno.py"
+    if (Test-Path -LiteralPath $rx) { Copy-Item -LiteralPath $rx (Join-Path $cacd "ropa_xeno.py") }
     foreach ($f in @("model_render","roster_build","capsulas","colores","gritos","hornada_support","voces")) {
         $src = Join-Path $modcenter "$f.py"
         if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src (Join-Path $mcd "$f.py") }
     }
     $libd = Join-Path $mcd "lib"
     New-Item -ItemType Directory -Path $libd -Force | Out-Null
-    foreach ($f in @("awg_vertex_buffer","b3_gateway","skin_slots","injertar_pelo")) {
+    foreach ($f in @("awg_vertex_buffer","b3_gateway","skin_slots","injertar_pelo","injertar_ropa","xeno_model","crilayla","cri")) {
         $src = Join-Path $root "awo_tools\$f.py"
         if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src (Join-Path $libd "$f.py") }
     }
 }
+
+# 1.5.1.2: escenarios de PS2 (B1/B2/IW desde las ISO del jugador, al pulsar JUGAR) y vista previa del Modo Heroe
+# SIN Kit ni Python instalados. make_modpacks.py --game-stage anade al stage los scripts con TODOS sus imports
+# (mod center hd/ y awo_tools/, las mismas rutas que el Kit), sus datos y python\ portatil (numpy + Pillow; el
+# launcher lo prefiere: mod_pipeline.cpp PythonCandidates). Nada del juego viaja; el Kit encima no pisa nada distinto.
+$py = (Get-Command python -ErrorAction Stop).Source
+& $py (Join-Path $root "tools\make_modpacks.py") --game-stage $OutDir
+if ($LASTEXITCODE -ne 0) { throw "make_modpacks.py --game-stage fallo" }
 
 # XDK compression tools (xbcompress/xbdecompress) needed by the mod pipeline.
 # Canonical copy in github/tools/, plus the XDK runtime DLLs that the old XDK

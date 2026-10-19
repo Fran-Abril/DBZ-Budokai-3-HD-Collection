@@ -48,13 +48,15 @@
 // UPnP/STUN; ports oficiales recreables; campanas con textos automaticos (Freezer).
 // v1.5.1.1 = minijuegos de IW cotejados con el original (giro, camara, HUD y resultados de IW), heroe con ID propio
 // (peinado UT, logo, dos colores), maestros y movesets desbloqueables, Leyenda de Mr. Satan como B1, tablero B2 sin atascos.
+// v1.5.1.2 = escenarios de PS2 (B2/B1/IW) sin Kit ni Python instalado (Python portatil en el zip; ISO elegida con .ruta),
+// salir del tablero de B2, heroe: cara propia en la saga, peinado en calvos, scouter, nombres con acentos.
 #include <windows.h>
 
 #define VERSION_MAJOR 1
 #define VERSION_MINOR 5
 #define VERSION_PATCH 1
-#define VERSION_BUILD 1
-#define DBZ3_VERSION_STR "1.5.1.1"
+#define VERSION_BUILD 2
+#define DBZ3_VERSION_STR "1.5.1.2"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, VERSION_BUILD

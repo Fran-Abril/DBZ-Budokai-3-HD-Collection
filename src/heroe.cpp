@@ -666,6 +666,7 @@ std::string ArgsFicha(int id, int traje) {
   for (int i = 0; i < C::kNumPartes; ++i) s += (i ? "|" : "") + hsv(h.parte[i]);
   s += ";pelo=" + std::to_string(h.pelo) + ";c1=" + hsv(h.pelo_c1) + ";c2=" + hsv(h.pelo_c2) +
        ";logo=" + std::to_string(h.logo) + ";scouter=" + std::to_string(h.scouter);
+  if (h.ropa > 0) s += ";ropa=" + std::to_string(h.ropa);   // studies 9b: prenda de Xenoverse (vista_heroe.py PRENDAS)
   return s;
 }
 bool FichaNativa() {
@@ -673,7 +674,7 @@ bool FichaNativa() {
   auto cero = [](const C::Hsv& c) { return c.h == 0 && c.s == 0 && c.v == 0; };
   for (const auto& c : h.parte)
     if (!cero(c)) return false;
-  return h.pelo == 0 && cero(h.pelo_c1) && cero(h.pelo_c2) && h.logo == 0 && h.scouter == 0;
+  return h.pelo == 0 && cero(h.pelo_c1) && cero(h.pelo_c2) && h.logo == 0 && h.scouter == 0 && h.ropa == 0;
 }
 int FichaNumero() { return C::SlotActivo() + 1; }
 
@@ -698,6 +699,15 @@ void CapturarPropio() {
   g_propio_capturado = true;
   g_propio_montado = LineaFicha(dbz3::ModsRoot() / kModPropio / "ficha.txt");
 }
+// Quita el ultimo caracter utf-8 si quedo cortado (por un tope en bytes); los acentos completos se quedan.
+void Utf8Entero(std::string& s) {
+  size_t k = s.size();
+  while (k > 0 && (static_cast<unsigned char>(s[k - 1]) & 0xC0) == 0x80) --k;
+  if (k == 0) return;
+  const unsigned char lead = static_cast<unsigned char>(s[k - 1]);
+  const size_t need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+  if (s.size() - (k - 1) < need) s.resize(k - 1);
+}
 // El texto de la ficha + el nombre (sin ; = " \ ni control, 24 bytes): lo que vista_heroe.py --combate recibe y guarda.
 std::string ArgsPropio() {
   std::string n;
@@ -705,8 +715,7 @@ std::string ArgsPropio() {
     if (c >= 32 && c != ';' && c != '=' && c != '"' && c != 92 && c != 127) n += char(c);
   }
   while (n.size() > 24) n.pop_back();
-  while (!n.empty() && (static_cast<unsigned char>(n.back()) & 0xC0) == 0x80) n.pop_back();   // utf-8 partido
-  if (!n.empty() && static_cast<unsigned char>(n.back()) >= 0xC0) n.pop_back();
+  Utf8Entero(n);
   if (n.empty()) n = "Heroe";
   return ArgsFicha(Cuerpo(), g_traje) + ";nombre=" + n;
 }
@@ -864,6 +873,7 @@ void PonerNombre(const std::string& n) {
     g_nombre += c;
     if (g_nombre.size() >= 16) break;
   }
+  Utf8Entero(g_nombre);
   if (g_nombre.empty()) g_nombre = "Heroe";
 }
 void PonerColor(int c) { g_color = std::clamp(c, 0, 31); }

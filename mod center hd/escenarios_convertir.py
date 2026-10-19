@@ -78,6 +78,10 @@ def conv_colision(b, g3s, base, escala=1.0):
     mp, pos, heads = {}, base, []
     for g3 in g3s:
         n4, nn, first, _ = (R(g3 + 0x40 + 4 * j) for j in range(4))
+        if n4 != 4 and R(g3 + 0x4C) < 0x100:
+            # s9b: B1 (Cell Ring, g11) cuelga un objeto "BBSEL_POL1" (seleccion de poligonos de B1, cabecera con un tipo 0xB/0xC): B3 no lo
+            # usa; se deja una cabecera de colision VACIA (0 nodos) para que los rec20/rec30 del grafo que lo apuntan resuelvan
+            n4, nn, first = 4, 0, 0
         if n4 != 4:
             raise ValueError("cabecera de colision inesperada en +0x%X" % g3)
         nodes, p = [], first
@@ -115,7 +119,7 @@ def conv_colision(b, g3s, base, escala=1.0):
     for nn, first, nodes in heads:
         for _ in range(4):
             w(0xFFFFFFFF, 0, 0, 0)
-        w(4, nn, mp[first], 0)
+        w(4, nn, mp[first] if first else 0, 0)
     for (nn, first, nodes), d in zip(heads, datos):
         for q in nodes:
             v = [R(q + 4 * j) for j in range(12)]

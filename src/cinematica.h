@@ -24,6 +24,7 @@ struct Paso {
   uint16_t botones[2] = {0, 0};   // botones de Xbox (XInput: X golpe, Y patada, B ki, A guardia) de cada lado
   int anim[2] = {-1, -1};         // pose del propio personaje (codigo X+2928, kPose*) de cada lado; -1 su guardia
   int cara = -1;                  // retrato del subtitulo: ID de B3 (pasarela::CaraDe); -1 ninguno
+  int cara_alt = -1;              // si `cara` no tiene imagen (el heroe sin su icono propio todavia): esta
   pasarela::Imagen texto;         // subtitulo: imagen del juego de origen (charla 669 de B1...)
   std::string linea;              // o texto propio (si no hay imagen)
   std::vector<int> voces;         // entradas de ADX_JP.AFS de B1 (pasarela::OirVozB1) que suenan con el paso
@@ -34,6 +35,9 @@ struct Paso {
   int cuadros = 0;
   std::vector<std::array<float, 4>> cam_ojo, cam_obj;
   std::vector<std::array<float, 2>> cam_fov, cam_roll;
+  // s9b: true = ojo/objetivo van en el marco de los dos luchadores (origen = punto medio, x hacia el lado 2, y arriba,
+  // z = perpendicular a su izquierda) en vez de en coordenadas del mundo: asi una toma vale en cualquier escenario.
+  bool rel = false;
 };
 // Y+B mantenidos (XInput, mando virtual del lado; como la pose del relevo del Tag Team, acciones 20/21). ponytail:
 // medido 2026-10-16 al empezar la pelea: da la accion 15 unos 40 cuadros y vuelve a 0, sin carga visible. Sin usar.

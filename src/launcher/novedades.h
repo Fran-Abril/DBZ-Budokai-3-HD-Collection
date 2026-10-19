@@ -20,6 +20,18 @@ struct NewsBlock {
   int count;
 };
 
+inline constexpr NewsItem kNews1512[] = {
+    {"Escenarios", "Stages",
+     "Los escenarios de Budokai 2, Budokai 1 e Infinite World se crean desde tu ISO sin instalar nada más (Templo de Kami, Montañas nevadas...).",
+     "Budokai 2, Budokai 1 and Infinite World stages are created from your ISO with nothing else to install (Kami's Lookout, Snowy Mountains...)."},
+    {"Budokai 2 (experimental)", "Budokai 2 (experimental)",
+     "Ya se puede salir del tablero en cualquier momento.",
+     "You can now leave the board at any time."},
+    {"Modo Héroe (beta)", "Hero Mode (beta)",
+     "Tu cara en las escenas de saga, peinado también en cuerpos calvos, scouter y nombres con acentos.",
+     "Your face in saga scenes, hairstyles on bald bodies too, scouter and names with accents."},
+};
+
 inline constexpr NewsItem kNews1511[] = {
     {"Infinite World (experimental)", "Infinite World (experimental)",
      "Minijuegos de botones como el original: los luchadores se miran y se golpean, cámara de IW y su panel azul con siluetas.",
@@ -122,6 +134,7 @@ inline constexpr NewsItem kNews145[] = {
 
 // Del mas nuevo al mas antiguo.
 inline constexpr NewsBlock kNewsBlocks[] = {
+    {"1.5.1.2", kNews1512, int(sizeof(kNews1512) / sizeof(kNews1512[0]))},
     {"1.5.1.1", kNews1511, int(sizeof(kNews1511) / sizeof(kNews1511[0]))},
     {"1.5.1", kNews151, int(sizeof(kNews151) / sizeof(kNews151[0]))},
     {"1.5.0", kNews150, int(sizeof(kNews150) / sizeof(kNews150[0]))},

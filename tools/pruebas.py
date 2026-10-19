@@ -1053,11 +1053,14 @@ def _satan(j, par):
         for k in ["L", "L", "L", "P", "L", "L", "P", "L"]:
             j.tecla(k, 220)
         j.captura("c_puntos")
+    if par.get("cell") == "1":                      # s9b: escena de los Juegos de Cell (7 pasos) antes del combate 1
+        for k in range(1, 8):
+            j.log(rf"cinematica: paso {k}/", 90 if k == 1 else 40)
+            time.sleep(1.6)
+            j.captura(f"c_cell{k}")
     time.sleep(4)
     j.captura("c_combate")
-    if "cinematica: paso" in j.texto_log():
-        raise Fallo("Yamcha no tiene escena en B1 (sale una antes del combate 1)")
-    j.log(r"\): resultado", 90)
+    j.log(r"\): resultado", 150)
     time.sleep(1)
     j.captura("d_resultado")
     j.log(r"pasarela: paso 3/\d+ \(charla", 40)
@@ -1085,8 +1088,6 @@ def _r3_cine(j, par):
         j.log(r"pasarela: paso \d+ estado del combate 4", 60)
         time.sleep(6)
         j.captura("a_yamcha_sin_escena")
-        if "cinematica: paso" in j.texto_log():
-            raise Fallo("Yamcha no tiene escena en B1 (sale una antes del combate 1)")
         return
     if d == 2:
         j.log(r"pasarela: paso 3/\d+ \(charla", 40)

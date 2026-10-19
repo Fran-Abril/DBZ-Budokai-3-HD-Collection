@@ -25,35 +25,26 @@ import numpy as np                      # noqa: E402
 from PIL import Image                   # noqa: E402
 
 
-def _xg_2d(axis, offset, width, texel_pitch):
-    aw = (width + 31) & ~31
-    log_bpp = (texel_pitch >> 2) + ((texel_pitch >> 1) >> (texel_pitch >> 2))
-    ob = offset << log_bpp
-    ot = ((ob & ~4095) >> 3) + ((ob & 1792) >> 2) + (ob & 63)
-    om = ot >> (7 + log_bpp)
-    if axis == "x":
-        mx = (om % (aw >> 5)) << 2
-        tile = ((((ot >> (5 + log_bpp)) & 2) + (ob >> 6)) & 3)
-        macro = (mx + tile) << 3
-        micro = ((((ot >> 1) & ~15) + (ot & 15)) & ((texel_pitch << 3) - 1)) >> log_bpp
-        return macro + micro
-    my = (int(om / (aw >> 5)) << 2)
-    tile = ((ot >> (6 + log_bpp)) & 1) + ((ob & 2048) >> 10)
-    macro = (my + tile) << 3
-    micro = ((((ot & (((texel_pitch << 6) - 1) & ~31)) + ((ot & 15) << 1)) >> (3 + log_bpp)) & ~1)
-    return macro + micro + ((ot & 16) >> 4)
+def _tiled_idx(x, y, width, log_bpb):
+    """Indice de BLOQUE (4x4 texeles) en la textura tiled de Xbox 360 de (x, y) (en bloques): la formula de Xenia/XGAddress2D.
+    studies 9b: la version anterior (una inversion propia de XGAddress2DTiledOffset) desordenaba los bloques y dejaba todas las
+    texturas grandes (DXT1 1024x512...) como bandas sueltas; asi salen bien."""
+    width = (width + 31) & ~31
+    macro = ((x >> 5) + (y >> 5) * (width >> 5)) << (log_bpb + 7)
+    micro = ((x & 7) + ((y & 6) << 2)) << log_bpb
+    off = macro + ((micro & ~15) << 1) + (micro & 15) + ((y & 8) << (3 + log_bpb)) + ((y & 1) << 4)
+    return (((off & ~511) << 3) + ((off & 448) << 2) + (off & 63) + ((y & 16) << 7)
+            + (((((y & 8) >> 2) + (x >> 3)) & 3) << 6)) >> log_bpb
 
 
 def _deswizzle_dxt(data, width, height, texel_pitch):
     bw, bh = width // 4, height // 4
+    log_bpb = 3 if texel_pitch == 8 else 4
     out = bytearray(len(data))
     for j in range(bh):
         for i in range(bw):
-            bo = j * bw + i
-            x = _xg_2d("x", bo, bw, texel_pitch)
-            y = _xg_2d("y", bo, bw, texel_pitch)
-            src = y * bw * texel_pitch + x * texel_pitch
-            dst = j * bw * texel_pitch + i * texel_pitch
+            src = _tiled_idx(i, j, bw, log_bpb) * texel_pitch
+            dst = (j * bw + i) * texel_pitch
             if src + texel_pitch <= len(data) and dst + texel_pitch <= len(out):
                 blk = bytearray(data[src:src + texel_pitch])
                 for k in range(0, texel_pitch, 2):

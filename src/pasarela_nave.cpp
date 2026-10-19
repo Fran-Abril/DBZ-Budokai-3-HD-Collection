@@ -90,7 +90,7 @@ namespace S = dbz3::ingame::style;
 namespace M = dbz3::ingame::style::mode;
 
 constexpr uint16_t kUp = 0x0001, kDown = 0x0002, kLeft = 0x0004, kRight = 0x0008, kStart = 0x0010, kA = 0x1000,
-                   kB = 0x2000;
+                   kB = 0x2000, kX = 0x4000, kY = 0x8000;
 
 struct Prueba {
   int pago, tiempo;   // Kili por cada uno (0x265AB0); tiempo del combate en s (-1 sin limite)
@@ -366,6 +366,10 @@ std::vector<Tex> g_pzv;                          // ventana de premio: DATA_<idi
                                                  // 1 estrella, 2 emblema, 3 "BOOM!!")
 std::vector<Anim> g_anim, g_animv;               // 905 (nave) y 933 (ventana de premio)
 std::map<int, Tex> g_nombres;                    // nombre de cada premio: DATA_<idioma> (542 + ID), textura 0
+std::vector<Tex> g_ficha;                        // "Skill Z Sheet": DATA_<idioma> 541 (fondos, rotulos, iconos, "New")
+std::map<int, Tex> g_textos_capsula;             // textos de cada capsula: DATA_<idioma> (542 + ID), texturas 1-4 (clave ID * 8 + j)
+int g_ficha_cara = 0;                            // 0 frente, 1 reverso
+constexpr float kCartel = 100.0f;                // cuadros del cartel "Get skill!" antes de la ficha [H: duracion sin medir]
 std::string g_afs_idioma;                        // el DATA_<idioma>.AFS que se abrio ("DATA_UK.AFS"...)
 bool g_cargado = false;
 std::filesystem::path g_iso;
@@ -438,6 +442,7 @@ void Cargar() {
   leer(1131, g_pz);
   leer(1132, g_frases);
   leer(1148, g_pzv);   // ventana de premio del original (FUN_002a44c0, b2.c)
+  leer(541, g_ficha);  // la ficha de la capsula (FUN_00292850 pide 0x1021D = DATA_<idioma> 541)
   g_anim = LeerAma(cmn.Entrada(905));
   g_animv = LeerAma(cmn.Entrada(933));
   REXLOG_INFO("dbz3 nave: graficos de la ISO: {} piezas, {} frases, {} animaciones; ventana de premio {} texturas y "
@@ -454,6 +459,29 @@ const Tex* NombreTex(int id_b2) {
     AfsPs2 loc;
     if (loc.Abrir(g_iso, g_afs_idioma)) {
       const Imagen im = TexturaAmt(loc.Entrada(size_t(542 + id_b2)), 0);
+      if (im) {
+        if (auto* dr = dbz3::launcher::PreviewDrawer())
+          it->second.t = dr->CreateTexture(uint32_t(im.w), uint32_t(im.h), rex::ui::ImmediateTextureFilter::kLinear,
+                                           false, im.rgba.data());
+        it->second.w = float(im.w);
+        it->second.h = float(im.h);
+      }
+    }
+  }
+  return it->second.t ? &it->second : nullptr;
+}
+
+// Textura j (1 efectos, 2 requisitos de uso, 3 comentarios, 4 "solo puede usarlo...") de la capsula `id_b2`
+// (DATA_<idioma> 542 + ID, un #AMT de 5 texturas; 0 es el nombre).
+const Tex* TextoCapsula(int id_b2, int j) {
+  if (id_b2 < 0 || id_b2 > 700 || j < 0 || j > 4 || g_iso.empty() || g_afs_idioma.empty()) return nullptr;
+  if (j == 0) return NombreTex(id_b2);
+  auto it = g_textos_capsula.find(id_b2 * 8 + j);
+  if (it == g_textos_capsula.end()) {
+    it = g_textos_capsula.emplace(id_b2 * 8 + j, Tex{}).first;
+    AfsPs2 loc;
+    if (loc.Abrir(g_iso, g_afs_idioma)) {
+      const Imagen im = TexturaAmt(loc.Entrada(size_t(542 + id_b2)), j);
       if (im) {
         if (auto* dr = dbz3::launcher::PreviewDrawer())
           it->second.t = dr->CreateTexture(uint32_t(im.w), uint32_t(im.h), rex::ui::ImmediateTextureFilter::kLinear,
@@ -776,12 +804,61 @@ bool PasoResultado(float cuadros, bool ok) {
   }
   return false;
 }
+// La ficha de la capsula tras el cartel ("Skill Z Sheet", FUN_00292550 con las texturas de DATA_<idioma> 541 y 542 + ID y la
+// disposicion de DATA_CMN 852). Medida en PCSX2 (fase I, premio del Saibaman): panel de 408x392 centrado en (320, 216);
+// rotulos "Skill Name" (148, 89), "Effects" (148, 161), "Usage requirements" (148, 252) y "Comments" en el reverso
+// (223, 55); nombre centrado en y 129 y la linea de "solo puede usarlo..." en y 152; efectos y requisitos desde x 157 (y 192 y
+// 282); comentarios desde (157, 90); abajo el numero de copias (azul, centro 297, 381) y el giro (verde, 390, 381);
+// "New" (88x64) centrado en (132, 101). Ayuda: cuadrado / cruceta = reverso, X / triangulo = volver. [H] la variante dorada
+// (anims 6/7 del #AMA) y el numero (aqui las copias que tienes).
+void DibFicha(ImDrawList* dl, const Lienzo& L, int id_b2, float c, int cara, int copias, bool nuevo) {
+  if (g_ficha.size() < 22) return;
+  const int alfa = int(255 * std::clamp(c / 6.0f, 0.0f, 1.0f));
+  const ImU32 col = IM_COL32(255, 255, 255, alfa);
+  auto pone = [&](const Tex* t, float x, float y, bool centro = false, ImU32 tinte = 0) {
+    if (!t || !t->t) return;
+    if (centro) {
+      x -= t->w * 0.5f;
+      y -= t->h * 0.5f;
+    }
+    dl->AddImage(reinterpret_cast<ImTextureID>(t->t.get()), L.P(x, y), L.P(x + t->w, y + t->h), ImVec2(0, 0), ImVec2(1, 1),
+                 tinte ? (tinte & 0x00FFFFFF) | (uint32_t(alfa) << 24) : col);
+  };
+  // los rotulos son grises: el juego los pinta de azul (medido: 58 104 152 sobre su gris de 230)
+  const ImU32 azul = IM_COL32(62, 112, 168, 255);
+  pone(&g_ficha[size_t(cara ? 1 : 2)], 320, 216, true);
+  if (cara == 0) {
+    pone(&g_ficha[6], 148, 89, false, azul);
+    pone(&g_ficha[7], 148, 161, false, azul);
+    pone(&g_ficha[8], 148, 252, false, azul);
+    pone(TextoCapsula(id_b2, 0), 320, 129, true);
+    pone(TextoCapsula(id_b2, 4), 320, 152, true);
+    pone(TextoCapsula(id_b2, 1), 157, 191.75f);
+    pone(TextoCapsula(id_b2, 2), 157, 282.25f);
+    pone(&g_ficha[size_t(10 + std::clamp(copias, 1, 7))], 297, 381.5f, true);
+    pone(&g_ficha[19], 390, 381.5f, true);
+  } else {
+    pone(&g_ficha[9], 223, 55, false, azul);
+    pone(TextoCapsula(id_b2, 3), 157, 90);
+  }
+  if (nuevo) {   // anim 23 del #AMA: crece de 0 a 1,2 y se asienta en 1 en 10 cuadros
+    const float e = c < 6 ? c / 6.0f * 1.2f : c < 10 ? 1.2f - 0.2f * (c - 6) / 4.0f : 1.0f;
+    const Tex& n = g_ficha[21];
+    const ImVec2 mid = L.P(132, 101);
+    const float w = n.w * 0.5f * e * L.s, h = n.h * 0.5f * e * L.s;
+    if (n.t) dl->AddImage(reinterpret_cast<ImTextureID>(n.t.get()), ImVec2(mid.x - w, mid.y - h), ImVec2(mid.x + w, mid.y + h));
+  }
+  S::HelpLine(dl, L.P(320, 428), 20 * L.s, {{"X", T::T("Ver reverso", "View reverse side")}, {"A", T::T("Volver", "Back")}});
+}
+
 // Ventana "Get skill!" del original (FUN_002a44c0 + FUN_002a4070, b2.c) en el cuadro c desde que se abrio: lanza a la
 // vez la tarea del cartel (anim 0 -> reposo 1), la de la estrella (3 -> 4) y las del estallido con el emblema (6..12) y
-// la placa "BOOM!!" (13); texturas DATA_<idioma> 1148, disposicion DATA_CMN 933. El nombre del premio es su arte nativo
-// (DATA_<idioma> 542 + ID, textura 0; FUN_00292850 lo pide como 0x10000 | (ID + 0x21E)). La usan la nave y la orden 70
-// del tablero de B2 (FUN_00293740), que es la misma ventana.
-void DibVentanaPremio(ImDrawList* dl, const Lienzo& L, int id_b2, const char* nombre, float c) {
+// la placa "BOOM!!" (13); texturas DATA_<idioma> 1148, disposicion DATA_CMN 933. En el original (medido) el cartel va con
+// una nube de humo y despues sale la ficha de la capsula (DibFicha) con el nombre y los textos del premio; el nombre grande
+// que antes se dibujaba aqui quedaba tapado por el humo. La usan la nave y la orden 70 del tablero de B2 (FUN_00293740).
+void DibVentanaPremio(ImDrawList* dl, const Lienzo& L, int id_b2, const char* nombre, float c, int copias = 1,
+                      bool nuevo = true) {
+  if (c >= kCartel && g_ficha.size() >= 22) return DibFicha(dl, L, id_b2, c - kCartel, g_ficha_cara, copias, nuevo);
   auto obj = [&](int e, int r) {
     if (c < DurDe(e, &g_animv)) DibC(dl, L, e, c, false, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
     else DibC(dl, L, r, c - DurDe(e, &g_animv), true, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
@@ -789,11 +866,13 @@ void DibVentanaPremio(ImDrawList* dl, const Lienzo& L, int id_b2, const char* no
   obj(3, 4);   // estrella
   obj(0, 1);   // cartel "Get skill!"
   for (int k = 6; k <= 13; ++k) DibC(dl, L, k, c, false, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
-  if (const Tex* n = NombreTex(id_b2))
-    dl->AddImage(reinterpret_cast<ImTextureID>(n->t.get()), L.P(320 - n->w * 0.5f, 206 - n->h * 0.5f),
-                 L.P(320 + n->w * 0.5f, 206 + n->h * 0.5f));
-  else
-    S::MenuText(dl, L.P(320, 206), 22 * L.s, nombre, true, false, 320 * L.s);
+  if (g_ficha.size() < 22) {   // sin la ficha (otra ISO): el nombre sobre el cartel, como antes
+    if (const Tex* n = NombreTex(id_b2))
+      dl->AddImage(reinterpret_cast<ImTextureID>(n->t.get()), L.P(320 - n->w * 0.5f, 206 - n->h * 0.5f),
+                   L.P(320 + n->w * 0.5f, 206 + n->h * 0.5f));
+    else
+      S::MenuText(dl, L.P(320, 206), 22 * L.s, nombre, true, false, 320 * L.s);
+  }
 }
 void DibujarResultado(ImDrawList* dl, const Lienzo& L) {
   // 0x262640: titulo (16), panel (77), franja (78), esferas (79, 80), aguja (81), cuenta (82) con su palabra (92-95),
@@ -813,10 +892,13 @@ void DibujarResultado(ImDrawList* dl, const Lienzo& L) {
     // las texturas son DATA_<idioma> 1148 (la disposicion, DATA_CMN 933). El nombre del premio es su arte nativo
     // (DATA_<idioma> 542 + ID, textura 0) y el Kili, nuestra linea (el original no lo repite).
     const Premio& p = Premios()[size_t(g_res.premio)];
-    DibVentanaPremio(dl, L, p.id, p.nombre.c_str(), std::max(0.0f, g_cuadro - g_res.premio_t));
-    char li[48];
-    std::snprintf(li, sizeof(li), "%d Kili%s", p.kili, g_res.nuevo ? T::T("  ¡Nuevo!", "  New!") : "");
-    S::MenuText(dl, L.P(320, 300), 15 * L.s, li, false, false);
+    const float c = std::max(0.0f, g_cuadro - g_res.premio_t);
+    DibVentanaPremio(dl, L, p.id, p.nombre.c_str(), c, Tienes(p.id) + 1, g_res.nuevo);
+    if (c < kCartel) {
+      char li[48];
+      std::snprintf(li, sizeof(li), "%d Kili%s", p.kili, g_res.nuevo ? T::T("  ¡Nuevo!", "  New!") : "");
+      S::MenuText(dl, L.P(320, 300), 15 * L.s, li, false, false);
+    }
   }
 }
 
@@ -911,8 +993,21 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
     g_auto_t = t;
     pressed |= kA;
   }
-  const bool ok = (pressed & (kA | kStart)) != 0;
+  bool ok = (pressed & (kA | kStart)) != 0;
   if (g_estado == kResultado) {
+    if (g_res.fase == 3) {   // el cartel pasa a la ficha con A; en la ficha, X / cruceta da la vuelta y A / Y vuelve
+      const float c = g_cuadro - g_res.premio_t;
+      if (c < kCartel) {
+        if (ok) g_res.premio_t = g_cuadro - kCartel;   // salta el cartel
+        ok = false;
+        g_ficha_cara = 0;
+      } else if (pressed & (kX | kUp | kDown | kLeft | kRight)) {
+        g_ficha_cara ^= 1;
+        ok = false;
+      } else if (pressed & kY) {
+        ok = true;
+      }
+    }
     const bool fin = PasoResultado(dt * 60.0f, ok);
     DibujarResultado(dl, L);
     M::Help(dl, a, {{"A", T::T("Seguir", "Continue")}});
@@ -1084,10 +1179,27 @@ void GanarCapsula(int id_b2) {
   Dar(p, 1);
 }
 // La ventana "Get skill!" (la misma de la nave) en la pantalla de 640x448 del original dentro del area.
-void VentanaPremio(ImDrawList* dl, const S::Area& a, int id_b2, float cuadros) {
+// Devuelve true cuando el jugador (o la prueba automatica) la cierra. `cuadros` = tiempo desde que se abrio.
+bool VentanaPremio(ImDrawList* dl, const S::Area& a, int id_b2, float cuadros, uint16_t pressed, bool auto_on) {
   Cargar();   // hilo de dibujo (las texturas se crean aqui)
+  static float salto = 0;   // cuadros que se adelanta la ficha al saltar el cartel con A
+  if (cuadros < 1) {
+    salto = 0;
+    g_ficha_cara = 0;
+  }
+  const float c = cuadros + salto;
   const std::string n = "#" + std::to_string(id_b2);
-  DibVentanaPremio(dl, LienzoDe(a), id_b2, n.c_str(), std::max(0.0f, cuadros));
+  DibVentanaPremio(dl, LienzoDe(a), id_b2, n.c_str(), std::max(0.0f, c), std::min(7, Tienes(id_b2) + 1), Tienes(id_b2) == 0);
+  bool cierra = false;
+  if (c < kCartel) {
+    if ((pressed & kA) && c >= 30) salto += kCartel - c;   // A salta el cartel (minimo 30 cuadros: sonido del cartel)
+  } else if (pressed & (kX | kUp | kDown | kLeft | kRight)) {
+    g_ficha_cara ^= 1;
+  } else if (pressed & (kA | kY)) {
+    cierra = true;
+  }
+  if (auto_on && c - kCartel > 70.0f) cierra = true;   // prueba automatica: se ve la ficha un momento
+  return cierra;
 }
 
 }  // namespace dbz3::pasarela::nave

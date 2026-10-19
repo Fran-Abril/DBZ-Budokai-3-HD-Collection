@@ -101,19 +101,35 @@ class Iso:
 
 
 # juegos de origen en ps2_games, de cualquier region: '(USA)', '(Europe)', '(En,Fr,De,Es,It)'...
-GAME_RE = {"b1": r"budokai \(", "b2": r"budokai 2", "sb1": r"shin budokai(?!.*another)", "sb2": r"another road"}
+GAME_RE = {"b1": r"budokai \(|budokai 1(?![0-9])", "b2": r"budokai 2", "sb1": r"shin budokai(?!.*another)", "sb2": r"another road"}
 GAME_SKIP = {"b1": "shin"}
 
 
+def ruta_destino(p):
+    """Ruta real de un archivo de ps2_games: el propio archivo, o la que guarda un '.ruta' (el boton 'Elegir ISO' del
+    launcher recuerda donde esta la ISO sin copiarla: src/pasarela_b1.cpp RegistrarIsoPs2). None si ya no existe."""
+    if not p.lower().endswith(".ruta"):
+        return p
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            d = f.read().strip()
+    except OSError:
+        return None
+    return d if d and os.path.exists(d) else None
+
+
 def find_game(game, root=None):
-    """ISO de un juego de origen en ps2_games (o None): por patron, no por el nombre exacto."""
+    """ISO de un juego de origen en ps2_games (o None): por patron, no por el nombre exacto. Vale una ISO suelta o un
+    '.ruta' (ISO elegida desde el launcher en otra carpeta)."""
     import glob  # noqa: PLC0415
     import re  # noqa: PLC0415
     root = root or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ps2_games")
-    for p in sorted(p for p in glob.glob(os.path.join(root, "*")) if p.lower().endswith(".iso")):   # .ISO (Linux)
+    for p in sorted(p for p in glob.glob(os.path.join(root, "*")) if p.lower().endswith((".iso", ".ruta"))):   # .ISO (Linux)
         low = os.path.basename(p).lower()
         if re.search(GAME_RE[game], low) and not (GAME_SKIP.get(game) and GAME_SKIP[game] in low):
-            return p
+            hit = ruta_destino(p)
+            if hit:
+                return hit
     return None
 
 

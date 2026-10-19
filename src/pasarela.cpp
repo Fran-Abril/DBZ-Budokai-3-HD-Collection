@@ -1132,6 +1132,71 @@ Reglas ReglasDe(const CombateB1& c, int dificultad, int ronda) {
   return r;
 }
 
+// s9b: tomas del original de B1 (escena 0x1C, medidas con capturas de PCSX2 a camara lenta, D:\tmp\s9b_satan\capturas).
+// Camara en el marco de los luchadores (Paso::rel): origen = punto medio, x hacia el lado 2, y = altura sobre el suelo, z
+// = a su izquierda; Mr. Satan esta en x = -15 y el retador en x = +15. cam_ojo/cam_obj = {cuadro, x, y, z}; 60 cuadros/s.
+void Toma(dbz3::cinematica::Paso& p, std::array<float, 3> o0, std::array<float, 3> b0, std::array<float, 3> o1,
+          std::array<float, 3> b1) {
+  const float f = p.segundos * 60.0f;
+  p.rel = true;
+  p.cam_ojo = {{0.0f, o0[0], o0[1], o0[2]}, {f, o1[0], o1[1], o1[2]}};
+  p.cam_obj = {{0.0f, b0[0], b0[1], b0[2]}, {f, b1[0], b1[1], b1[2]}};
+}
+// Las dos tomas cortas de cada ronda antes del "READY?": Mr. Satan desde abajo con los brazos abiertos (B1: camara a ras
+// de suelo, el cuerpo entero con las rodillas y la cabeza casi en los bordes, sube un poco) y el retador de cerca.
+void TomasPresentacion(dbz3::cinematica::Escena& e) {
+  namespace C = dbz3::cinematica;
+  C::Paso p;
+  p.plano = C::kLado1;
+  p.segundos = 2.6f;
+  p.anim[0] = C::kPoseEntrada1;
+  Toma(p, {-2.0f, 1.2f, 27.0f}, {-15.0f, 8.5f, 0.0f}, {-4.0f, 4.0f, 25.0f}, {-15.0f, 9.0f, 0.0f});
+  e.pasos.push_back(p);
+  p = C::Paso{};
+  p.plano = C::kLado2;
+  p.segundos = 2.4f;
+  Toma(p, {24.0f, 8.0f, 28.0f}, {15.0f, 7.0f, 0.0f}, {23.0f, 7.5f, 29.0f}, {15.0f, 7.0f, 0.0f});
+  e.pasos.push_back(p);
+}
+// Juegos de Cell (ronda 1): en B1 la escena 0x1C dura ~60 s con Cell, Goku, el reportero, el coche y Mr. Satan. El motor
+// de B3 solo tiene los dos luchadores del combate (Mr. Satan y Yamcha): aqui van las tomas de Mr. Satan y del ring (sin
+// Cell, Goku, reportero ni coche) con los subtitulos de B1 resumidos.
+void EscenaCell(dbz3::cinematica::Escena& e) {
+  namespace C = dbz3::cinematica;
+  C::Paso p;
+  p.plano = C::kGeneral;
+  p.segundos = 5.0f;
+  p.linea = T::T("¡Empiezan los Juegos de Cell!", "The Cell Games are about to begin!");
+  Toma(p, {-75.0f, 40.0f, 125.0f}, {0.0f, 5.0f, 0.0f}, {-50.0f, 26.0f, 85.0f}, {-6.0f, 9.0f, 0.0f});
+  e.pasos.push_back(p);
+  p = C::Paso{};   // Mr. Satan de espaldas, con la mochila, de cara al ring
+  p.plano = C::kLado1;
+  p.segundos = 3.0f;
+  Toma(p, {-47.0f, 9.5f, 2.5f}, {15.0f, 8.5f, 0.0f}, {-43.0f, 9.0f, 2.0f}, {15.0f, 8.5f, 0.0f});
+  e.pasos.push_back(p);
+  p = C::Paso{};   // plano que sube de las botas a la cara
+  p.plano = C::kLado1;
+  p.segundos = 4.0f;
+  p.linea = T::T("¡Ha llegado el salvador de la Tierra, Mr. Satán!", "The Earth's savior, Mr. Satan, has arrived!");
+  Toma(p, {-6.0f, 1.2f, 8.0f}, {-15.0f, 3.0f, 0.0f}, {-6.0f, 1.2f, 8.0f}, {-15.0f, 13.0f, 0.0f});
+  e.pasos.push_back(p);
+  p = C::Paso{};   // primer plano, primera frase
+  p.plano = C::kLado1;
+  p.segundos = 3.4f;
+  p.cara = kJugador;
+  p.linea = T::T("¡Je, je, je! Qué ganas de un rival de verdad...", "Heh heh! I can't wait for a real opponent...");
+  Toma(p, {-8.0f, 12.8f, 8.0f}, {-15.0f, 12.6f, 0.0f}, {-10.0f, 12.8f, 7.0f}, {-15.0f, 12.6f, 0.0f});
+  e.pasos.push_back(p);
+  p = C::Paso{};   // y la segunda, con la mano
+  p.plano = C::kLado1;
+  p.segundos = 3.4f;
+  p.cara = kJugador;
+  p.linea = T::T("Os acabo a todos a la vez. ¡Venid a por mí!", "I'll take you all on at once. Come and get it!");
+  Toma(p, {-9.0f, 12.6f, 8.0f}, {-15.0f, 12.4f, 0.0f}, {-11.0f, 12.6f, 7.0f}, {-15.0f, 12.4f, 0.0f});
+  e.pasos.push_back(p);
+  TomasPresentacion(e);
+}
+
 // Escena del retador r (1..10) tras su tablero (B1 pone la charla en el tablero, 0x231F20-0x232A80; aqui va en 3D por
 // peticion del usuario, en el ring de B3): charla 669 par = lo que dice Mr. Satan, impar = aviso de la regla; voz 1
 // 1269 + 2 (r - 1) y la 2 a los cuadros de B1 (MsVoz2). Yamcha (r = 0) no tiene charla ni tablero en B1: sin escena.
@@ -1184,6 +1249,7 @@ dbz3::cinematica::Escena Escena(int r, int rival) {   // con g_mu
     p.texto = g_d->charlas[ch + 1];
     e.pasos.push_back(p);
   }
+  TomasPresentacion(e);   // s9b: como B1, las dos tomas cortas antes del "READY?"
   return e;
 }
 
@@ -1203,7 +1269,16 @@ bool Lanzar() {   // con g_mu: el combate del paso actual, con las reglas del or
     REXLOG_INFO("dbz3 pasarela: tiempo -2 de B1 = el de las opciones: {} s ({})", op, op > 0 ? "con limite" : "sin limite");
   }
   const int forma2 = FormaB3(c.rival, c.forma);
-  if (p.vez == 0 && p.ronda > 0) dbz3::cinematica::Empezar(Escena(p.ronda, c.rival));
+  if (p.vez == 0 && p.ronda > 0) {
+    dbz3::cinematica::Empezar(Escena(p.ronda, c.rival));
+  } else if (p.vez == 0) {   // ronda 1 (Yamcha): la escena de los Juegos de Cell (aproximada) y las dos tomas
+    dbz3::cinematica::Escena e;
+    e.iso_voces = g_d->ruta;
+    e.volumen = dbz3::settings::AudioMute() ? 0.0f : float(dbz3::settings::MasterVolume());
+    e.distancia = 30;
+    EscenaCell(e);
+    dbz3::cinematica::Empezar(e);
+  }
   Reglas r = ReglasDe(c, g_dificultad, p.ronda);
   // Ki del jugador del registro de B1 (+0x2C): 300 = 3 barras, igual que el rival; 0xFFFF (Krilin y Gohan, las mismas
   // fichas que la vida que no se recupera) = el que traia. El hilo de los 5 Cell Jr. es un solo combate seguido en

@@ -234,8 +234,10 @@ class Panel : public rex::ui::ImGuiDialog {
     // subtitulo en la banda de abajo: retrato a la izquierda (cara del marcador) y la imagen o el texto
     const float y0 = h - abajo + S::mode::kPad * a.s, alto = abajo - 2 * S::mode::kPad * a.s;
     float x = a.At(S::mode::kX0 - 220, 0).x;
-    if (p.cara >= 0)
-      if (ImTextureID c = pasarela::CaraDe(p.cara)) {
+    ImTextureID cara_tex = p.cara >= 0 ? pasarela::CaraDe(p.cara) : ImTextureID{};
+    if (!cara_tex && p.cara_alt >= 0) cara_tex = pasarela::CaraDe(p.cara_alt);
+    if (p.cara >= 0 || p.cara_alt >= 0)
+      if (ImTextureID c = cara_tex) {
         dl->AddImage(c, ImVec2(x, y0), ImVec2(x + alto, y0 + alto));
         x += alto + S::mode::kGap * a.s;
       }
@@ -472,6 +474,13 @@ void Fotograma(uint8_t* base, uint32_t estado) {
     if (MuestraCam(p.cam_ojo, tf, co) && MuestraCam(p.cam_obj, tf, cb)) {
       ojo = V3{co[0], co[1], co[2]};
       obj = V3{cb[0], cb[1], cb[2]};
+      if (p.rel) {   // marco de los luchadores (p1/p2 ya estan en su sitio de la escena)
+        const V3 c = Mezcla(p1, p2, 0.5f), eje = Unit(V3{p2.x - p1.x, 0, p2.z - p1.z});
+        const V3 lado{-eje.z, 0, eje.x};
+        auto mundo = [&](V3 l) { return c + eje * l.x + V3{0, l.y, 0} + lado * l.z; };
+        ojo = mundo(ojo);
+        obj = mundo(obj);
+      }
       float fov = 0.6f;
       if (MuestraCam(p.cam_fov, tf, &fov)) {
         fov = std::clamp(fov, 0.2f, 1.3f);
