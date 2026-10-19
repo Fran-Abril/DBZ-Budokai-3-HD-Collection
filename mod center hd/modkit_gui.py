@@ -1339,7 +1339,8 @@ def set_mod_enabled(mods_dir, name, enable):
 
 
 def backup_file(path, env):
-    """Copia de seguridad antes de editar (modkit_backups/<fecha>/<ruta relativa a mods>)."""
+    """Copia de seguridad antes de editar (modkit_backups/<fecha>/<ruta relativa a mods>).
+    Cada copia queda anotada en modkit_backups/indice.tsv para poder deshacerla."""
     if not os.path.isfile(path):
         return ""
     try:
@@ -1348,10 +1349,54 @@ def backup_file(path, env):
             rel = os.path.basename(path)
     except ValueError:
         rel = os.path.basename(path)
-    dst = os.path.join(env.backups, time.strftime("%Y%m%d-%H%M%S"), rel)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dst = os.path.join(env.backups, stamp, rel)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy2(path, dst)
+    anotar_indice(env, stamp, "copia", path, os.path.relpath(dst, env.backups))
     return dst
+
+
+INDICE_COPIAS = "indice.tsv"
+
+
+def anotar_indice(env, stamp, tipo, original, rel_copia):
+    """Una linea por operacion: fecha, tipo («copia» o «deshecho»), fichero original, copia (tabuladas)."""
+    os.makedirs(env.backups, exist_ok=True)
+    with open(os.path.join(env.backups, INDICE_COPIAS), "a", encoding="utf-8") as fh:
+        fh.write("\t".join((stamp, tipo, original, rel_copia)) + "\n")
+
+
+def leer_indice(env):
+    p = os.path.join(env.backups, INDICE_COPIAS)
+    if not os.path.isfile(p):
+        return []
+    with open(p, encoding="utf-8") as fh:
+        return [ln.rstrip("\n").split("\t") for ln in fh if ln.count("\t") == 3]
+
+
+def deshacer_ultimo(env):
+    """Restaura el ultimo lote de copias que aun no se ha deshecho. Lo que habia antes de deshacer se
+    guarda en modkit_backups/<fecha>-antes-de-deshacer (nada se pierde). Devuelve los ficheros restaurados."""
+    filas = leer_indice(env)
+    hechos = {f[0] for f in filas if f[1] == "deshecho"}
+    lotes = [f for f in filas if f[1] == "copia" and f[0] not in hechos]
+    if not lotes:
+        return []
+    stamp = lotes[-1][0]
+    antes = os.path.join(env.backups, time.strftime("%Y%m%d-%H%M%S") + "-antes-de-deshacer")
+    restaurados = []
+    for _, _, original, rel in (f for f in lotes if f[0] == stamp):
+        origen = os.path.join(env.backups, rel)
+        if not os.path.isfile(origen):
+            continue
+        if os.path.isfile(original):
+            os.makedirs(antes, exist_ok=True)
+            shutil.copy2(original, os.path.join(antes, "%d_%s" % (len(restaurados), os.path.basename(original))))
+        shutil.copy2(origen, original)
+        restaurados.append(original)
+    anotar_indice(env, stamp, "deshecho", "", "")
+    return restaurados
 
 
 def toml_literal(v):
@@ -2192,6 +2237,21 @@ class SetupPage(Page):
                    command=self.ps2_readme).pack(side="left", padx=6)
         self.ps2_status = self.status_label(self.ps2.body)
         self.ps2_status.pack(fill="x", pady=(6, 0))
+        # Validador de modelos (opcional): comprobar_assets.py del frente 01 (studies 6). Debajo de
+        # los juegos de PS2; no bloquea nada si falta.
+        self.val = Card(body, T("Validador de modelos (opcional)", "Model validator (optional)"),
+                        T("Revisa que los modelos de tus mods cumplen las reglas del motor antes de montarlos "
+                          "(ventana de 44 B, bone en +16, rampa por material, mipmaps=0, pesos PS2 de 32 B).",
+                          "Checks that your mods' models follow the engine rules before you build them "
+                          "(44-byte window, bone at +16, per-material ramp, mipmaps=0, 32-byte PS2 weights)."))
+        self.val.pack(fill="x", pady=(0, 12))
+        vb = tk.Frame(self.val.body, bg=C["card"])
+        vb.pack(fill="x")
+        self.val_btn = ttk.Button(vb, text=T("Revisar los modelos de mis mods", "Check my mods' models"),
+                                  command=lambda: run_asset_check(self.app))
+        self.val_btn.pack(side="left")
+        self.val_status = self.status_label(self.val.body)
+        self.val_status.pack(fill="x", pady=(6, 0))
 
     def on_show(self):
         self.refresh(False)
@@ -2224,8 +2284,23 @@ class SetupPage(Page):
                 ent.grid(row=k, column=1, sticky="ew", pady=1)
             self.path_info.columnconfigure(1, weight=1)
         self.render_sources()
+        self.render_validator()
         if force or "sources" not in self.app.cache:
             self.query_sources()
+
+    def render_validator(self):
+        p = asset_checker_path(self.env)
+        try:
+            if p:
+                self.val_btn.configure(state="normal")
+                self.set_status(self.val_status, "dim", T("Listo: %s", "Ready: %s") % p)
+            else:
+                self.val_btn.configure(state="disabled")
+                self.set_status(self.val_status, "dim",
+                                T("No encontrado (opcional): viene con el Kit de modding.",
+                                  "Not found (optional): it ships with the modding kit."))
+        except tk.TclError:
+            pass
 
     def _row(self, parent, i, c):
         f = tk.Frame(parent, bg=C["card"])
@@ -2333,6 +2408,43 @@ def install_requirements(app):
         app.info(str(ex))
 
 
+# --- Validador de modelos (opcional): usa awo_tools/comprobar_assets.py del frente 01 ------------
+# Verifica un bin (#AMB/#AWO/#AZT HD o #AMO0 PS2) contra las reglas del motor (ventana de 44 B,
+# bone en +16, rampa por material, mipmaps=0, listas de pesos PS2 de 32 B...). El fichero puede
+# vivir junto al Kit (mod center hd/), en la raiz del Kit o en Kit/datos/. Si no esta, el Kit
+# sigue funcionando: solo se avisa y se explica de donde sacarlo.
+def asset_checker_path(env):
+    for p in (env.script("comprobar_assets.py"),
+              os.path.join(KIT, "comprobar_assets.py"),
+              os.path.join(KIT, "datos", "comprobar_assets.py"),
+              os.path.join(env.kit, "datos", "comprobar_assets.py")):
+        if p and os.path.isfile(p):
+            return p
+    return ""
+
+
+def run_asset_check(app):
+    """Revisa los bins de la carpeta de mods del jugador con comprobar_assets.py."""
+    env = app.env
+    p = asset_checker_path(env)
+    if not p:
+        app.info(T("No encuentro el validador de modelos (comprobar_assets.py) junto al Kit. Si lo tienes "
+                   "(viene con el Kit de modding), copialo en «mod center hd» y vuelve a intentarlo.",
+                   "I cannot find the model validator (comprobar_assets.py) next to the Kit. If you have it "
+                   "(it ships with the modding kit), copy it into 'mod center hd' and try again."))
+        return
+    if not os.path.isdir(env.mods):
+        app.info(T("Todavia no hay carpeta de mods donde revisar modelos.",
+                   "There is no mods folder to check models in yet."))
+        return
+
+    def done(job):
+        app.cache.pop("asset_check", None)
+
+    app.run(cmd_script(env, p, ["--sumario", env.mods, "--patron", "*.bin"]),
+            T("Revisando modelos", "Checking models"), done)
+
+
 def collect_checks(app):
     env = app.env
     out = []
@@ -2379,8 +2491,21 @@ def collect_checks(app):
                            if tools_ok and xdk_ok else T("Falta: ", "Missing: ") + ", ".join(
                                x for x, ok in (("importar.py / roster_build.py", tools_ok),
                                                ("mod center hd\\tools\\xbcompress.exe", xdk_ok)) if not ok) +
-                           T(". Descomprime otra vez el Kit de modding completo junto a dbz3.exe.",
-                             ". Unzip the full modding kit again next to dbz3.exe."))})
+                            T(". Descomprime otra vez el Kit de modding completo junto a dbz3.exe.",
+                              ". Unzip the full modding kit again next to dbz3.exe."))})
+    checker = asset_checker_path(env)
+    out.append({"key": "validator", "title": T("Validador de modelos (opcional)",
+                                               "Model validator (optional)"),
+                "level": "ok" if checker else "info",
+                "detail": (T("Listo: %s. Revisa tus bins antes de montarlos.", "Ready: %s. Checks your bins "
+                            "before building them.") % checker) if checker else
+                          T("No esta (opcional). Revisa que un modelo nuevo cumple las reglas del motor: ventana de "
+                            "44 B, bone en +16, rampa por material, mipmaps=0 y listas de pesos PS2 de 32 B. Viene "
+                            "con el Kit de modding (comprobar_assets.py).",
+                            "Not present (optional). Verifies a new model follows the engine rules: 44-byte window, "
+                            "bone at +16, per-material ramp, mipmaps=0 and 32-byte PS2 weight lists. Ships with the "
+                            "modding kit (comprobar_assets.py)."),
+                "action": (T("Revisar modelos", "Check models"), lambda: run_asset_check(app)) if checker else None})
     srcs = app.cache.get("sources") or []
     ready = [s for s in srcs if s["state"] == "listo"]
     out.append({"key": "ps2", "title": T("Juegos para importar (opcional)", "Games to import from (optional)"),
@@ -2463,6 +2588,8 @@ class ModsPage(Page):
         bottom.pack(fill="x", pady=(8, 0))
         ttk.Button(bottom, text="⟳  " + T("Reconstruir personajes nuevos", "Rebuild new characters"),
                    command=self.rebuild).pack(side="left")
+        ttk.Button(bottom, text="↶  " + T("Deshacer último paso", "Undo last step"),
+                   command=self.undo).pack(side="left", padx=(8, 0))
         self.status = self.status_label(bottom)
         self.status.configure(bg=C["bg"])
         self.status.pack(side="left", padx=10, fill="x", expand=True)
@@ -2631,6 +2758,21 @@ class ModsPage(Page):
         self.run(cmd_roster_build(self.env, True), T("Reconstruir personajes nuevos", "Rebuild new characters"),
                  lambda job: self.alive and self.refresh(), self.status,
                  T("Personajes nuevos montados.", "New characters built."))
+
+    def undo(self):
+        try:
+            restaurados = deshacer_ultimo(self.env)
+        except OSError as ex:
+            self.set_status(self.status, "err", str(ex))
+            return
+        if not restaurados:
+            self.set_status(self.status, "warn", T("No hay nada que deshacer.", "Nothing to undo."))
+            return
+        self.app.log_text(T("Deshecho: %s\n", "Undone: %s\n") % ", ".join(restaurados), "ok")
+        self.set_status(self.status, "ok", T("Deshecho el último paso (%d fichero/s). Lo anterior queda en modkit_backups.",
+                                             "Last step undone (%d file/s). The previous state is kept in modkit_backups.")
+                        % len(restaurados))
+        self.refresh()
 
 
 class TextEditor(tk.Toplevel):
@@ -4119,6 +4261,45 @@ class CharactersPage(Page):
                   "fusions have their own auras; the color above is applied on top"), bg=C["card"],
              wrap=300).grid(row=2, column=2, sticky="w", padx=8)
 
+        # aura de cada transformacion (aura_tipos_forma, roster_build.AURA_TIPOS): que aura enciende cada forma
+        kinds = [("", T("La de su personaje base", "Its base character's")), ("ninguna", T("Sin aura", "No aura")),
+                 ("normal", T("Normal (solo al cargar ki)", "Normal (only when charging ki)")),
+                 ("kaioken", T("Kaioken (roja)", "Kaioken (red)")),
+                 ("ssj", T("Super Saiyan (siempre encendida)", "Super Saiyan (always on)")),
+                 ("ssj2", T("Super Saiyan 2 (con rayos)", "Super Saiyan 2 (with sparks)")),
+                 ("ssj3", T("Super Saiyan 3", "Super Saiyan 3")), ("ssj4", T("Super Saiyan 4", "Super Saiyan 4"))]
+        nforms = d.get("formas")
+        if not isinstance(nforms, int):
+            try:
+                db = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "roster_db.json"),
+                                    encoding="utf-8"))
+                nforms = next((x["forms"] for x in db["ids"] if x["id"] == d.get("donante", 21)), 1)
+            except (OSError, ValueError, KeyError):
+                nforms = 1
+        cur_t = list(d.get("aura_tipos_forma") or [])
+        fbox = tk.Frame(g, bg=C["card"])
+        fbox.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        label(fbox, T("Aura de cada transformación", "Aura of each transformation"), bg=C["card"],
+              font=F["bold"]).grid(row=0, column=0, columnspan=2, sticky="w")
+        form_cbs = []
+        for f in range(max(1, min(8, nforms))):
+            label(fbox, T("Forma %d", "Form %d") % (f + 1) if f else T("Base", "Base"), bg=C["card"],
+                  width=16).grid(row=f + 1, column=0, sticky="w", pady=1)
+            v0 = cur_t[f] if f < len(cur_t) else ""
+            cb_f = ttk.Combobox(fbox, values=[k[1] for k in kinds], state="readonly", width=34)
+            cb_f.current(next((i for i, k in enumerate(kinds) if k[0] == v0), 0))
+            cb_f.grid(row=f + 1, column=1, sticky="w")
+            form_cbs.append(cb_f)
+
+        def forms_picked(_e=None):
+            sel = [kinds[cb_f.current()][0] for cb_f in form_cbs]
+            chosen["aura_tipos_forma"] = None if not any(sel) else [x or "base" for x in sel]
+        for cb_f in form_cbs:
+            cb_f.bind("<<ComboboxSelected>>", forms_picked)
+        hint(fbox, T("p. ej. Super Saiyan 2 con rayos en la forma 2; «la de su personaje base» deja la que hereda",
+                     "e.g. Super Saiyan 2 with sparks on form 2; \"its base character's\" keeps the inherited one"),
+             bg=C["card"], wrap=300).grid(row=1, column=2, rowspan=4, sticky="nw", padx=8)
+
         def save():
             try:
                 bk = backup_file(m["toml"], self.env)
@@ -4132,8 +4313,8 @@ class CharactersPage(Page):
             self.want = m["name"]
             self.reload()
         ttk.Button(g, text=T("Guardar", "Save"), style="Small.TButton", command=save).grid(
-            row=3, column=0, sticky="w", pady=(8, 0))
-        st.grid(row=4, column=0, columnspan=3, sticky="ew")
+            row=4, column=0, sticky="w", pady=(8, 0))
+        st.grid(row=5, column=0, columnspan=3, sticky="ew")
 
     def _traje_editor(self, body, m):
         d = m["data"]
@@ -6262,6 +6443,35 @@ class App:
 
 
 # ================================================================================ autotest
+def probar_deshacer(say):
+    """Copia + indice + Deshacer en una carpeta temporal (no toca el juego ni los mods reales)."""
+    import tempfile  # noqa: PLC0415
+    tmp = tempfile.mkdtemp(prefix="s7_deshacer_")
+    try:
+        class _E:
+            pass
+        env = _E()
+        env.mods = os.path.join(tmp, "mods")
+        env.backups = os.path.join(tmp, "modkit_backups")
+        f = os.path.join(env.mods, "mod_prueba", "personaje.toml")
+        os.makedirs(os.path.dirname(f))
+        with open(f, "w", encoding="utf-8") as fh:
+            fh.write("v1\n")
+        backup_file(f, env)
+        with open(f, "w", encoding="utf-8") as fh:
+            fh.write("v2\n")
+        restaurados = deshacer_ultimo(env)
+        with open(f, encoding="utf-8") as fh:
+            volvio = fh.read() == "v1\n"
+        vuelta = deshacer_ultimo(env)          # ya deshecho: no debe tocar nada mas
+        guardada = any(n.endswith("_personaje.toml") for _, _, fs in os.walk(env.backups) for n in fs)
+        ok = volvio and len(restaurados) == 1 and vuelta == [] and guardada
+        say(("OK" if ok else "FAIL") + ": Deshacer ultimo paso (restaura, conserva lo anterior, no repite)")
+        return ok
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def selftest(lang=None):
     """Construye TODAS las pantallas (basico y avanzado, ES y EN) sin mostrar la ventana, genera los
     formularios de todas las herramientas y prueba el cableado real con `importar.py fuentes`."""
@@ -6525,6 +6735,7 @@ def selftest(lang=None):
         else:
             ok = False
             say("FAIL: importar.py / roster_build.py not found next to the GUI")
+        ok = probar_deshacer(say) and ok
         root.update_idletasks()
     except Exception:  # noqa: BLE001
         ok = False

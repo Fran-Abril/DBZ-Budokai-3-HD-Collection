@@ -109,6 +109,9 @@ void Launch(PPCContext& ctx, uint8_t* base, bool from_menu) {
     REX_STORE_U16(rec + 18, uint16_t(q.suit[k]));
     REX_STORE_U16(rec + 26, uint16_t(int16_t(q.pad[k])));
     if (q.form[k] > 0) REX_STORE_U16(rec + 20, uint16_t(q.form[k]));
+    // s7 06: como la forma de campana (tagteam_slots.cpp BeforeBattleSetup, rec+20 y rec+22): el resolver se salta
+    // la forma impuesta y sin el maximo el juego no carga la forma pedida
+    if (q.form[k] > 0) REX_STORE_U16(rec + 22, uint16_t(q.form[k]));
     if (q.hp[k] != 0) REX_STORE_U32(rec + 36, uint32_t(q.hp[k] > 0 ? q.hp[k] : -q.hp[k]));
     if (q.hp[k] > 0) REX_STORE_U32(rec + 40, uint32_t(q.hp[k]));
     // Capsulas: sub_82179408 deja las listas vacias y sin ellas nadie lanza tecnicas ni se transforma. Como en el
@@ -174,6 +177,22 @@ void Launch(PPCContext& ctx, uint8_t* base, bool from_menu) {
 }
 }  // namespace
 
+namespace {
+// Con el menu principal entero (creado y fuera de su entrada) su destruccion (sub_8218BA00, dentro de
+// Launch) y el arranque del combate son seguros. Si un modo pide el combate siguiente nada mas acabar el
+// anterior (los cinco Cell Jr. seguidos de la Leyenda de Mr. Satan), el menu se pide y se destruye a
+// medias; su arbol de nodos (que sub_8218BA00 y sub_8218A638 sueltan con sub_820ACCF0) queda con un puntero
+// malo y al tercer combate seguido el juego lee guest 0xF8 (r30 = 0xD0; generado dbz3_recomp.43.cpp:2355,
+// lr = 0x820ACCF8 = sub_820ACCF0). Aqui se espera a que el menu este creado y en reposo antes de lanzarlo.
+bool MenuListo(uint8_t* base) {
+  const uint32_t mgr = REX_LOAD_U32(dbz3::GA(0x8245F230));   // gestor del menu (docs/14_frentes/hub.md)
+  const uint32_t task = mgr ? REX_LOAD_U32(mgr + 16) : 0;
+  const uint32_t obj = task ? REX_LOAD_U32(task + 48) : 0;
+  // +148: 2 entrando, 3 activo, 4 sale con B, 5 sale con A
+  return obj != 0 && REX_LOAD_U16(obj + 148) >= 3;
+}
+}  // namespace
+
 // Espera del menu principal (G+0 = 5): aqui se lanza el combate pedido.
 DBZ3_HOOK_EU(sub_821D7C30) {
   using namespace dbz3::hub;
@@ -189,8 +208,14 @@ DBZ3_HOOK_EU(sub_821D7C30) {
     }
   }
   if (g_phase.load() == 1 && int32_t(REX_LOAD_U32(kReqCur)) == -1) {
-    Launch(ctx, base, true);
-    return;
+    // Si el menu aun no esta entero (el modo pide el siguiente combate en cuanto acaba el anterior: los
+    // Cell Jr. seguidos), se deja correr el menu este tick y se reintenta el siguiente; tope de 10 s.
+    static uint32_t esperas = 0;
+    if (MenuListo(base) || esperas++ > 600) {
+      esperas = 0;
+      Launch(ctx, base, true);
+      return;
+    }
   }
   orig(ctx, base);
 }

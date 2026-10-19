@@ -9,7 +9,8 @@ en vez de recortar capturas.
 Sombreado (deducido de las texturas del juego, calibrado con los iconos): cada material tiene una textura
 base y una RAMPA toon de 64x64 (material +0x34). La rampa guarda el COMPLEMENTO
 del tono de sombra: piel humana = rampa azul, Ginyu (morado) = rampa verde. El
-color es  base * (1 - k * rampa[u])  con u = iluminacion (0 sombra .. 63 luz). El
+color es  base - k * rampa[u]  (RESTA; con las bases casi blancas de los nativos coincide
+con base*(1-k*rampa))  con u = iluminacion (0 sombra .. 63 luz). El
 alfa de la textura base marca zonas sin sombrear (blanco de los ojos, lineas).
 Materiales sin rampa (flags 0x1b4) = sin iluminar. Contorno negro por silueta y
 discontinuidad de profundidad (como el casco invertido del juego).
@@ -34,7 +35,11 @@ from awg_vertex_buffer import AwgVertexBuffer, WINDOW, qmat, mmul, be32, be_f  #
 from b3_gateway import DrawTable, strip_tri  # noqa: E402
 from skin_slots import SkinSlots  # noqa: E402
 
-RAMP_K = 1.0           # color = base * (1 - rampa): calibrado (piel Goku/Ginyu = iconos oficiales)
+RAMP_K = 1.0           # factor de la rampa (calibrado con la piel de Goku/Ginyu = iconos oficiales)
+# Sombreado toon: el juego RESTA la rampa (color = base - rampa); aqui se usaba el PRODUCTO
+# (base * (1 - rampa)), exacto solo con las bases casi blancas de los nativos. Con bases de
+# color (PSP/SDBH) se desvia. Ver docs/03_formatos/TOON_Y_BRILLO_HD.md ("Pasarla a resta").
+RAMP_MODE = "resta"    # "resta" (fiel al juego) | "producto" (comportamiento antiguo)
 
 
 
@@ -406,7 +411,11 @@ def _shade(model, tris, mats, T, w1, w2, Nc, light):
             # maximo = sin sombrear (blanco de los ojos)
             band = np.clip(np.round(base[:, 3] * 15), 0, 15)
             yi = np.clip(((band + 0.5) * rh / 16).astype(int), 0, rh - 1)
-            shaded = rgb * (1 - RAMP_K * ramp[yi, xi, :3])
+            r3 = ramp[yi, xi, :3]
+            if RAMP_MODE == "resta":
+                shaded = np.clip(rgb - RAMP_K * r3, 0.0, 1.0)
+            else:
+                shaded = rgb * (1 - RAMP_K * r3)
             rgb = np.where(band[:, None] >= 15, rgb, shaded)
         elif mat["blend"]:                     # lente: textura x color del material
             rgb = rgb * mat["diffuse"]
@@ -785,6 +794,7 @@ def make_hud(model, yaw=None, pitch=None, zoom=1.0, dx=0.0, dy=0.0, art=None, po
 
 
 def main():
+    global RAMP_MODE
     ap = argparse.ArgumentParser()
     ap.add_argument("bin")
     ap.add_argument("out")
@@ -792,7 +802,10 @@ def main():
     ap.add_argument("--pitch", type=float, default=0)
     ap.add_argument("--size", type=int, default=512)
     ap.add_argument("--head", action="store_true")
+    ap.add_argument("--toon", choices=("resta", "producto"), default=RAMP_MODE,
+                    help="sombreado de la rampa (resta = fiel al juego)")
     a = ap.parse_args()
+    RAMP_MODE = a.toon
     m = Model(a.bin)
     view = rot_x(a.pitch) @ rot_y(a.yaw)
     P, _ = m.posed()

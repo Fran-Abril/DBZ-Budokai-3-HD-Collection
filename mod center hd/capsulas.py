@@ -26,6 +26,7 @@ boton B, especiales con capsula en 2 ranuras, definitivo con ^E). adapt_iw_bcm()
 a la de Budokai 3: modo hiper (LT/L2) -> Dragon Rush y definitivos, especiales ligados a
 sus capsulas.
 """
+import hashlib
 import io
 import os
 import struct
@@ -264,8 +265,11 @@ def _lowbit(m):
     return (m & -m).bit_length() if m else 99
 
 
-def adapt_iw_bcm(ccm, skill_caps, nforms=1):
+def adapt_iw_bcm(ccm, skill_caps, nforms=1, key_map=None):
     """BCM de Infinite World -> mecanica de Budokai 3. skill_caps = {clave IW: capsula B3}.
+    key_map = {clave del BCM: clave real de IW}: los ports de la comunidad a veces dejan en
+    w11 un ID que en la hoja de IW es un objeto (p.ej. Janemba: 884 Senzu Bean, 887 Super Holy
+    Water); con el mapa se traduce a la tecnica real (364 Hell Gate, 367 Rakshasa's Claw).
     -> (#CCM nuevo, injertos por forma {forma 0..: {codigo: codigo de la variante}}, informe).
       - variantes por forma (0x1000): una sola entrada (la de la forma 1) y, en las formas de
         las otras, su animacion en el mismo codigo (como los movesets por forma de B3)
@@ -280,6 +284,12 @@ def adapt_iw_bcm(ccm, skill_caps, nforms=1):
 
     def wn(k, i):
         return w(nodes[k][0], 0, i)
+
+    km = key_map or {}
+
+    def bkey(b):
+        k = iw_key(b)
+        return km.get(k, k)
 
     def collapse(keys):
         groups = {}
@@ -406,7 +416,7 @@ def adapt_iw_bcm(ccm, skill_caps, nforms=1):
             rep.append("transformarse: arriba+E de IW -> P+K+G (sus animaciones %#x/%#x)" % (
                 w(b, 0, 12), w(b, 0, 13)))
         elif c1 & 0x8000 and c1 & 0x0008:                # definitiva
-            key = iw_key(b)
+            key = bkey(b)
             cid = skill_caps.get(key, 0)
             for i, v in ((0, 0), (1, 0x0F), (COND, 0x000A), (TYPE, 0), (6, 0x8001), (8, cid),
                          (9, 0), (10, 0), (11, 0)):
@@ -417,7 +427,7 @@ def adapt_iw_bcm(ccm, skill_caps, nforms=1):
         elif c1 & 0x8000:                                 # tecnica
             if first_sp is None:
                 first_sp = len(out)
-            key = iw_key(b)
+            key = bkey(b)
             if w(b, 0, TYPE) & 0x10 or key in specials:   # tras combo / la de la otra ranura
                 continue
             specials[key] = k
@@ -674,15 +684,26 @@ def add_combo_specials(ccm, donor_ccm):
 
 
 # ---------------------------------------------------------------- nombres (#AZT)
+_RENDER_CACHE = {}
+
+
 def render_name(text, h=NAME_H, color=(255, 255, 255, 255)):
     """Nombre de capsula al estilo del juego (blanco con borde oscuro): mismo tamano y
-    posicion que los nativos (calibrado con "Kamehameha" de los bancos 2682 / SCMKLL)."""
+    posicion que los nativos (calibrado con "Kamehameha" de los bancos 2682 / SCMKLL).
+    Recordado por CONTENIDO (el montaje rinde el mismo rotulo una vez por idioma)."""
+    key = ("nombre", text, h, color)
+    hit = _RENDER_CACHE.get(key)
+    if hit is not None:
+        return hit.copy()
     f = load_font(NAME_FONT, 18)
     wid = int(f.getlength(text)) + 10
     out = Image.new("RGBA", (min(wid, 508), h), (0, 0, 0, 0))
     ImageDraw.Draw(out).text((3, h // 2 - (0 if h >= 28 else 1)), text, font=f, anchor="lm", fill=color,
                              stroke_width=2, stroke_fill=(30, 20, 20, 255))
-    return np.array(out)
+    img = np.array(out)
+    if len(_RENDER_CACHE) < 4096:
+        _RENDER_CACHE[key] = img
+    return img.copy()
 
 
 # ---------------------------------------------------------------- panel de descripcion
@@ -711,8 +732,12 @@ def _wrap(text, f, width):
 
 
 def render_lines(text):
+    """Lineas del panel de descripcion; recordado por CONTENIDO (mismo texto -> misma imagen)."""
     if not text:
         return np.zeros((24, 16, 4), np.uint8)
+    hit = _RENDER_CACHE.get(("lineas", text))
+    if hit is not None:
+        return hit.copy()
     f = load_font(DESC_FONT, 16)
     lines = _wrap(text, f, DESC_W)
     wid = min(DESC_W + 8, int(max(f.getlength(t) for t in lines)) + 6)
@@ -721,7 +746,10 @@ def render_lines(text):
     d = ImageDraw.Draw(out)
     for k, t in enumerate(lines):
         d.text((1, DESC_TOP + DESC_PITCH * k), t, font=f, fill=DESC_COLOR)
-    return np.array(out)
+    img = np.array(out)
+    if len(_RENDER_CACHE) < 4096:
+        _RENDER_CACHE[("lineas", text)] = img
+    return img.copy()
 
 
 # Textos generados de las capsulas nuevas por idioma del juego (data_usi/eng = en,
@@ -817,14 +845,25 @@ def azt_entries(b):
     return [struct.unpack(">I", b[idx + 4 * k:idx + 4 * k + 4])[0] for k in range(n)]
 
 
+_AZT_CACHE = {}
+
+
 def azt_read(b, k):
+    """Textura k del #AZT (con recorte logico); recordada por CONTENIDO (las mismas
+    texturas nativas se leen una vez por personaje e idioma)."""
     o = azt_entries(b)[k]
     if not o:
         return None
     do, ds = struct.unpack(">II", b[o + 0x14:o + 0x1C])
     lw, lh = struct.unpack(">HH", b[o + 0x10:o + 0x14])
-    img = np.array(Image.open(io.BytesIO(bytes(b[do:do + ds]))).convert("RGBA"))
-    return img[:lh, :lw]
+    blob = bytes(b[do:do + ds])
+    key = hashlib.sha1(blob).digest()
+    hit = _AZT_CACHE.get(key)
+    if hit is None:
+        hit = np.array(Image.open(io.BytesIO(blob)).convert("RGBA"))
+        if len(_AZT_CACHE) < 4096:
+            _AZT_CACHE[key] = hit
+    return hit[:lh, :lw].copy()
 
 
 def build_azt(base, items, flag28=0x400):

@@ -65,13 +65,15 @@ def le(b, o):
 # ---------------------------------------------------------------------------------------------------------
 # Modelo: amo2awo + bloque de colision
 # ---------------------------------------------------------------------------------------------------------
-def conv_colision(b, g3s, base):
+def conv_colision(b, g3s, base, escala=1.0):
     """Bloques de colision de un #AMO0 (offsets relativos al modelo, en orden de lista) -> bytes HD + mapa.
 
     PS2 y HD guardan lo mismo; la HD reordena: cabeceras de todos los bloques (4 filas de 16 B
     [FFFFFFFF,0,0,FFFFFFFF->0] + [4, nodos, primer nodo, FFFFFFFF->0]) y luego, por bloque, sus nodos
     (0x30 B + 0x20 de ceros: [siguiente, vertices, triangulos, 0, esfera...]) y los datos de cada nodo
-    (vertices [0,0,0,n]+n x 16 B, triangulos [0,0,0,n]+n x 32 B). Devuelve (bytes, {off PS2: off HD})."""
+    (vertices [0,0,0,n]+n x 16 B, triangulos [0,0,0,n]+n x 32 B). Devuelve (bytes, {off PS2: off HD}).
+    escala != 1 estira la CAJA en x/z (no toca y) alrededor del origen del modelo: la usa cmd_mod
+    (--caja-escala) para dar mas sitio a un escenario cuyo suelo es mas ancho que su colision."""
     R = lambda o: le(b, o)  # noqa: E731
     mp, pos, heads = {}, base, []
     for g3 in g3s:
@@ -98,12 +100,12 @@ def conv_colision(b, g3s, base):
             va, ta = R(q + 4), R(q + 8)
             nv, nt = R(va + 12), R(ta + 12)
             mp[va] = pos
-            d.append((va, 16 + 16 * nv))
+            d.append(("v", va, 16 + 16 * nv))
             pos += 16 + 16 * nv
             mp[ta] = pos
             for t in range(nt):
                 mp[ta + 16 + 32 * t] = pos + 16 + 32 * t
-            d.append((ta, 16 + 32 * nt))
+            d.append(("t", ta, 16 + 32 * nt))
             pos += 16 + 32 * nt
         datos.append(d)
     out = bytearray()
@@ -121,12 +123,22 @@ def conv_colision(b, g3s, base):
             v[1], v[2] = mp[v[1]], mp[v[2]]
             w(*v)
             out.extend(bytes(0x20))
-        for src, sz in d:
-            out.extend(struct.pack(">%dI" % (sz // 4), *struct.unpack_from("<%dI" % (sz // 4), b, src)))
+        for tipo, src, sz in d:
+            if tipo == "v" and escala != 1.0:
+                vals = list(struct.unpack_from("<%dI" % (sz // 4), b, src))
+                for v in range((sz - 16) // 16):
+                    k = 4 + 4 * v
+                    x = struct.unpack("<f", struct.pack("<I", vals[k]))[0]
+                    z = struct.unpack("<f", struct.pack("<I", vals[k + 2]))[0]
+                    vals[k] = struct.unpack("<I", struct.pack("<f", x * escala))[0]
+                    vals[k + 2] = struct.unpack("<I", struct.pack("<f", z * escala))[0]
+                out.extend(struct.pack(">%dI" % (sz // 4), *vals))
+            else:
+                out.extend(struct.pack(">%dI" % (sz // 4), *struct.unpack_from("<%dI" % (sz // 4), b, src)))
     return bytes(out), mp
 
 
-def amo_a_awo(amo):
+def amo_a_awo(amo, escala=1.0):
     """#AMO0 PS2 -> (#AWO HD, {off PS2: off HD} relativos al modelo: base, huesos, listas, colision).
     amo2awo deja las listas de hueso al final; el bloque de colision va justo delante (como el nativo)."""
     awo = bytearray(amo2awo.convert_amo(bytes(amo)))
@@ -150,7 +162,7 @@ def amo_a_awo(amo):
                 mp[lp + 16 * k] = lh + 16 * k
         return bytes(awo), mp
     ins = min(lh for _, _, lh in listas)
-    col, cmp_ = conv_colision(amo, g3s, ins)
+    col, cmp_ = conv_colision(amo, g3s, ins, escala)
     mp.update(cmp_)
     awo[ins:ins] = col
     for i, lp, lh in listas:
@@ -352,7 +364,7 @@ def camaras_hd(zdd):
     return out
 
 
-def mdd_a_zdd(mdd, pistas_min=0, camaras=()):
+def mdd_a_zdd(mdd, pistas_min=0, camaras=(), escala=1.0):
     """#MDD PS2 -> #ZDD HD: cabecera 0x40, bloques convertidos (orden HD, alineados a 32), grafo.
     pistas_min: el primer #AMC del objeto 0 (camaras de la presentacion) con al menos esas pistas.
     camaras: bloques #ACC HD para el objeto 0 si no trae ninguno (B1: su objeto acaba en +0xD4, sin camaras)."""
@@ -373,7 +385,7 @@ def mdd_a_zdd(mdd, pistas_min=0, camaras=()):
     for off, tam in bloques_mdd(mdd):
         datos = sustituto.get(off, mdd[off:off + tam])
         if datos[:4] == b"#AMO":
-            hd, mp = amo_a_awo(datos)
+            hd, mp = amo_a_awo(datos, escala)
         else:
             try:
                 hd, mp = ps2hd.convert_block(datos), {}
@@ -560,6 +572,49 @@ def raices_quietas_b2(mdd):
     return bytes(out), n_raiz - len(quedan), quietas
 
 
+def sanear_anims_raiz_b2(mdd):
+    """B2: en las raices, desactiva los adornos marcados como animacion. La raiz de cada escenario es un registro
+    de 0x20 B con DOS pares (n, puntero): (0, +0xC) y (4, +0x10); cada entrada es [flag, bloque, parametros, 0].
+    El grupo 1 (BUDO) es el unico cuya raiz trae en el SEGUNDO par una entrada ACTIVA (flag != 0) cuyo bloque es un
+    #AMP (particula), no un #AMM (animacion); medido 2026-10-18 en los 9 grupos. El port se cierra al dibujar la
+    lista de nodos de esa raiz (generated/dbz3_recomp.23.cpp:706, lr 0x8208E5AC). Los grupos que funcionan nunca
+    tienen esa combinacion (sus entradas con flag != 0 apuntan siempre a #AMM). Aqui se pone esa entrada a
+    flag = 0 y parametros = 0, como las raices que si funcionan; el bloque se deja (no se mueve nada mas).
+    Ademas (2026-10-18, crash con flag=0 en lr 0x8208E5AC): la entrada se QUITA de su lista (la lista se compacta y
+    el contador baja) [H: el guest crea un objeto por entrada del segundo par], y el #AMP no tiene
+    manejador (la tabla 0x82310110 no lo tiene). Los grupos que funcionan tienen el segundo par vacio en 3 de cada 4
+    raices (g0, g2, g4, g7, g8). Devuelve (mdd, n entradas quitadas)."""
+    out = bytearray(mdd)
+    rl, n_raiz = le(mdd, 0x24), le(mdd, 8)
+    if not rl:
+        return mdd, 0
+    n = 0
+    for k in range(n_raiz):
+        s = le(mdd, rl + 4 * k)
+        if not s:
+            continue
+        for cf, af in ((0, 12), (4, 16)):
+            cnt, arr = le(mdd, s + cf), le(mdd, s + af)
+            if not (cnt and arr):
+                continue
+            entradas = [mdd[arr + 16 * j:arr + 16 * (j + 1)] for j in range(cnt)]
+            quedan = []
+            for ent in entradas:
+                flag, blk = struct.unpack_from("<II", ent, 0)
+                if flag and 0 < blk < len(mdd) - 4 and mdd[blk:blk + 4] != b"#AMM":
+                    n += 1          # se quita de la lista (el bloque queda en el fichero, sin referencia)
+                    continue
+                quedan.append(ent)
+            if len(quedan) != cnt:
+                # lista compactada y contador reducido: el juego recorre solo `cnt` entradas
+                for j, ent in enumerate(quedan):
+                    out[arr + 16 * j:arr + 16 * (j + 1)] = ent
+                struct.pack_into("<I", out, s + cf, len(quedan))
+                if not quedan:   # lista vacia = puntero 0, como en los grupos que funcionan (g0, g2, g4, g7, g8)
+                    struct.pack_into("<I", out, s + af, 0)
+    return bytes(out), n
+
+
 def sin_camaras_suceso(mdd):
     """B2: los #AMC del objeto 0 NO son la presentacion: son las camaras de la destruccion. Sus clips duran lo mismo
     que las animaciones de las raices (medido en los 9 grupos: nieve 420/270/98/282, base 604/211, ciudad 120/160,
@@ -667,7 +722,7 @@ def objetos_zona_b(mdd):
     return bytes(out), True
 
 
-def escenario_b2(fuente, grupo, donante=44, zona=0):
+def escenario_b2(fuente, grupo, donante=44, zona=0, escala=1.0):
     """Bin HD de un escenario de B2 (o B1): geometria, grafo, colision y camaras del juego de origen; script
     (#SPX) y registro de efectos (#AMB de 641 casillas) del escenario nativo `donante` de la HD del jugador. El
     registro de B2 (25-37 hijos sin indices fijos) no encaja en la tabla de 641 casillas que el juego indexa por
@@ -682,10 +737,11 @@ def escenario_b2(fuente, grupo, donante=44, zona=0):
         if not ok:
             raise SystemExit("el grupo %d de %s no tiene variante B (un solo objeto)" % (grupo, fuente.juego))
         mdd, quitadas, quietas = raices_zona_b(mdd)
+        mdd, saneadas = sanear_anims_raiz_b2(mdd)
         mdd, sucesos = sin_camaras_suceso(mdd)
         print("arreglos B2 zona B: %d raices de la variante A fuera, %d de la B quietas en su cuadro 0, "
-              "%d camaras del objeto de la variante B fuera, %d camaras de transicion" %
-              (quitadas, quietas, sucesos, len(transicion)))
+              "%d camaras del objeto de la variante B fuera, %d animaciones de raiz desactivadas, "
+              "%d camaras de transicion" % (quitadas, quietas, sucesos, saneadas, len(transicion)))
         nat = hd_nativo(donante)
         k = hijos_amb(nat, ">")
         spx = nat[k[3][0]:k[3][0] + k[3][1]]
@@ -698,19 +754,26 @@ def escenario_b2(fuente, grupo, donante=44, zona=0):
                 continue
             if ps2hd.MAGIC.get(b[:4], b[:4]) == b"#ACC":
                 camaras.append(hd)
-        return amb_hd([(mdd_a_zdd(mdd, pistas_min=3, camaras=camaras), 0xFFFFFFFF), (camara(mad, b"#CAD"), 0xFFFFFFFF),
-                       (camara(mas, b"#CAS"), 0xFFFFFFFF), (spx, 8), (reg, 0xFFFFFFFF)])
+        cas = nat[k[2][0]:k[2][0] + k[2][1]] if not le(mas, 4) else camara(mas, b"#CAS")   # #MAS vacio (grupo 5): el #CAS del donante
+        if not le(mas, 4):
+            print("arreglos B2: el #MAS del grupo %d esta vacio: se usa el #CAS del donante %d" % (grupo, donante))
+        return amb_hd([(mdd_a_zdd(mdd, pistas_min=3, camaras=camaras, escala=escala), 0xFFFFFFFF), (camara(mad, b"#CAD"), 0xFFFFFFFF),
+                       (cas, 0xFFFFFFFF), (spx, 8), (reg, 0xFFFFFFFF)])
     mdd, quitadas, quietas = raices_quietas_b2(mdd)
+    mdd, saneadas = sanear_anims_raiz_b2(mdd)
     mdd, sucesos = sin_camaras_suceso(mdd)
-    print("arreglos B2: %d piezas de destruccion quitadas, %d quietas en su cuadro 0, %d camaras de suceso fuera"
-          % (quitadas, quietas, sucesos))
+    print("arreglos B2: %d piezas de destruccion quitadas, %d quietas en su cuadro 0, %d camaras de suceso "
+          "fuera, %d animaciones de raiz desactivadas" % (quitadas, quietas, sucesos, saneadas))
     nat = hd_nativo(donante)
     k = hijos_amb(nat, ">")
     spx = nat[k[3][0]:k[3][0] + k[3][1]]
     reg = nat[k[4][0]:k[4][0] + k[4][1]]
     camaras = camaras_hd(nat[k[0][0]:k[0][0] + k[0][1]])
-    return amb_hd([(mdd_a_zdd(mdd, pistas_min=3, camaras=camaras), 0xFFFFFFFF), (camara(mad, b"#CAD"), 0xFFFFFFFF),
-                   (camara(mas, b"#CAS"), 0xFFFFFFFF), (spx, 8), (reg, 0xFFFFFFFF)])
+    cas = nat[k[2][0]:k[2][0] + k[2][1]] if not le(mas, 4) else camara(mas, b"#CAS")   # #MAS vacio (grupo 5): el #CAS del donante
+    if not le(mas, 4):
+        print("arreglos B2: el #MAS del grupo %d esta vacio: se usa el #CAS del donante %d" % (grupo, donante))
+    return amb_hd([(mdd_a_zdd(mdd, pistas_min=3, camaras=camaras, escala=escala), 0xFFFFFFFF), (camara(mad, b"#CAD"), 0xFFFFFFFF),
+                   (cas, 0xFFFFFFFF), (spx, 8), (reg, 0xFFFFFFFF)])
 
 
 def escenario_b3ps2(amb, registro):
@@ -1168,7 +1231,8 @@ def cmd_mod(a):
     if a.bin and Path(a.bin).exists():          # bin ya convertido (rehacer solo las imagenes)
         datos = Path(a.bin).read_bytes()
     else:
-        datos = escenario_b2(IsoB2(a.iso, a.juego), a.grupo, a.donante, zona=1 if a.zona == "b" else 0)
+        datos = escenario_b2(IsoB2(a.iso, a.juego), a.grupo, a.donante, zona=1 if a.zona == "b" else 0,
+                           escala=a.caja_escala)
     base = ENTRADA_BASE + (20 if a.juego == "b1" else 0)
     entrada = a.entrada if a.entrada is not None else base + (40 + a.grupo if a.zona == "b" else a.grupo)   # menu = entrada + 100
     nombre = a.nombre or "%s ESCENARIO %d%s" % (a.juego.upper(), a.grupo, " ZONA B" if a.zona == "b" else "")
@@ -1202,6 +1266,9 @@ def main():
     s.add_argument("--zona", choices=("a", "b"), default="a",
                    help="variante del escenario de B2: a (por defecto, la inicial) o b (la otra zona: el objeto "
                         "de la variante 1, sus raices y las camaras de la transicion; solo grupos con 2 variantes)")
+    s.add_argument("--caja-escala", type=float, default=1.0,
+                   help="estira la CAJA DE COLISION del escenario en x/z (no toca y): 1.0 = original. Sirve para "
+                        "un escenario cuyo suelo es mas ancho que su colision (Base Red Ribbon de B2: poco sitio).")
     s.set_defaults(fn=cmd_mod)
     s = sp.add_parser("comprobar")
     s.add_argument("escenarios", nargs="*", type=int)

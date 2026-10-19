@@ -358,6 +358,7 @@ Paso PasoIW(const MisionTablaIW& t, std::string& regla) {
   x.tipo = kCombate;
   x.jugador = t.numero > kMisionesDM ? g_iw_luchador : IWaB3(t.jugador);
   x.rival = IWaB3(t.rival);
+  if (t.numero <= kMisionesDM) x.forma1 = FormaFusionIW(t.jugador);   // s7 06: fusion nativa de B3 (0 si no lo es)
   x.mapa = MapaIW(t.escenario);
   x.texto = {"Misión de Infinite World.", "Infinite World mission."};
   x.informe = t.numero - 1;
@@ -382,8 +383,11 @@ Paso PasoIW(const MisionTablaIW& t, std::string& regla) {
     x.tiempo = 180;
     x.reglas.golpes = 30;
     x.reglas.nivel_com = 0;
-  } else if (t.condicion == 1 || t.condicion == 2) {
-    x.iw = t.condicion;
+  } else if (t.condicion == 1) {   // "Fight": KO o aguantar el tiempo con la vida del nivel (+0x04 = barras x1000)
+    x.iw = 1;
+    x.vida_minima = t.nivel > 0 ? t.nivel * 1000 : 1000;
+  } else if (t.condicion == 2) {
+    x.iw = 2;
   } else if (t.condicion == 3) {
     x.reglas.sin_atacar = true;
     x.reglas.nivel_com = 0;
@@ -477,7 +481,7 @@ bool Listo(int m, std::string* motivo) {
 }
 
 const Texto kTitulos[kModos] = {{"Saga de Vegeta en Namek (Budokai 1)", "Vegeta's Namek saga (Budokai 1)"},
-                                {"Dragon World (Budokai 2) - EXPERIMENTAL", "Dragon World (Budokai 2) - EXPERIMENTAL"},
+                                {"Dragon World (Budokai 2) - BETA", "Dragon World (Budokai 2) - BETA"},
                                 {"¡Fusión fallida! (Gotenks gordo)", "Failed fusion! (Fat Gotenks)"},
                                 {"Las absorciones de Súper Bu", "Super Buu's absorptions"},
                                 {"Misiones del Dragón (Infinite World)", "Dragon Mission (Infinite World)"},
@@ -485,8 +489,8 @@ const Texto kTitulos[kModos] = {{"Saga de Vegeta en Namek (Budokai 1)", "Vegeta'
 const Texto kAyudas[kModos] = {
     {"Los combates de la historia de Budokai 1 de tu copia del juego, con Zarbon importado de Budokai 1.",
      "The story battles from your copy of Budokai 1, with Zarbon imported from Budokai 1."},
-    {"EXPERIMENTAL, en construcción. El tablero de Budokai 2 de tu copia: mueve a Goku y a su compañero casilla a casilla, busca objetos y lucha al tocar a un rival.",
-     "EXPERIMENTAL, work in progress. The Budokai 2 board from your copy: move Goku and his partner space by space, search for items and fight when you touch a rival."},
+    {"En construcción. El tablero de Budokai 2 de tu copia: mueve a Goku y a su compañero casilla a casilla, busca objetos y lucha al tocar a un rival.",
+     "Work in progress. The Budokai 2 board from your copy: move Goku and his partner space by space, search for items and fight when you touch a rival."},
     {"Una misión nueva: la fusión sale mal, pero la Tierra no puede esperar.",
      "A new mission: the fusion goes wrong, but the Earth can't wait."},
     {"Bu absorbe a quien vence. Antes de cada combate, elige con qué absorción luchar.",
@@ -1370,7 +1374,9 @@ bool Lanzar() {   // con g_mu
     bool gana = f.ganador == 0;
     if (reto.reglas.golpes > 0) gana = f.golpes >= reto.reglas.golpes;
     if (reto.reglas.sin_atacar) gana = !f.ataco && f.segundos == 0 && f.vida[0] >= reto.vida_minima;
-    if (reto.iw == 1) gana = gana || (f.segundos == 0 && f.vida[0] > 0);   // IW "Fight": aguantar tambien vale
+    // IW "Fight" (Battle_DetermineResultD_, EU 0x20A060 L216525-216531): al agotarse el tiempo gana el jugador si
+    // le queda al menos nivel x1000 de vida (nivel = +0x04; 1 = 1000 de 3000); si no, gana el rival.
+    if (reto.iw == 1) gana = gana || (f.segundos == 0 && f.vida[0] >= reto.vida_minima);
     if (reto.iw == 2) gana = f.ganador == 1;                                // IW: dejar ganar al rival
     if (reto.iw == 3) gana = gana && g_iw_transformo.load();               // IW Training No.9: transformado
     if (reto.iw == 4) gana = g_iw_entreno2.load();                         // IW Training No.2: 5 + 5 + 5

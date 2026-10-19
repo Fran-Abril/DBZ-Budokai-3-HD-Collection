@@ -31,6 +31,7 @@
 #include "cine.h"
 #include "combate.h"
 #include "eu_map.h"
+#include "gigantes.h"
 #include "ingame/game_style.h"
 #include "launcher/i18n.h"
 #include "launcher/launcher_state.h"
@@ -126,12 +127,16 @@ V3 LeeV(uint8_t* base, uint32_t a) {
 void OcultarHud(bool ocultar) { dbz3::combate::OcultarHud(ocultar); }
 
 // Plano p con los luchadores en p1 y p2 (unidades de B3; un luchador mide ~12).
-void Encuadre(int p, V3 p1, V3 p2, V3* ojo, V3* obj, int pose = 0) {   // pose: 0 no, 1 si, 2 se gira (victoria)
+// s1, s2: escala de dibujo de cada lado (gigantes.cpp, 1 = normal). El gigante se agranda DESDE LOS PIES (fila 3 de
+// su matriz intacta, escenarios.md R2): con el ojo y el objetivo a s veces su distancia de los pies y el mismo fov, la
+// imagen es la de un luchador normal (triangulos semejantes): sale entero sin estimar nada (studies 8 fase 2).
+void Encuadre(int p, V3 p1, V3 p2, V3* ojo, V3* obj, int pose = 0, float s1 = 1.0f, float s2 = 1.0f) {
   const V3 c = Mezcla(p1, p2, 0.5f), eje = Unit(V3{p2.x - p1.x, 0, p2.z - p1.z});
   const V3 lado{-eje.z, 0, eje.x};   // perpendicular horizontal
   if (p == kGeneral) {
-    *ojo = c + lado * 48.0f + V3{0, 14.0f, 0};
-    *obj = c + V3{0, 8.0f, 0};
+    const float s = std::max(s1, s2);   // general: los dos; el mas alto manda
+    *ojo = c + lado * (48.0f * s) + V3{0, 14.0f * s, 0};
+    *obj = c + V3{0, 8.0f * s, 0};
     return;
   }
   const V3 yo = p == kLado1 ? p1 : p2, frente = p == kLado1 ? eje : eje * -1.0f;   // de cara a su rival
@@ -141,8 +146,9 @@ void Encuadre(int p, V3 p1, V3 p2, V3* ojo, V3* obj, int pose = 0) {   // pose: 
   // senala, la entrada sube los brazos); la victoria ademas gira al personaje: la camara va al otro costado.
   const float l = (p == kLado1 ? 1.0f : -1.0f) * (pose == 2 ? -1.0f : 1.0f);
   // con pose a 46 (a 38 la victoria de Satan salia sin pies en el plano: auditoria7/G, captura c2_paso)
-  *ojo = yo + Unit(frente * 0.35f + lado * l) * (pose ? 46.0f : 28.0f) + V3{0, pose ? 9.0f : 8.0f, 0};
-  *obj = yo + V3{0, pose ? 7.0f : 6.0f, 0};   // con pose, sitio para los altos (Ten Shin Han) y el brazo arriba
+  const float s = p == kLado1 ? s1 : s2;
+  *ojo = yo + (Unit(frente * 0.35f + lado * l) * (pose ? 46.0f : 28.0f) + V3{0, pose ? 9.0f : 8.0f, 0}) * s;
+  *obj = yo + V3{0, (pose ? 7.0f : 6.0f) * s, 0};   // con pose, sitio para los altos (Ten Shin Han) y el brazo arriba
 }
 
 void Terminar(uint8_t* base, const char* por) {
@@ -447,10 +453,11 @@ void Fotograma(uint8_t* base, uint32_t estado) {
     const int a = q.plano == kLado1 ? q.anim[0] : q.plano == kLado2 ? q.anim[1] : -1;
     return a < 0 ? 0 : a == kPoseVictoria ? 2 : 1;
   };
-  Encuadre(e->pasos[size_t(k)].plano, p1, p2, &ojo, &obj, con_pose(k));
+  const float s1 = dbz3::gigantes::EscalaDe(base, 0), s2 = dbz3::gigantes::EscalaDe(base, 1);
+  Encuadre(e->pasos[size_t(k)].plano, p1, p2, &ojo, &obj, con_pose(k), s1, s2);
   const float t = float(AhoraMs() - g_t0_paso) / 1000.0f, f = Suave(t / kFundido);
   if (k > 0 && f < 1.0f) {
-    Encuadre(e->pasos[size_t(k - 1)].plano, p1, p2, &ojo0, &obj0, con_pose(k - 1));
+    Encuadre(e->pasos[size_t(k - 1)].plano, p1, p2, &ojo0, &obj0, con_pose(k - 1), s1, s2);
     ojo = Mezcla(ojo0, ojo, f);
     obj = Mezcla(obj0, obj, f);
   }

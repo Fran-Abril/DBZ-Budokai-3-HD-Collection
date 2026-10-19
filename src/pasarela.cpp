@@ -97,6 +97,7 @@ constexpr dbz3::GA kMgrPtr = 0x823D6CF4, kStages = 0x82323760, kCfg = 0x8245EFC0
 constexpr int kMainScreen = 5, kJugador = 14;                    // Mr. Satan en B3
 constexpr uint16_t kUp = 0x0001, kDown = 0x0002, kStart = 0x0010, kA = 0x1000, kB = 0x2000;
 constexpr const char* kClave = "hercule";
+bool g_real = false;       // prueba (",real"): el prologo dura lo que en B1 aunque la prueba avance sola
 float g_auto_seg = 4.0f;   // prueba (DBZ3_TEST_PASARELA=auto, ",seg=N"): segundos por pantalla
 // Luchador X = mgr + 2096 + 8240 * lado: vida X+6080 (f32), maxima X+6084, ki X+6100, tope X+6104 (docs/15_tecnicas);
 // mgr+35573 = nivel de la IA del COM (sub_820FC9B0 lo pone de las opciones o del nivel del Torneo; lo leen las tablas
@@ -1383,7 +1384,10 @@ class Panel : public rex::ui::ImGuiDialog {
     const auto a = S::GameArea(io);
     auto* dl = ImGui::GetForegroundDrawList();
     const int v0 = dl->VtxBuffer.Size;
-    Fondo(dl, a, g_fase != kResultado && g_fase != kFin);   // el tablon del resultado ya lleva el logo
+    // titulo y dificultad llevan su logo grande y girado (PantallaTitulo); el tablon del resultado ya lleva el suyo
+    const bool titulo_b1 = g_fase != kResultado && g_fase != kFin && g_fase != kPerdido && size_t(g_paso) < g_pasos.size() &&
+                           g_pasos[size_t(g_paso)].tipo == kPresentacion && elegida_ != g_cambio && Img(kPulsa);
+    Fondo(dl, a, g_fase != kResultado && g_fase != kFin && !titulo_b1);
     const bool auto_on = g_auto.load();
     if (g_fase == kFin) {
       DrawFin(dl, a, t, pressed, auto_on);
@@ -1471,6 +1475,7 @@ class Panel : public rex::ui::ImGuiDialog {
     subir(kPulsa, r.pulsa);
     for (int k = 0; k < 3; ++k) subir(kDif + k, r.dificultad[k]);
     subir(kBarra, r.barra);
+    subir(kCopy, r.copyright);
     subir(kTienesPeq, r.tienes_peq);
     subir(kCifrasPeq, r.cifras_peq);
     subir(kClave, r.clave);
@@ -1699,20 +1704,19 @@ class Panel : public rex::ui::ImGuiDialog {
     }
     Fondo(dl, a, false);
     const ImVec2 d = ImGui::GetIO().DisplaySize;
-    dl->AddRectFilled(ImVec2(0, 0), d, IM_COL32(0, 0, 0, 235));
-    const float in = Ease((t - prologo_at_) / 0.5f);
-    const ImU32 col = IM_COL32(255, 255, 255, int(255 * in));
+    dl->AddRectFilled(ImVec2(0, 0), d, IM_COL32(0, 0, 0, 255));   // B1: negro puro (medido en la captura)
+    const float tp = t - prologo_at_;
+    constexpr int kConsejoCuadros0[5] = {349, 239, 309, 229, 369};
+    const float dur0 = k == 0 ? 1290.0f / 60.0f : k == 1 ? 209.0f / 60.0f : float(139 + kConsejoCuadros0[k - 2]) / 60.0f;
     if (k == 0) {
-      const Tex* es = Img(kEstilo);
-      PicAt(dl, a, *es, 600, 430, std::min(620.0f, es->h * 2.2f), col);
+      PrologoFilosofia(dl, a, tp, dur0);
     } else {
-      if (const Tex* f = Img(kCaraSatan)) PicAt(dl, a, *f, 600, 330, std::min(300.0f, f->h * 2.2f), col);
-      if (const Tex* cs = Img(kConsejo + k - 1)) PicAt(dl, a, *cs, 600, 560, std::min(110.0f, cs->h * 2.2f), col);
+      PrologoConsejos(dl, a, k, tp);
     }
     Ayuda(dl, a, {{"A", T::T("Siguiente", "Next")}, {"START", T::T("Saltar", "Skip")}, {"B", T::T("Salir", "Quit")}});
     constexpr int kConsejoCuadros[5] = {349, 239, 309, 229, 369};
     const float dur = k == 0 ? 1290.0f / 60.0f : k == 1 ? 209.0f / 60.0f : float(139 + kConsejoCuadros[k - 2]) / 60.0f;
-    if (t - prologo_at_ > (auto_on ? 2.0f : dur)) pressed |= kA;
+    if (t - prologo_at_ > (auto_on && !g_real ? 2.0f : dur)) pressed |= kA;
     if (pressed & kB) return Salir(false);
     if ((pressed & kStart) || ((pressed & kA) && k == 6)) {
       CallarVozB1();
@@ -1724,6 +1728,171 @@ class Panel : public rex::ui::ImGuiDialog {
       prologo_k_ = k + 1;
       prologo_at_ = t;
     }
+  }
+
+  // Texto con el "fuego" de los consejos de B1: copias naranjas desplazadas hacia arriba debajo de la imagen. (c, cy) en
+  // px de la captura de 640x480 de B1, k = escala de la imagen.
+  void TextoFuego(ImDrawList* dl, const S::Area& a, const Tex& im, float cx, float cy, float k, float alfa, float x0 = 0,
+                  float y0 = 0, float x1 = -1, float y1 = -1) {
+    if (x1 < 0) x1 = im.w, y1 = im.h;
+    const float w = (x1 - x0) * k * kB1, h = (y1 - y0) * k * kB1Alto * kB1;
+    const ImVec2 u0(x0 / im.w, y0 / im.h), u1(x1 / im.w, y1 / im.h);
+    const ImVec2 p0 = a.At(cx * kB1 - w * 0.5f, cy * kB1 - h * 0.5f);
+    for (int j = 6; j >= 1; --j) {   // llamas: copias naranja-amarillo cada vez mas altas y flojas
+      const ImU32 c = IM_COL32(255, 60 + 30 * (6 - j), 0, int(95.0f * alfa));
+      Pic(dl, im, ImVec2(p0.x, p0.y - 2.6f * float(j) * a.s), ImVec2(p0.x + w * a.s, p0.y + (h - 2.6f * float(j)) * a.s), c, false, u0, u1);
+    }
+    Pic(dl, im, p0, ImVec2(p0.x + w * a.s, p0.y + h * a.s), IM_COL32(255, 255, 255, int(255.0f * alfa)), false, u0, u1);
+  }
+
+  // "Mr. Satan's Style" de B1: las 8 lineas de 668 #6 entran por abajo una tras otra (cada 1,2 s), suben con
+  // perspectiva (la curva y(tau), la escala y el brillo salen de 54 capturas de la ISO cada 1,2 s; las lineas
+  // siguen todas la misma curva) y se pierden arriba, como el rodillo de "La guerra de las galaxias".
+  void PrologoFilosofia(ImDrawList* dl, const S::Area& a, float tp, float dur) {
+    const Tex* es = Img(kEstilo);
+    if (!es) return;
+    static constexpr float kCentro[8] = {61, 148, 198, 248, 298, 348, 398, 448};   // alto del centro de cada linea en la 668 #6
+    static constexpr float kEntra[8] = {1.5f, 3.9f, 5.1f, 6.3f, 7.5f, 8.7f, 9.9f, 11.1f};
+    static constexpr float kTau[12] = {0.0f, 1.2f, 2.3f, 3.5f, 4.7f, 5.9f, 7.1f, 8.3f, 9.5f, 10.7f, 11.9f, 14.0f};
+    static constexpr float kY[12] = {425, 361, 313, 272, 238, 205, 179, 153, 131, 112, 95, 82};   // arriba de la letra
+    const float fin = std::clamp((dur - tp) / 1.5f, 0.0f, 1.0f);
+    for (int i = 0; i < 8; ++i) {
+      const float tau = tp - kEntra[i];
+      if (tau < 0) continue;
+      float y = kY[11];
+      for (int j = 0; j < 11; ++j) {
+        if (tau <= kTau[j + 1]) {
+          y = kY[j] + (kY[j + 1] - kY[j]) * std::max(0.0f, (tau - kTau[j]) / (kTau[j + 1] - kTau[j]));
+          break;
+        }
+      }
+      const float sc = y >= 361 ? 1.18f + (std::min(y, 419.0f) - 361) * (0.11f / 58) : 0.593f + (std::max(y, 109.0f) - 109) * (0.587f / 252);
+      const float al = std::clamp((y - 55) / 230.0f, 0.0f, 1.0f) * std::clamp(tau / 0.5f, 0.0f, 1.0f) * fin;
+      if (al <= 0.01f) continue;
+      const float c = kCentro[i], cy = y + 13.9f * sc;
+      const float w = es->w * sc * kB1, h = 50 * sc * kB1Alto * kB1;
+      Pic(dl, *es, a.At(320 * kB1 - w * 0.5f, cy * kB1 - h * 0.5f), a.At(320 * kB1 + w * 0.5f, cy * kB1 + h * 0.5f),
+          IM_COL32(255, 255, 255, int(255 * al)), false, ImVec2(0, (c - 25) / es->h), ImVec2(1, (c + 25) / es->h));
+    }
+  }
+
+  // "The Art of Combat!" arriba (amplia desde un 230 % a su tamano en 1,5 s) y los consejos que se van quedando, con la
+  // cara de Mr. Satan oscura abajo a la izquierda. Posiciones medidas en la captura (640x480, centros y de cada imagen).
+  void PrologoConsejos(ImDrawList* dl, const S::Area& a, int k, float tp) {
+    static constexpr float kY[5] = {150.5f, 226, 287.5f, 347, 417.5f};
+    if (const Tex* f = Img(kCaraSatan)) {
+      const float w = f->w * 1.1f * kB1, h = f->h * 1.1f * kB1Alto * kB1;   // medida: pelo en (55, 185), mentón en y 430
+      Pic(dl, *f, a.At(50 * kB1, 170 * kB1), a.At(50 * kB1 + w, 170 * kB1 + h), IM_COL32(255, 255, 255, 38));
+    }
+    if (const Tex* ti = Img(kConsejo)) {
+      const float z = k == 1 ? 1.0f + 1.3f * std::max(0.0f, 1.0f - tp / 1.5f) : 1.0f;
+      const float al = k == 1 ? std::clamp(tp / 0.6f, 0.0f, 1.0f) : 1.0f;
+      TextoFuego(dl, a, *ti, 323.5f, 64, z, al);
+    }
+    for (int i = 0; i < 5; ++i) {
+      if (k < 2 + i) break;
+      const Tex* ts = Img(kConsejo + 1 + i);
+      if (!ts) continue;
+      const float al = k == 2 + i ? std::clamp(tp / 0.6f, 0.0f, 1.0f) : 1.0f;
+      if (al > 0) TextoFuego(dl, a, *ts, 320, kY[i], 1.0f, al);
+    }
+  }
+
+  // Sprite de B1 en coordenadas de la captura (640x480, y estirada 480/448): el punto (0, 0) de la textura va a (ox, oy)
+  // con escala s; (x0, y0)-(x1, y1) = recorte de la textura (px; x1 < 0 = entera); k > 0 = escala alrededor de (cx, cy).
+  void Spr(ImDrawList* dl, const S::Area& a, const Tex& t, float ox, float oy, float s, ImU32 tint = IM_COL32_WHITE,
+           float x0 = 0, float y0 = 0, float x1 = -1, float y1 = -1, float cx = -1, float cy = -1, float k = 1) {
+    if (x1 < 0) x1 = t.w, y1 = t.h;
+    float ax = ox + x0 * s, ay = oy + y0 * s * kB1Alto, bx = ox + x1 * s, by = oy + y1 * s * kB1Alto;
+    if (cx >= 0) {
+      ax = cx + (ax - cx) * k, bx = cx + (bx - cx) * k, ay = cy + (ay - cy) * k, by = cy + (by - cy) * k;
+    }
+    Pic(dl, t, a.At(ax * kB1, ay * kB1), a.At(bx * kB1, by * kB1), tint, false, ImVec2(x0 / t.w, y0 / t.h), ImVec2(x1 / t.w, y1 / t.h));
+  }
+  // Cifras amarillas de 668 #22 (5 x 2 de 48 x 64), alineadas a la derecha en xr (captura), con lo alto de la celda en y.
+  void Cifras(ImDrawList* dl, const S::Area& a, int n, float xr, float y, float s, ImU32 tint = IM_COL32_WHITE) {
+    const Tex* c = Img(kCifras);
+    if (!c) return;
+    const std::string v = std::to_string(std::max(0, n));
+    int i = 0;
+    for (auto it = v.rbegin(); it != v.rend(); ++it, ++i) {
+      const int d = *it - '0', cx = (d % 5) * 48, cy = (d / 5) * 64;
+      Spr(dl, a, *c, xr - 48 * s - 40 * s * float(i) - float(cx) * s, y - float(cy) * s * kB1Alto, s, tint, float(cx), float(cy), float(cx + 48), float(cy + 64));
+    }
+  }
+  // Fondo del resultado de B1: negro y, de la fila 300 a la 480, un degradado a rojo oscuro (medido: 0 -> 90 de rojo).
+  void FondoNegro(ImDrawList* dl, const S::Area& a, bool degradado) {
+    const ImVec2 d = ImGui::GetIO().DisplaySize;
+    dl->AddRectFilled(ImVec2(0, 0), d, IM_COL32(0, 0, 0, 255));
+    if (!degradado) return;
+    const float y0 = a.At(0, 300 * kB1).y, y1 = std::max(a.At(0, 480 * kB1).y, d.y);
+    dl->AddRectFilledMultiColor(ImVec2(0, y0), ImVec2(d.x, y1), IM_COL32(0, 0, 0, 255), IM_COL32(0, 0, 0, 255),
+                                IM_COL32(90, 0, 0, 255), IM_COL32(90, 0, 0, 255));
+  }
+  // Pantalla de resultado de B1 tras cada combate: la charla y el "NEXT BATTLE" en una sola (medida contra la captura de
+  // PCSX2, 640x480, con las mismas texturas de 668/669): tablon 668 #15 en (28, 17); Mr. Satan y "Total" (668 #18) en
+  // (439, 79) al 102 %; charla 669 par en (87, 122) y aviso 669 impar en (160, 337); cifras del total (610, 277) al 62 %;
+  // abajo la fila de caras 668 #24 (la vencida con el aspa 668 #17 en (56, 408), la que sigue en (100, 393) al 76 % con
+  // su "Challenger Nth" 668 #16 en (155, 398) y las siguientes en siluetas desde (303, 408) cada 47).
+  void DrawResumenB1(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool auto_on) {
+    const Paso& p = g_pasos[size_t(g_paso)];
+    const int r = p.ronda, n = std::min(int(g_d->combates.size()), 11);
+    const float e = t - cambio_at_;
+    const ImU32 col = IM_COL32(255, 255, 255, int(255 * Ease(e / 0.33f)));   // fundidos de 20 cuadros
+    FondoNegro(dl, a, true);
+    if (const Tex* tb = Img(kTablon)) Spr(dl, a, *tb, 28, 17, 1.0f, col);
+    if (const Tex* st = Img(kTotal)) Spr(dl, a, *st, 439, 79, 1.02f, col);
+    Cifras(dl, a, g_puntos, 610, 277, 0.62f, col);
+    if (r >= 1) {
+      if (const Tex* tx = Img(2 * (r - 1))) Spr(dl, a, *tx, 87, 122, 1.0f, col);
+      if (const Tex* av = Img(2 * (r - 1) + 1)) Spr(dl, a, *av, 160, 337, 1.0f, col);
+    }
+    if (const Tex* ch = Img(kChibis)) {
+      auto cara = [&](int celda, float x, float y, float s) {
+        const float sx = float((celda % 7) * 72), sy = float((celda / 7) * 72);
+        Spr(dl, a, *ch, x - sx * s, y - sy * s * kB1Alto, s, col, sx, sy, sx + 72, sy + 72);
+      };
+      for (int k = std::max(0, r - 2); k < r; ++k) {   // vencidos (los dos ultimos), con el aspa
+        const float x = 56 - 30.0f * float(r - 1 - k);
+        cara(k, x, 408, 0.7f);
+        if (const Tex* cz = Img(kCruz)) Spr(dl, a, *cz, x - 1, 410, 1.0f, col);
+      }
+      if (r < n) cara(r, 100, 393, 0.76f);
+      for (int j = 0; j < 6 && r + 1 + j < n; ++j) cara(r + 1 + j + 10, 303 + 47.0f * float(j), 408, 0.62f);
+    }
+    const float late = 0.975f + 0.025f * std::sin(e * 2.0f * 3.14159265f);   // el letrero late (FUN_00232a80)
+    if (const Tex* rt = Img(kRetadores); rt && r < 11) {
+      const float cx = float((r % 3) * 136), cy = float((r / 3) * 72);
+      Spr(dl, a, *rt, 155 - cx, 398 - cy * kB1Alto, 1.0f, col, cx, cy, cx + 136, cy + 72, 223, 436, late);
+    }
+    Ayuda(dl, a, {{"A", T::T("Siguiente", "Next")}, {"B", T::T("Salir", "Quit")}});
+    if (auto_on && e > g_auto_seg) pressed |= kA;
+    if (pressed & kB) return Salir(false);
+    if (pressed & (kA | kStart)) Entrar(g_paso + 1);
+  }
+
+  // Pantalla del titulo y de la dificultad de B1, medida contra la captura del original (PCSX2, 640x480; la PS2 saca
+  // 640x448 y lo estira a 4:3 en vertical: kB1Alto) con las texturas 666 #0-#6 (ajuste por distancia a los bordes
+  // oscuros del logo, 2026-10-19): Mr. Satan #1 a 1:1 en (65, 8); logo #2 al 97,5 % girado 20 grados (antihorario) con
+  // su centro en (210, 118); copyright #4 a 1:1 en (75, 416); degradado negro de abajo de la 315 a la 480.
+  static constexpr float kB1 = 1.875f;     // 640 de la captura -> 1200 del area
+  static constexpr float kB1Alto = 480.0f / 448.0f;
+  void PantallaTitulo(ImDrawList* dl, const S::Area& a) {
+    const float k = kB1;
+    if (const Tex* s = Img(kSatan)) Pic(dl, *s, a.At(65 * k, 8 * k), a.At((65 + s->w) * k, (8 + s->h * kB1Alto) * k));
+    if (const Tex* l = Img(kLogo)) {
+      const float hw = l->w * 0.975f * 0.5f * k, hh = l->h * 0.975f * kB1Alto * 0.5f * k, cx = 210 * k, cy = 118 * k;
+      const float c = std::cos(20.0f * 3.14159265f / 180.0f), sn = std::sin(20.0f * 3.14159265f / 180.0f);
+      auto P = [&](float x, float y) { return a.At(cx + x * c + y * sn, cy - x * sn + y * c); };
+      dl->AddImageQuad(reinterpret_cast<ImTextureID>(l->tex.get()), P(-hw, -hh), P(hw, -hh), P(hw, hh), P(-hw, hh),
+                       ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1));
+    }
+    const ImVec2 d = ImGui::GetIO().DisplaySize;
+    const float y0 = a.At(0, 315 * k).y, y1 = std::max(a.At(0, 480 * k).y, d.y);
+    dl->AddRectFilledMultiColor(ImVec2(0, y0), ImVec2(d.x, y1), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0),
+                                IM_COL32(0, 0, 0, 250), IM_COL32(0, 0, 0, 250));
+    if (const Tex* c2 = Img(kCopy))
+      Pic(dl, *c2, a.At(75 * k, 416 * k), a.At((75 + c2->w) * k, (416 + c2->h * kB1Alto) * k));
   }
 
   // Titulo como el de B1 (SATAN MODE MAIN, escena 5): fondo 666 #0, Mr. Satan 666 #1, logo 666 #2, "Pulsa START"
@@ -1740,11 +1909,13 @@ class Panel : public rex::ui::ImGuiDialog {
       if (!g_d->ruta.empty()) OirAdxPs2(g_d->ruta, "adx_jp.afs", 1259, Vol());
     }
     const bool titulo = Img(kPulsa) && titulo_ != g_cambio;
-    Satan(dl, a, t, true, titulo ? 200.0f : 205.0f, titulo ? 700.0f : 450.0f);   // titulo: hasta abajo, como en B1
+    PantallaTitulo(dl, a);
     if (const Tex* ps = Img(kPulsa); ps && titulo) {
       const float in = Ease((t - cambio_at_) / 0.3f);
       const int alfa = int(in * (165.0f + 90.0f * std::sin(t * 4.0f)));
-      PicAt(dl, a, *ps, 960, 790, std::min(90.0f, ps->h * 1.5f), IM_COL32(255, 255, 255, std::clamp(alfa, 0, 255)));
+      // "Press START button" de B1: 666 #5 a 1:1, centrado en (321, 324) de la captura de 640x480
+      const float k = kB1, w = ps->w * k, h = ps->h * kB1Alto * k;
+      Pic(dl, *ps, a.At(321 * k - w * 0.5f, 324 * k - h * 0.5f), a.At(321 * k + w * 0.5f, 324 * k + h * 0.5f), IM_COL32(255, 255, 255, std::clamp(alfa, 0, 255)));
       Ayuda(dl, a, {{"START", T::T("Empezar", "Start")}, {"B", T::T("Salir", "Quit")}});
       if (auto_on && t - cambio_at_ > g_auto_seg) pressed |= kStart;
       if (pressed & kB) return Salir(false);
@@ -1755,15 +1926,25 @@ class Panel : public rex::ui::ImGuiDialog {
       }
       return;
     }
-    const float cx = 860, cy = 330;
-    if (const Tex* l = Img(kLetrero)) PicAt(dl, a, *l, cx, cy, 300);
-    else S::Frame(dl, a.At(cx - 210, cy - 140), a.At(cx + 210, cy + 140), a.s);
-    for (int k = 0; k < 3; ++k) {
-      const float y = cy - 64 + 64 * float(k);   // las tres filas dentro de la tabla del letrero
-      const bool sel = k == g_dificultad;
-      if (sel) S::Highlight(dl, a.At(cx - 150, y - 26), a.At(cx + 150, y + 26), t);
-      if (const Tex* d = Img(kDif + k)) PicAt(dl, a, *d, cx, y, sel ? 54.0f : 46.0f, sel ? IM_COL32_WHITE : IM_COL32(150, 150, 150, 255));
-      else S::MenuText(dl, a.At(cx, y), 44 * a.s, NombreDificultad(k), sel, false);
+    // Letrero de la dificultad de B1: 666 #6 al 95 % centrado en (317, 318) de la captura; filas a 286 + 32,5 por fila
+    // (elegida al 95 %, las otras al 80 % y mas oscuras), sin franja de seleccion.
+    const float k = kB1, cx = 317 * k;
+    if (const Tex* l = Img(kLetrero)) {
+      const float w = l->w * 0.95f * k, h = l->h * 0.95f * kB1Alto * k;
+      Pic(dl, *l, a.At(cx - w * 0.5f, 318 * k - h * 0.5f), a.At(cx + w * 0.5f, 318 * k + h * 0.5f));
+    } else {
+      S::Frame(dl, a.At(cx - 180, 318 * k - 140), a.At(cx + 180, 318 * k + 140), a.s);
+    }
+    for (int r = 0; r < 3; ++r) {
+      const float y = (286 + 32.5f * float(r)) * k;
+      const bool sel = r == g_dificultad;
+      if (const Tex* d = Img(kDif + r)) {
+        const float sc = sel ? 0.95f : 0.8f, w = d->w * sc * k, h = d->h * sc * kB1Alto * k;
+        Pic(dl, *d, a.At(318 * k - w * 0.5f, y - h * 0.5f), a.At(318 * k + w * 0.5f, y + h * 0.5f),
+            sel ? IM_COL32_WHITE : IM_COL32(150, 150, 150, 255));
+      } else {
+        S::MenuText(dl, a.At(cx, y), 44 * a.s, NombreDificultad(r), sel, false);
+      }
     }
     if (pressed & kUp) g_dificultad = (g_dificultad + 2) % 3;
     if (pressed & kDown) g_dificultad = (g_dificultad + 1) % 3;
@@ -1788,6 +1969,7 @@ class Panel : public rex::ui::ImGuiDialog {
   // Reintentar / Salir. ponytail: B1 no tiene pantalla de derrota localizada en el modo; posiciones de las caras sin
   // medir (la tabla de sprites del modo no esta leida): fila arriba, la grande en medio.
   void DrawTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool auto_on, bool perdido) {
+    if (!perdido && Img(kTablon) && Img(kTotal) && Img(kCifras)) return DrawResumenB1(dl, a, t, pressed, auto_on);
     const Paso& p = g_pasos[size_t(g_paso)];
     const int r = p.ronda, n = std::min(int(g_d->combates.size()), 11);
     const float e = t - cambio_at_;
@@ -1846,11 +2028,22 @@ class Panel : public rex::ui::ImGuiDialog {
       OirAdxPs2(g_d->ruta, "adx_jp.afs", g_fase == kFin ? 1180 : 1178, Vol());
     }
     constexpr float kEmpieza = 0.5f + 0.6f + 0.6f + 0.5f;   // 30 cuadros, tablon, letrero, 30 cuadros (0x231b90)
-    if (const Tex* tb = Img(kTablon)) Trozo(dl, a, *tb, 0, 0, tb->w, 262, 600, 255 + 20 * (1 - in), 1.25f);
-    else S::Frame(dl, a.At(240, 110), a.At(960, 400), a.s);
     if (pressed & (kA | kStart)) cuenta_ya_ = true;
     const int ronda = std::max(0, g_ronda_pts);
     const int pasados = cuenta_ya_ ? ronda : std::clamp(int((e - kEmpieza) * 60.0f) * 33, 0, ronda);
+    if (g_fase != kFin && Img(kAhora) && Img(kTotal) && Img(kCifras)) {
+      // Resultado de B1 (captura de PCSX2, 640x480): negro; "Now!!" (668 #19) en (132, 47) al 96 % con los puntos del
+      // combate (cifras al 93 %, derecha en 425, arriba en 95) y Mr. Satan con "Total" (668 #18) en (439, 79) al 102 %
+      // con el total (cifras al 62 %, derecha en 610, arriba en 277). Los letreros entran deslizandose (0,35 s).
+      FondoNegro(dl, a, false);
+      const float des = (1.0f - in) * 220.0f;
+      Spr(dl, a, *Img(kAhora), 132 - des, 47, 0.96f);
+      Cifras(dl, a, ronda - pasados, 425 - des, 95, 0.93f);
+      Spr(dl, a, *Img(kTotal), 439 + des, 79, 1.02f);
+      Cifras(dl, a, std::min(999999, g_puntos - ronda + pasados), 610 + des, 277, 0.62f);
+    } else {
+    if (const Tex* tb = Img(kTablon)) Trozo(dl, a, *tb, 0, 0, tb->w, 262, 600, 255 + 20 * (1 - in), 1.25f);
+    else S::Frame(dl, a.At(240, 110), a.At(960, 400), a.s);
     if (e > 0.5f || cuenta_ya_) {
       if (const Tex* ah = Img(kAhora)) Trozo(dl, a, *ah, 0, 0, ah->w, ah->h, 400, 455, 1.0f);
       else S::MenuText(dl, a.At(320, 455), 40 * a.s, T::T("¡Ahora!", "Now!!"), true, false);
@@ -1861,12 +2054,9 @@ class Panel : public rex::ui::ImGuiDialog {
       else S::MenuText(dl, a.At(720, 455), 40 * a.s, T::T("Tienes", "You have"), true, false);
       Numero(dl, a, std::min(999999, g_puntos - ronda + pasados), 920, 460, 0.9f);
     }
+    }
     if (e > 1.1f || cuenta_ya_) {   // de donde salen los puntos (B1 los apunta como avisos LIFE y TIME; aqui, la suma)
-      char d[160];
-      std::snprintf(d, sizeof(d), T::T("Sucesos del combate %d + Vida %d + Tiempo %d: la mitad cuenta",
-                                       "Combat events %d + Life %d + Time %d: half counts"),
-                    g_ronda_ev, g_ronda_vida, g_ronda_tiempo);
-      S::MenuText(dl, a.At(600, 560), 30 * a.s, d, true, false);
+      // s9: sin la linea de la suma (B1 no la ensena; cotejado con orig_resultado_cuenta)
       // y, debajo, los sucesos de B1 que no son golpes (con las etiquetas del original): "REFLECT +600  ESCAPE... -300"
       std::string det;
       for (const char* k : {"ANTI-THROW", "REFLECT", "CUT-OFF", "RECOVERY", "BURST!", "AROUSE ;-)", "ESCAPE...", "DULL..."}) {
@@ -1876,7 +2066,7 @@ class Panel : public rex::ui::ImGuiDialog {
         std::snprintf(t, sizeof(t), "%s%s %+d", det.empty() ? "" : "   ", k, it->second);
         det += t;
       }
-      if (!det.empty()) S::MenuText(dl, a.At(600, 600), 26 * a.s, det.c_str(), true, false);
+      if (!det.empty()) S::MenuText(dl, a.At(g_fase == kFin ? 600 : 430, g_fase == kFin ? 600 : 690), 26 * a.s, det.c_str(), true, false);
     }
     const bool hecho = pasados >= ronda && (cuenta_ya_ || e > kEmpieza);
     if (hecho && cuenta_fin_ < 0) cuenta_fin_ = t;
@@ -1890,7 +2080,7 @@ class Panel : public rex::ui::ImGuiDialog {
   void DrawResultado(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool) {
     const bool hecho = Cuenta(dl, a, t, pressed);
     const int r = g_pasos[size_t(g_paso)].ronda;
-    if (const Tex* rt = Img(kRetadores); rt && r < 11) {
+    if (const Tex* rt = Img(kRetadores); rt && r < 11 && !(Img(kAhora) && Img(kTotal) && Img(kCifras))) {   // el de B1 no lo lleva
       const float cx = float((r % 3) * 136), cy = float((r / 3) * 72);
       Trozo(dl, a, *rt, cx, cy, cx + 136, cy + 72, 600, 300, 1.5f);
     }
@@ -1935,7 +2125,7 @@ class Panel : public rex::ui::ImGuiDialog {
 
   enum : int { kLogo = 100, kFondo, kSatan, kTablon, kRetadores, kCruz, kTotal, kAhora, kTienes, kCifras, kChibis, kLetrero,
                kPulsa, kDif, kBarra = kDif + 3, kTienesPeq, kCifrasPeq, kClave, kLetras, kEstilo = kLetras + 2,
-               kCaraSatan, kConsejo };
+               kCaraSatan, kConsejo, kCopy = kConsejo + 6 };
   std::map<int, Tex> tex_;
   uint32_t tex_gen_ = ~0u;
   const DatosB1* tex_src_ = nullptr;
@@ -1974,6 +2164,7 @@ const bool g_test = [] {
   int desde = -1, dif = -1;
   if (const char* d = std::strstr(t, "desde=")) desde = std::atoi(d + 6);
   if (const char* d = std::strstr(t, "dificultad=")) dif = std::atoi(d + 11);
+  g_real = std::strstr(t, "real") != nullptr;
   if (const char* d = std::strstr(t, "seg=")) g_auto_seg = std::max(1.0f, float(std::atof(d + 4)));
   std::thread([desde, dif] {
     for (int quieto = 0; quieto < 120;) {

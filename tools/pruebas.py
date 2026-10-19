@@ -129,7 +129,10 @@ def pids_de_copia(dest):
     """Solo los dbz3.exe que corren desde esa copia (nunca los de otra copia)."""
     ps = ("Get-CimInstance Win32_Process -Filter \"Name='dbz3.exe'\" | "
           "ForEach-Object { '{0}|{1}' -f $_.ProcessId, $_.ExecutablePath }")
-    out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True).stdout
+    # errors="replace" obligatorio: con -X utf8 (modo del tablero) la salida del hijo se decodifica como UTF-8 y
+    # cualquier acento de una consola en espanol mataba el hilo lector -> stdout None.
+    out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                         errors="replace").stdout or ""
     pref = str(dest).rstrip("\\").lower() + "\\"
     pids = []
     for linea in out.splitlines():
@@ -226,9 +229,9 @@ def preparar(dest, desde=None, exe=EXE):
         # veces cada 30 s (visto 2026-10-15: smoke_b, smoke_c y hub_test colgados copiando de du_test)
         r = subprocess.run(["robocopy", str(src), str(dest), "/E", "/R:1", "/W:1", "/XD", str(src / "logs"),
                             str(src / "shader_cache"), "/NDL", "/NJH", "/NJS", "/NP"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, errors="replace")
         if r.returncode >= 8:
-            fallidos = [l.strip() for l in r.stdout.splitlines() if "ERROR" in l][:5]
+            fallidos = [l.strip() for l in (r.stdout or "").splitlines() if "ERROR" in l][:5]
             print(f"  aviso: robocopy codigo {r.returncode}, archivos en uso sin copiar (el exe, las DLL y el toml "
                   f"se ponen igual): {fallidos}", flush=True)
     (dest / "logs").mkdir(exist_ok=True)
@@ -338,8 +341,10 @@ class Juego:
                 time.sleep(1)
                 continue
             try:
-                n = subprocess.run(["tasklist", "/FI", "IMAGENAME eq dbz3.exe", "/NH"], capture_output=True,
-                                   text=True).stdout.count("dbz3.exe")
+                # tasklist en Windows en espanol imprime "INFORMACION: no hay tareas..." cuando no hay juego:
+                # sin errors="replace" el hilo lector moria con -X utf8 y esto contaba sobre None (tablero del frente 12).
+                n = (subprocess.run(["tasklist", "/FI", "IMAGENAME eq dbz3.exe", "/NH"], capture_output=True,
+                                    text=True, errors="replace").stdout or "").count("dbz3.exe")
                 if n < MAX_PARALELO:
                     self.logs_antes = self._logs()      # el log de esta partida sera uno nuevo o uno que cambie
                     self.t0 = time.time()
@@ -493,8 +498,17 @@ class Juego:
         Perfil sin partida: el titulo ofrece New Game / Load Game (cursor en Load): titulo=("Return","W","Space")."""
         fin = time.time() + seg
         n = 0
+        sin_pantalla = None   # 18/10: titulo visible con pantalla None (zz_fallo.png) y nadie pulsaba START
         while True:
             sc = self.pantalla()
+            if sc is None:
+                sin_pantalla = sin_pantalla or time.time()
+                if time.time() - sin_pantalla > 15 and self.vivo():   # vivo y sin pantalla: se trata como el titulo
+                    self.tecla(titulo[n % len(titulo)], 0)
+                    n += 1
+                    time.sleep(1.5)
+            else:
+                sin_pantalla = None
             if sc == 5:
                 return time.time() - self.t0
             if not self.vivo():
@@ -1241,7 +1255,7 @@ def _r2_fase1(j, par):
     j.log(r"misiones: tablero combate", 120)
     time.sleep(20)
     j.captura("b_combate")
-    j.log(r"tablero b2: fase 1 completada", 1500)
+    j.log(r"tablero b2: .*fase 1 completada", 1500)
     time.sleep(0.4)   # el automatico pasa de pantalla a los 1,4 s
     j.captura("c_fase_completada")
     j.log(r"tablero b2: fase 2 leida", 30)
@@ -1275,7 +1289,7 @@ def _r2_fases(j, par):
     desde = int(par.get("desde", "1"))
     hasta = int(par.get("hasta", "9"))   # --par hasta=N: para tras la fase N (una fase por prueba)
     for n in range(desde + 1, hasta + 1):
-        j.log(r"tablero b2: fase %d completada" % n, 1200)
+        j.log(r"tablero b2: .*fase %d completada" % n, 1200)
         time.sleep(0.4)
         j.captura("fase_%d_completada" % n)
 

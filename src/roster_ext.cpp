@@ -483,6 +483,36 @@ void ApplyCharacter(Guest& g, const toml::table& t, const std::string& mod) {
   };
   per_id32(kAura, "aura");
   per_id32(kBsp, "tecnicas");
+  // Tipo de aura por (ID, forma): 8 filas de 5 B en 0x82321A38 + 40*ID (medido 2026-10-18: Goku 02/03/04/05/06/07,
+  // Gohan adulto 02/04/05/06; el juego solo dibuja aura con tipo 2..7, pista del mod Goku UI, studies 4/01). Los IDs
+  // nuevos (44-63, 31) la tienen a cero: sin aura aunque el fid sea bueno. Se copia la del donante si la del ID esta vacia.
+  // `aura_tipos = ID` (roster_build, de `aura_de = ID`): los tipos de ese personaje en vez de los del donante.
+  if (const int64_t de = Int(t["aura_tipos"], donor); de >= 0 && de < 64) {
+    constexpr uint32_t kAuraTipo = 0x82321A38;
+    const uint32_t dst = kAuraTipo + 40 * uint32_t(id), src = kAuraTipo + 40 * uint32_t(de);
+    bool vacia = true;
+    for (uint32_t k = 0; k < 40 && vacia; ++k) vacia = g.U8(dst + k) == 0 || (k % 5 == 4 && g.U8(dst + k) == 0xFF);
+    if (vacia && g.U8(src) >= 2) {
+      for (uint32_t k = 0; k < 40; ++k) g.W8(dst + k, g.U8(src + k));
+      REXLOG_INFO("dbz3 roster [{}]: id {}: tipos de aura por forma del ID {} ({:02X} {:02X} {:02X} {:02X})", mod, id,
+                  de, g.U8(src), g.U8(src + 5), g.U8(src + 10), g.U8(src + 15));
+    }
+  }
+  // aura de cada transformacion elegida en el Kit (aura_tipos_forma): fila de la forma k de Goku, -1 = sin aura,
+  // -3 = nombre desconocido (no se toca). Va despues de la copia del donante: manda sobre ella.
+  {
+    constexpr uint32_t kAuraTipo = 0x82321A38;
+    const auto tf = Ints(t["aura_tipos_forma"]);
+    for (uint32_t f = 0; f < tf.size() && f < 8; ++f) {
+      const uint32_t dst = kAuraTipo + 40 * uint32_t(id) + 5 * f;
+      if (tf[f] == -1) {
+        for (uint32_t k = 0; k < 5; ++k) g.W8(dst + k, 0);
+      } else if (tf[f] >= 0 && tf[f] < 6) {
+        for (uint32_t k = 0; k < 5; ++k) g.W8(dst + k, g.U8(kAuraTipo + 5 * uint32_t(tf[f]) + k));
+      }
+    }
+    if (!tf.empty()) REXLOG_INFO("dbz3 roster [{}]: id {}: aura de cada forma elegida ({} formas)", mod, id, tf.size());
+  }
   // Diagnostico (v1.5.x): fid de aura y de tecnicas con el que queda el ID (RUNBOOK 11/12).
   REXLOG_INFO("dbz3 roster [{}]: id {}: aura fid {} tecnicas fid {}", mod, id,
               g.U32(kAura + uint32_t(id) * 4), g.U32(kBsp + uint32_t(id) * 4));

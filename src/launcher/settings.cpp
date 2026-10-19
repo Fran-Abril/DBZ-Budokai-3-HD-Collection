@@ -193,6 +193,19 @@ REXCVAR_DEFINE_BOOL(dbz3_present_dither, false, "DBZ3/Video",
                     "Dither the final image (smoother gradients)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+// Widescreen on wide/ultrawide monitors. The HD Collection always renders its
+// 3D scene and HUD at a native 16:9 (1280x720); on a 21:9/32:9 panel the SDK's
+// presenter has to decide what to do with the extra width. "keep" (default)
+// shows the 16:9 image centered with bars (pillarbox) so nothing is distorted;
+// "stretch" fills the whole window, stretching the image along X (no bars, but
+// the characters look wider). This only drives the SDK's present_letterbox
+// cvar; it does not touch the game files or its own HUD layout (the guest HUD
+// is drawn inside the 16:9 image, so it always stays glued to the scene).
+REXCVAR_DEFINE_STRING(dbz3_aspect, "keep", "DBZ3/Video",
+                      "Widescreen on wide/ultrawide monitors: keep (bars, no distortion) or stretch (fill, distorted)")
+    .allowed({"keep", "stretch"})
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 // One-click quality profile: "auto" (detect the GPU tier and apply the
 // recommended settings on every launch), "performance", "balanced", "quality",
 // or "manual" (the individual scale/MSAA/aniso/effect options are used as-is).
@@ -2063,6 +2076,11 @@ void SetRelight(int32_t level) { REXCVAR_SET(dbz3_relight, std::clamp(level, 0, 
 bool PresentDither() { return REXCVAR_GET(dbz3_present_dither); }
 void SetPresentDither(bool enabled) { REXCVAR_SET(dbz3_present_dither, enabled); }
 
+// Wide/ultrawide presentation: "keep" (bars, no distortion) or "stretch"
+// (fill the window, distorted). Drives the SDK's present_letterbox.
+std::string AspectMode() { return REXCVAR_GET(dbz3_aspect); }
+void SetAspectMode(const std::string& mode) { REXCVAR_SET(dbz3_aspect, mode); }
+
 // ---------------------------------------------------------------------------
 // Quality presets + GPU detection
 // ---------------------------------------------------------------------------
@@ -2757,6 +2775,11 @@ void ApplyRuntimeSettingsToSdk(bool for_game) {
   // so FXAA composes with FSR/CAS.
   SetSdkString("swap_post_effect", REXCVAR_GET(dbz3_fxaa));
   SetSdkBool("present_dither", REXCVAR_GET(dbz3_present_dither));
+  // Widescreen (issue #35): present_letterbox=false stretches the 16:9 guest
+  // image to fill a wider window (no bars, distorted); keeping it true leaves
+  // the 16:9 image centered with bars. The cvar is read at paint time, so this
+  // is live.
+  SetSdkBool("present_letterbox", REXCVAR_GET(dbz3_aspect) != "stretch");
   SetSdkDouble("dbz3_rim_light_scale", HdRimLight());
   SetSdkInt("dbz3_relight_level", Relight());
   SetSdkBool("async_shader_compilation", REXCVAR_GET(dbz3_async_shaders));
@@ -2790,7 +2813,7 @@ void ApplyRuntimeSettingsToSdk(bool for_game) {
   REXLOG_INFO(
       "dbz3: applied runtime settings -> internal_scale={}x vsync={} msaa={} aniso={} "
       "hd_tex={}x "
-      "fsr_quality={} fsr_sharpness={} cas_sharpness={} fxaa={} dither={} "
+      "fsr_quality={} fsr_sharpness={} cas_sharpness={} fxaa={} dither={} aspect={} "
       "async_shaders={} occ_queries={} mnk_sens={} "
       "audio_gain={} mute={} mute_unfocused={} dim_unfocused={} host_present={} vrr={} cap={}",
       scale, GetSdkBool("vsync") ? "true" : "false",
@@ -2799,6 +2822,7 @@ void ApplyRuntimeSettingsToSdk(bool for_game) {
       GetSdkString("present_fsr_quality_mode"), GetSdkDouble("present_fsr_sharpness_reduction"),
       GetSdkDouble("present_cas_additional_sharpness"), GetSdkString("swap_post_effect"),
       GetSdkBool("present_dither") ? "true" : "false",
+      REXCVAR_GET(dbz3_aspect),
       GetSdkBool("async_shader_compilation") ? "true" : "false",
       GetSdkBool("occlusion_query_enable") ? "true" : "false",
       GetSdkDouble("mnk_sensitivity"),

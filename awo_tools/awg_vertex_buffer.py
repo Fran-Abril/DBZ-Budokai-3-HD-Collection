@@ -47,6 +47,7 @@ Uso
   python awg_vertex_buffer.py roundtrip <in> <out>
   python awg_vertex_buffer.py grow    <in> <out> <N_nuevo>   # crece la region
   python awg_vertex_buffer.py selftest <bin>                 # forward/inverse
+  python awg_vertex_buffer.py check    <bin>                 # valida las REGLAS de la ventana
 
 API:
   avb = AwgVertexBuffer.load(path)
@@ -177,6 +178,43 @@ class AwgVertexBuffer:
 
     def indices(self):
         return [be16(self.data, self.ib_abs + k * 2) for k in range(self.n_ib)]
+
+    def layout(self):
+        """Clasifica el stride/posicion de campos: 'ventana' (FFFF@32), 'formatoC'
+        (FFFF@12), 'sec34' (FFFF@0; error historico) o 'desconocido'."""
+        m = {"ventana": 0, "formatoC": 0, "sec34": 0}
+        for w in range(min(self.n, 128)):
+            o = self.vb0 + w * WINDOW
+            if be32(self.data, o + 32) == 0xFFFFFFFF:
+                m["ventana"] += 1
+            if be32(self.data, o + 12) == 0xFFFFFFFF:
+                m["formatoC"] += 1
+            if be32(self.data, o + 0) == 0xFFFFFFFF:
+                m["sec34"] += 1
+        best = max(m, key=m.get)
+        return best if m[best] else "desconocido"
+
+    def check(self):
+        """Problemas de la region de ventanas (marker/bone/IB), como lista de textos.
+        Regla: ventana de 44 B, FFFFFFFF en +32, bone en [0, bone_count()), indices < n."""
+        fallos = []
+        lay = self.layout()
+        if lay == "sec34":
+            fallos.append("layout 'sec34' (FFFF@0/bone@28): error; el HD usa la ventana")
+        if lay == "ventana":
+            nb = self.bone_count()
+            for w, v in enumerate(self.vertices()):
+                if v["marker"] != 0xFFFFFFFF:
+                    fallos.append("ventana %d: marker != FFFFFFFF en +32" % w)
+                    break
+            for w, v in enumerate(self.vertices()):
+                if not (v["bone"] < nb or v["bone"] == 0xFFFFFFFF):
+                    fallos.append("ventana %d: bone %d fuera de [0,%d)" % (w, v["bone"], nb))
+                    break
+        idx = [v for v in self.indices() if v != 0xFFFF]
+        if idx and max(idx) >= self.n:
+            fallos.append("IB max=%d >= n ventanas=%d" % (max(idx), self.n))
+        return fallos
 
     def bone_count(self):
         return be32(self.data, self.awg0 + 0x10)
@@ -423,6 +461,16 @@ def cmd_permute(inp, out, reverse=True, swap=None):
     print("permute OK -> %s (N=%d, IB=%d)" % (out, n, len(idx)))
 
 
+def cmd_check(path):
+    a = AwgVertexBuffer.load(path)
+    fallos = a.check()
+    print("awg_vertex_buffer check %s: layout=%s n=%d n_ib=%d -> %s"
+          % (path, a.layout(), a.n, a.n_ib, "OK" if not fallos else "FALLO"))
+    for f in fallos:
+        print("  -", f)
+    return 0 if not fallos else 1
+
+
 def cmd_selftest(path):
     """Forward (ventana->modelo) e inverse (modelo->ventana) deben reproducir el
     bin exactamente -> valida bind_worlds + window_from_model."""
@@ -487,6 +535,8 @@ def main():
         c = AwgVertexBuffer.load(sys.argv[3])
         print("grow OK -> %s (N %d->%d, n_ib %d->%d, vb0=%d, reload N=%d)"
               % (sys.argv[3], a.n, b.n, a.n_ib, b.n_ib, c.vb0, c.n))
+    elif cmd == "check":
+        return cmd_check(sys.argv[2])
     elif cmd == "selftest":
         return cmd_selftest(sys.argv[2])
     else:

@@ -1,0 +1,362 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""injertar_pelo.py - Injerta un peinado UT (pieza convertida) en el bin #AMB HD de un cuerpo, para el COMBATE.
+
+El skinning de B3 HD es "un hueso por ventana" (campo `bone` = slot de la tabla de paleta). Aqui el peinado se
+pega RIGIDO a la cabeza: todas sus ventanas llevan el slot del hueso *_HEAD y la posicion/normal en el espacio
+local de ese hueso (inv(world_bind[HEAD]) . modelo), asi que sigue a la cabeza en cada animacion.
+
+Pasos (todo sobre el AWG0, sin mover texturas):
+  1. Los triangulos de pelo NATIVO (los que decide el que llama: la misma regla que la vista previa) se quitan del IB
+     de su draw (se reescribe el IB de los draws tocados en una zona nueva, al final).
+  2. El peinado nuevo (vertices ya ajustados al cuerpo, en espacio modelo) entra en el draw que mas pelo nativo tenia
+     ("anfitrion", se queda con su material): sus UV apuntan a un texel del pelo nativo de ESA textura (que
+     `combate_bin` ya tino con el color de pelo de la ficha), asi el color sale igual que el de la vista previa.
+  3. Las ventanas que solo usaba el pelo nativo se reutilizan; lo que falte se anade (awg_vertex_buffer.grow, que
+     mueve la tabla de paleta pegada al IB). Tope: WINDOW_BUDGET ventanas (combate tolera 3261; mas = cuerpo invisible):
+     si no cabe, se agrupan vertices (decimacion por rejilla).
+
+API: injertar(amb, model, pelo_mask, Q, QN, tris_ut, ...) -> (bytes, resumen). Lint: draw_oracle.py y
+comprobar_assets.py (ver `python injertar_pelo.py --selftest <bin_cuerpo> <bin_pelo>`).
+"""
+import collections
+import io
+import os
+import struct
+import sys
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+for _p in (HERE, os.path.join(HERE, "..", "awo_tools"), os.path.join(HERE, "..", "mod center hd"),
+           os.path.join(HERE, "..")):
+    if os.path.isdir(_p) and _p not in sys.path:
+        sys.path.append(_p)
+
+from awg_vertex_buffer import AwgVertexBuffer, WINDOW, minv_affine, set32  # noqa: E402
+from b3_gateway import DrawTable, strip_tri, stripify, WINDOW_BUDGET  # noqa: E402
+from skin_slots import SkinSlots  # noqa: E402
+
+
+def triangulos_por_draw(model):
+    """[(indice de draw, triangulo)] en el MISMO orden que model_render.Model.tris (misma regla de filtrado)."""
+    avb, table = model.avb, model.table
+    ib = avb.indices()
+    nv = avb.n
+    out = []
+    for di, d in enumerate(table.draws):
+        s, c = d["B"]
+        mat = table.materials[d["material"]]
+        if not c or (mat["tex"] >= len(model.tex) and mat["tex"] != 0xFFFFFFFF):
+            continue
+        seq = ib[s:s + c + 2] if d["prim"] == 5 else ib[s:s + 3 * c]
+        tt = [strip_tri(seq, i) for i in range(len(seq) - 2)] if d["prim"] == 5 else \
+            [tuple(seq[i:i + 3]) for i in range(0, len(seq) - 2, 3)]
+        for t in tt:
+            if len(set(t)) != 3 or max(t) >= nv:
+                continue
+            out.append((di, t))
+    return out
+
+
+def _rango_draw(avb, d):
+    s, c = d["B"]
+    ib = avb.indices()
+    if not c:
+        return []
+    return ib[s:s + c + 2] if d["prim"] == 5 else ib[s:s + 3 * c]
+
+
+def _hueso_cabeza(labels):
+    """Indice del hueso <PFX>_HEAD (sin la X de los huesos auxiliares)."""
+    for i, l in enumerate(labels):
+        if l.endswith("_HEAD") and not l.startswith("X"):
+            return i
+    return None
+
+
+def _texel_pelo(tx, uvs, objetivo=None, tris_uv=None):
+    """(u, v) de un texel representativo del pelo nativo: de entorno liso (para que el filtrado bilineal/los bloques
+    DXT no lo mezclen con un vecino de otro color) y, con `objetivo` (RGB 0..1), el mas parecido a ese color (el que
+    `tenir` dejo en la textura); sin objetivo, de brillo medio. tris_uv: triangulos del pelo nativo en uv (rasteriza
+    la zona de pelo de la textura: solo se eligen texeles de ahi)."""
+    from PIL import Image, ImageDraw  # noqa: PLC0415
+    h, w = tx.shape[:2]
+    mask = None
+    if tris_uv:
+        im = Image.new("L", (w, h), 0)
+        d = ImageDraw.Draw(im)
+        for tri in tris_uv:
+            d.polygon([(float((u % 1) * w), float((v % 1) * h)) for u, v in tri], fill=1)
+        mask = np.asarray(im) > 0
+        _texel_pelo.mask = mask
+    cand = []
+    pts = [(x, y) for y, x in zip(*np.nonzero(mask))] if mask is not None and mask.any() else         [(int(np.clip((u % 1) * w, 0, w - 1)), int(np.clip((v % 1) * h, 0, h - 1))) for u, v in uvs]
+    for x, y in pts[::max(1, len(pts) // 4000)]:
+        ys = [(y + k) % h for k in range(-2, 3)]
+        xs = [(x + k) % w for k in range(-2, 3)]
+        blk = tx[np.ix_(ys, xs)][..., :3]
+        luma = float(blk[2, 2] @ np.array([0.299, 0.587, 0.114]))
+        std = float(blk.std(axis=(0, 1)).sum())
+        dist = float(np.abs(blk[2, 2] - np.array(objetivo)).sum()) if objetivo is not None else 0.0
+        cand.append((dist, std, luma, (x + 0.5) / w, (y + 0.5) / h))
+    if not cand:
+        return 0.5, 0.5
+    if objetivo is not None:
+        best = min(cand, key=lambda c: c[0] + 0.7 * c[1])
+        return best[3], best[4]
+    lumas = sorted(c[2] for c in cand)
+    lo, hi = lumas[len(lumas) // 4], lumas[(3 * len(lumas)) // 4]
+    medio = [c for c in cand if lo <= c[2] <= hi] or cand
+    best = min(medio, key=lambda c: c[1])
+    return best[3], best[4]
+
+
+def _bloque_libre(tx, mask, excluir, ancho=4):
+    """Texel (u, v) del centro de un bloque 4x4 alineado, entero dentro de `mask`, distinto del bloque `excluir` (bx, by)."""
+    h, w = tx.shape[:2]
+    for by in range(0, h // ancho):
+        for bx in range(0, w // ancho):
+            if (bx, by) != excluir and mask[by * ancho:(by + 1) * ancho, bx * ancho:(bx + 1) * ancho].all():
+                return bx, by
+    return None
+
+
+def _pintar_bloque_dxt3(data, tex, bx, by, rgb):
+    """Pone el bloque (bx, by) de la textura DXT3 `tex` del #AMB `data` (bytearray) a un color liso (conserva el alfa)."""
+    import texture_b3 as tb  # noqa: PLC0415
+    _, texs = tb.parse_azt(bytes(data))
+    t = next(x for x in texs if x["idx"] == tex)
+    w, h = t["w"], t["h"]
+    if t["size"] - 128 != w * h:
+        return False
+    o = t["bitmap_abs"] + (by * (w // 4) + bx) * 16
+    c = ((int(round(rgb[0] * 31)) << 11) | (int(round(rgb[1] * 63)) << 5) | int(round(rgb[2] * 31))) & 0xFFFF
+    data[o + 8:o + 16] = struct.pack("<HHI", c, c, 0)
+    return True
+
+
+def _decimar(P, N, tris, limite):
+    """Agrupa vertices por rejilla hasta que quepan en `limite` ventanas. Devuelve (P, N, tris)."""
+    lo, hi = P.min(0), P.max(0)
+    ext = float(max(hi - lo))
+    for celdas in range(int(np.sqrt(limite) * 2.2), 4, -2):
+        paso = ext / celdas
+        clave = {}
+        rep = np.zeros(len(P), int)
+        for i, p in enumerate(P):
+            k = tuple(np.floor((p - lo) / paso).astype(int))
+            rep[i] = clave.setdefault(k, len(clave))
+        if len(clave) <= limite:
+            break
+    nP = np.zeros((len(clave), 3))
+    nN = np.zeros((len(clave), 3))
+    cnt = np.zeros(len(clave))
+    for i, r in enumerate(rep):
+        nP[r] += P[i]
+        nN[r] += N[i]
+        cnt[r] += 1
+    nP /= cnt[:, None]
+    nN /= np.maximum(np.linalg.norm(nN, axis=1), 1e-9)[:, None]
+    nt = [t for t in ((rep[a], rep[b], rep[c]) for a, b, c in tris) if len(set(t)) == 3]
+    return nP, nN, nt
+
+
+def injertar(amb, model, pelo_mask, Q, QN, tris_ut, presupuesto=WINDOW_BUDGET, rgb1=None, rgb2=None):
+    """amb: #AMB del cuerpo (bytes, con las texturas ya tenidas). model: model_render.Model del cuerpo (del bin
+    ORIGINAL; fija el orden de triangulos de pelo_mask). pelo_mask: bool por triangulo de model.tris (True = pelo
+    nativo, se quita). Q/QN: posiciones/normales (n x 3, espacio modelo del cuerpo) de los vertices de la pieza y
+    tris_ut: sus triangulos (indices a Q). rgb1/rgb2: colores objetivo (0..1) del pelo 1 (base) y 2 (puntas, el 40 %
+    de arriba) ya cocidos en la textura; None = el que haya. Devuelve (bytes, resumen)."""
+    import model_render as mr  # noqa: PLC0415
+    td = triangulos_por_draw(model)
+    assert len(td) == len(model.tris), "orden de triangulos distinto del Model (%d != %d)" % (len(td), len(model.tris))
+    pelo_mask = np.asarray(pelo_mask, bool)
+    avb = AwgVertexBuffer._parse(bytes(amb))
+    dt = DrawTable(avb)
+    ss = SkinSlots(avb)
+    world, parents = avb.bind_worlds()
+    invw = [minv_affine(w) for w in world]
+    labels = avb.bone_labels()
+    resumen = {}
+
+    quitados = collections.defaultdict(list)    # draw -> triangulos de pelo nativo
+    kept = collections.defaultdict(list)        # draw -> triangulos que se quedan
+    for (di, t), es in zip(td, pelo_mask):
+        (quitados if es else kept)[di].append(t)
+    if not quitados:
+        return bytes(amb), {"pelo": "el cuerpo no tiene pelo propio: sin injerto en combate (calvo)"}
+    host = max(quitados, key=lambda d: len(quitados[d]))
+    hd = dt.draws[host]
+
+    # --- hueso y espacio local del injerto
+    if hd["prim"] == 5 or hd["group_bone"] == 0:
+        cab = _hueso_cabeza(labels)
+        if cab is None:
+            return bytes(amb), {"pelo": "sin hueso HEAD"}
+        eff, seen = cab, set()
+        while eff not in ss.slot_of and eff >= 0 and eff not in seen:   # sube al ancestro con slot
+            seen.add(eff)
+            eff = parents[eff]
+        if eff not in ss.slot_of:
+            return bytes(amb), {"pelo": "HEAD sin slot de paleta"}
+        slot = ss.slot_of[eff]
+    else:                                   # lista rigida de un hueso propio (pelo de Vegeta: XVGT_HAIR)
+        eff, slot = hd["group_bone"], 0
+    inv = invw[eff]
+    resumen["anfitrion"] = "draw %d (%s, prim %d, hueso %s, slot %d)" % (host, labels[hd["group_bone"]], hd["prim"],
+                                                                      labels[eff], slot)
+
+    # --- UV: texel del pelo nativo de la textura del anfitrion (ya tenida)
+    m2 = mr.Model(bytes(amb))
+    mat = dt.materials[hd["material"]]
+    u2 = v2 = None
+    if mat["tex"] < len(m2.tex):
+        tris_h = quitados[host]
+        uvs = [tuple(model.uv[v]) for t in tris_h for v in t]
+        tuv = [[tuple(model.uv[v]) for v in t] for t in tris_h]
+        u0, v0 = _texel_pelo(m2.tex[mat["tex"]], uvs, rgb1, tuv)
+        if rgb2 is not None:
+            u2, v2 = _texel_pelo(m2.tex[mat["tex"]], uvs, rgb2, tuv)
+            tx = m2.tex[mat["tex"]]
+            h_, w_ = tx.shape[:2]
+            got = tx[min(int(v2 * h_), h_ - 1), min(int(u2 * w_), w_ - 1), :3]
+            if float(np.abs(got - np.array(rgb2)).sum()) > 0.45:     # la textura no tiene ese color: se pinta un bloque
+                mask = getattr(_texel_pelo, "mask", None)
+                bl = _bloque_libre(tx, mask, (int(u0 * w_) // 4, int(v0 * h_) // 4)) if mask is not None else None
+                if bl and _pintar_bloque_dxt3(avb.data, mat["tex"], bl[0], bl[1], rgb2):
+                    u2, v2 = (bl[0] * 4 + 2) / w_, (bl[1] * 4 + 2) / h_
+                    resumen["puntas_pintadas"] = True
+    else:
+        u0, v0 = 0.5, 0.5
+    resumen["uv"] = tuple(round(float(x), 4) for x in ((u0, v0) + (() if u2 is None else (u2, v2))))
+
+    # --- vertices del injerto en el espacio local del hueso, soldados (pos + normal)
+    Q = np.asarray(Q, float)
+    QN = np.asarray(QN, float)
+    usados = np.unique(np.asarray(tris_ut).reshape(-1))
+    remap0 = {int(o): i for i, o in enumerate(usados)}
+    Pu, Nu = Q[usados], QN[usados]
+    tu = [tuple(remap0[int(v)] for v in t) for t in tris_ut]
+    tu = [t for t in tu if len(set(t)) == 3]
+    uniq, keys = {}, []
+    rep = np.zeros(len(Pu), int)
+    for i in range(len(Pu)):
+        k = (tuple(np.round(Pu[i], 4)), tuple(np.round(Nu[i], 2)))
+        rep[i] = uniq.setdefault(k, len(uniq))
+    nP = np.zeros((len(uniq), 3))
+    nN = np.zeros((len(uniq), 3))
+    for i, r in enumerate(rep):
+        nP[r], nN[r] = Pu[i], Nu[i]
+    tu = [t for t in ((rep[a], rep[b], rep[c]) for a, b, c in tu) if len(set(t)) == 3]
+
+    # --- reparto de ventanas: refs tras quitar el pelo nativo
+    ib_old = avb.indices()
+    refs_final = set()
+    for di, d in enumerate(dt.draws):
+        if di in quitados:
+            for t in kept[di]:
+                refs_final.update(t)
+        else:
+            refs_final.update(v for v in _rango_draw(avb, d) if v != 0xFFFF)
+    libres = sorted({v for di in quitados for t in quitados[di] for v in t} - refs_final)
+    cap = max(presupuesto, avb.n) - (avb.n - len(libres))   # ventanas que caben sin pasar el tope
+    if len(nP) > max(cap, 64):
+        nP, nN, tu = _decimar(nP, nN, tu, max(cap, 64))
+        resumen["decimado"] = len(nP)
+    grupo = np.zeros(len(nP), int)       # 0 = pelo 1 (base), 1 = pelo 2 (puntas)
+    if u2 is not None:
+        y = nP[:, 1]
+        corte = y.min() + 0.6 * (y.max() - y.min())
+        dup, nt2, nP2, nN2, g2 = {}, [], [], [], []
+        for t in tu:
+            g = 1 if np.mean([y[i] for i in t]) > corte else 0
+            tri = []
+            for i in t:
+                k = (i, g)
+                if k not in dup:
+                    dup[k] = len(nP2)
+                    nP2.append(nP[i]); nN2.append(nN[i]); g2.append(g)
+                tri.append(dup[k])
+            nt2.append(tuple(tri))
+        nP, nN, tu, grupo = np.array(nP2), np.array(nN2), nt2, np.array(g2)
+    # coordenadas locales
+    R = np.array(inv)[:3, :3]
+    loc = (nP @ R.T) + np.array(inv)[:3, 3]
+    nl = nN @ R.T
+    nl /= np.maximum(np.linalg.norm(nl, axis=1), 1e-9)[:, None]
+    H = len(loc)
+    resumen['puntas'] = int(grupo.sum())
+    ventanas = []
+    for i in range(H):
+        ventanas.append({"pos": tuple(loc[i]), "w": 1.0, "bone": slot, "nrm": tuple(nl[i]), "uv": (u2, v2) if grupo[i] else (u0, v0)})
+    destino = list(libres[:H])
+    n_nuevas = max(0, H - len(destino))
+    base_nueva = avb.n
+    destino += list(range(base_nueva, base_nueva + n_nuevas))
+    resumen["ventanas"] = {"pelo": H, "reutilizadas": min(H, len(libres)), "nuevas": n_nuevas,
+                           "total": avb.n + n_nuevas}
+    # --- IB nuevo para los draws tocados (al final)
+    seqs = {}
+    tri_pelo = [tuple(destino[i] for i in t) for t in tu]
+    for di in sorted(quitados):
+        tris = list(kept[di]) + (tri_pelo if di == host else [])
+        d = dt.draws[di]
+        if d["prim"] == 5:
+            seq = stripify(tris) if tris else []
+        else:
+            seq = [i for t in tris for i in t]
+        seqs[di] = seq
+    add_ib = sum(len(s) for s in seqs.values())
+    new_n = avb.n + n_nuevas
+    new_nib = avb.n_ib + add_ib
+    obj = avb.grow(new_n, new_nib) if (n_nuevas or add_ib) else avb
+    dt2 = DrawTable(obj)
+    b = obj.data
+    for i, w in enumerate(ventanas):
+        o = obj.vb0 + destino[i] * WINDOW
+        b[o:o + WINDOW] = AwgVertexBuffer.pack_window(w)
+    cur = avb.n_ib
+    for di in sorted(seqs):
+        seq = seqs[di]
+        d = dt2.draws[di]
+        for k, v in enumerate(seq):
+            struct.pack_into(">H", b, obj.ib_abs + (cur + k) * 2, int(v) & 0xFFFF)
+        n_prim = max(0, len(seq) - 2) if d["prim"] == 5 else len(seq) // 3
+        a0, ac = d["A"]
+        if di == host and seq:
+            idx = [v for v in seq]
+            lo, hi = min(idx), max(idx)
+            a0, ac = min(a0, lo), max(a0 + ac, hi + 1) - min(a0, lo)
+        dt2.set_range(d, a0, ac, cur, n_prim)
+        cur += len(seq)
+    # Rampa toon: la del pelo nativo de Goku es casi negra en sombra (el color 1 se ve negro menos en las puntas). Si el
+    # material del anfitrion solo lo usan draws de pelo, pasa a la rampa mas usada por el resto del cuerpo (sombra suave).
+    usan = [i for i, d in enumerate(dt.draws) if d["material"] == hd["material"]]
+    if all(i in quitados for i in usan) and all(not kept[i] for i in usan if i != host):
+        cuenta = collections.Counter(m["shader"] for i, m in enumerate(dt.materials)
+                                     if i != hd["material"] and m["shader"] != 0xFFFFFFFF)
+        if cuenta:
+            ramp = cuenta.most_common(1)[0][0]
+            dt2.set_material(hd["material"], ramp=ramp)
+            resumen["rampa"] = "material %d: rampa %d -> %d" % (hd["material"], mat["shader"], ramp)
+    # el relleno de alineacion del IB (grow) ya es 0xFFFF
+    resumen["triangulos_pelo"] = len(tri_pelo)
+    resumen["quitados"] = sum(len(v) for v in quitados.values())
+    return bytes(b), resumen
+
+
+def _selftest(cuerpo, pelo, salida):
+    import model_render as mr  # noqa: PLC0415
+    import vista_heroe as vh  # noqa: PLC0415
+    amb = open(cuerpo, "rb").read()
+    out, r = vh.injertar_ficha(amb, pelo, mr.Model(amb))
+    open(salida, "wb").write(out)
+    print(r)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 5 and sys.argv[1] == "--selftest":
+        _selftest(sys.argv[2], sys.argv[3], sys.argv[4])
+    else:
+        print(__doc__)

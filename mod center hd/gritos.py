@@ -24,10 +24,14 @@ partir del de su donante (mismas secuencias y huecos) con sus propios sonidos:
     gritos = "sb2:GHF"       # su banco de Shin Budokai, tono a hueco (sb_voces.py)
     gritos = "wav:gritos"    # los .wav de esa carpeta del mod (voces de Heroes, importar.py), por duracion
     gritos = "sdbh:GRD"      # las voces de Heroes World Mission del jugador (CueSheet_BC<clave>), por duracion
+    gritos = "t3:BABY_V"     # las de Budokai Tenkaichi 3 (su ISO: DBZ3_T3_ISO o ps2_games), por duracion
     gritos = "donante"       # los del donante (por defecto si no hay fuente)
     gritos = "ninguno"       # sin gritos (silencio)
 """
+import hashlib
+import os
 import struct
+import sys
 
 import numpy as np
 
@@ -46,6 +50,19 @@ IMA_STEP = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37,
             5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500,
             20350, 22385, 24623, 27086, 29794, 32767]
 IMA_INDEX = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8]
+
+# (paso, nibble) -> incremento del decodificador y nuevo indice de paso: precalculado (solo
+# dependen de las tablas, no de la senal) para que el codificador no repita esa aritmetica.
+IMA_D = [[0] * 16 for _ in range(89)]
+IMA_NEXT = [[0] * 16 for _ in range(89)]
+for _i in range(89):
+    _st = IMA_STEP[_i]
+    for _nib in range(16):
+        IMA_D[_i][_nib] = ((_st >> 3) + (_st if _nib & 4 else 0) + ((_st >> 1) if _nib & 2 else 0)
+                           + ((_st >> 2) if _nib & 1 else 0))
+        _k = _i + IMA_INDEX[_nib]
+        IMA_NEXT[_i][_nib] = 0 if _k < 0 else (88 if _k > 88 else _k)
+del _i, _st, _nib, _k
 
 
 # ---------------------------------------------------------------- audio
@@ -162,43 +179,87 @@ def resample(x, src, dst=RATE):
 
 
 def ima_encode(x):
-    """int16 mono -> bloques IMA de 260 B (el formato que decodifica el runtime)."""
+    """int16 mono -> bloques IMA de 260 B (el formato que decodifica el runtime).
+    Byte a byte igual que la version anterior (lo comprueba datos/test_igualdad.py): el
+    bucle por muestras es inevitable (cada muestra depende del estado anterior), pero se
+    pasa a enteros de Python una sola vez (antes se hacia aritmetica con numpy.int32
+    muestra a muestra) y cada bloque rellena sus 256 B de nibbles al vuelo."""
     n = (len(x) + SPF - 1) // SPF
-    x = np.concatenate([x.astype(np.int32), np.zeros(n * SPF - len(x), np.int32)])
-    pred, idx = int(x[0]) if len(x) else 0, 0
+    paso, deseq, sig = IMA_STEP, IMA_D, IMA_NEXT
+    m = np.concatenate([x.astype(np.int32), np.zeros(n * SPF - len(x), np.int32)]).tolist()
+    pred, idx = (m[0] if m else 0), 0
     blocks = []
     for k in range(n):
         blk = bytearray(struct.pack(">hBB", pred, idx, 0))
-        nibs = []
-        for s in x[k * SPF:(k + 1) * SPF]:
-            step = IMA_STEP[idx]
-            diff = int(s) - pred
-            nib = 0
+        ap = blk.append
+        for i in range(k * SPF, (k + 1) * SPF, 2):
+            s = m[i]
+            step = paso[idx]
+            diff = s - pred
             if diff < 0:
                 nib, diff = 8, -diff
+            else:
+                nib = 0
             if diff >= step:
                 nib |= 4
                 diff -= step
-            if diff >= step >> 1:
+            h = step >> 1
+            if diff >= h:
                 nib |= 2
-                diff -= step >> 1
-            if diff >= step >> 2:
+                diff -= h
+            q = step >> 2
+            if diff >= q:
                 nib |= 1
-            # reconstruye como el decodificador
-            d = step >> 3
-            if nib & 4:
-                d += step
-            if nib & 2:
-                d += step >> 1
-            if nib & 1:
-                d += step >> 2
-            pred = max(-32768, min(32767, pred - d if nib & 8 else pred + d))
-            idx = max(0, min(88, idx + IMA_INDEX[nib]))
-            nibs.append(nib)
-        for i in range(0, SPF, 2):
-            blk.append((nibs[i] << 4) | nibs[i + 1])
+            pred += -deseq[idx][nib] if nib & 8 else deseq[idx][nib]
+            if pred < -32768:
+                pred = -32768
+            elif pred > 32767:
+                pred = 32767
+            idx = sig[idx][nib]
+            n0 = nib
+            s = m[i + 1]
+            step = paso[idx]
+            diff = s - pred
+            if diff < 0:
+                nib, diff = 8, -diff
+            else:
+                nib = 0
+            if diff >= step:
+                nib |= 4
+                diff -= step
+            h = step >> 1
+            if diff >= h:
+                nib |= 2
+                diff -= h
+            q = step >> 2
+            if diff >= q:
+                nib |= 1
+            pred += -deseq[idx][nib] if nib & 8 else deseq[idx][nib]
+            if pred < -32768:
+                pred = -32768
+            elif pred > 32767:
+                pred = 32767
+            idx = sig[idx][nib]
+            ap((n0 << 4) | nib)
         blocks.append(bytes(blk))
     return blocks
+
+
+_PACKETS = {}
+_PACKETS_BYTES = [0]
+PACKETS_DIR = None      # carpeta de cache en disco de los paquetes (la pone el montaje)
+_PACKETS_TAG = [None]
+
+
+def _packets_tag():
+    """sha256 corto de este modulo: si cambia el codificador, la cache vieja no se usa."""
+    if _PACKETS_TAG[0] is None:
+        try:
+            with open(__file__, "rb") as fh:
+                _PACKETS_TAG[0] = hashlib.sha256(fh.read()).hexdigest()[:16]
+        except OSError:
+            _PACKETS_TAG[0] = "sin-fichero"
+    return _PACKETS_TAG[0]
 
 
 def packets(x):
@@ -207,7 +268,26 @@ def packets(x):
     El juego calcula el comienzo leyendo la cabecera XMA del primer paquete; la firma
     "RXAD" se lee como "primera trama en el bit 19240" = paquete 1, bloque 1. Por eso el
     paquete 0 va vacio y el 1 empieza con un bloque mudo: arranque en 32 o en 19240 da el
-    sonido completo (antes: sin paquete 1 -> contexto atascado y el juego colgado)."""
+    sonido completo (antes: sin paquete 1 -> contexto atascado y el juego colgado).
+
+    Recordado por CONTENIDO: el mismo sonido se pide varias veces en un montaje (los dos
+    bancos iguales de cada idioma y el bloque mudo de cada paquete) y, con PACKETS_DIR,
+    tambien entre montajes (una reconstruccion no vuelve a codificar el mismo sonido)."""
+    x = np.asarray(x)
+    key = hashlib.sha1(x.tobytes()).digest()
+    hit = _PACKETS.get(key)
+    if hit is not None:
+        return hit
+    path = os.path.join(PACKETS_DIR, _packets_tag() + "-" + key.hex()) if PACKETS_DIR else None
+    if path:
+        try:
+            with open(path, "rb") as fh:
+                blob = fh.read()
+            res = (blob[4:], int.from_bytes(blob[:4], "big"))
+            _PACKETS[key] = res
+            return res
+        except OSError:
+            pass
     blocks = ima_encode(x) or ima_encode(np.zeros(SPF, np.int16))
     out = bytearray(MAGIC + bytes([0]) + bytes(PACKET - len(MAGIC) - 1))
     nb = len(blocks)
@@ -218,7 +298,20 @@ def packets(x):
         for g in grp:
             p += g
         out += p + bytes(PACKET - len(p))
-    return bytes(out), nb
+    res = (bytes(out), nb)
+    if _PACKETS_BYTES[0] < 64 * 1024 * 1024:
+        _PACKETS[key] = res
+        _PACKETS_BYTES[0] += len(res[0])
+    if path:
+        try:
+            os.makedirs(PACKETS_DIR, exist_ok=True)
+            tmp = "%s.%d.tmp" % (path, os.getpid())
+            with open(tmp, "wb") as fh:
+                fh.write(nb.to_bytes(4, "big") + res[0])
+            os.replace(tmp, path)
+        except OSError:
+            pass
+    return res
 
 
 def rx_decode(blob, length=None):
@@ -382,6 +475,32 @@ def iw_pool(iw, who, lang):
     return pool
 
 
+def t3_pool(spec, lang, t3=None):
+    """Grabaciones de un personaje de Tenkaichi 3 (su ISO) a 16 kHz, para `gritos.assign`.
+
+    `spec` = clave del mapa (Goku_0..Goku_7 -> "GOKU"; tambien GT_GOK, BABY_V, BROLLY...);
+    admite "#1"/"#2" para fijar el juego de bancos (por defecto el 2.º en 'usa' y el 1.º en
+    'jpn'; [H] el 1.º es japones y el 2.º ingles, por duracion media: 1,76 s vs 1,46 s).
+    El lector (T3Voices) vive en voces.py; el mapa, en
+    studies 4\\ENTREGAS\\08_tenkaichi3\\datos\\mapa_voces_t3.json.
+    """
+    import voces  # noqa: PLC0415  (evita el ciclo: voces importa gritos solo dentro de funciones)
+    t3 = t3 or voces.T3Voices()
+    return [resample(x, r) for x, r in (adx_decode(t3.adx(i)) for i in t3.clips(spec, lang))]
+
+
+def t3_prueba():
+    """Autocomprobacion de las voces de Tenkaichi 3 (necesita su ISO)."""
+    import voces  # noqa: PLC0415
+    t3 = voces.T3Voices()
+    clips = t3.clips("BABY_V", "usa")
+    assert len(clips) > 100, len(clips)
+    x, tasa = adx_decode(t3.adx(clips[0]))
+    assert len(x) > tasa // 2, (len(x), tasa)
+    print("gritos.py: T3 OK (%s: %d clips de BABY_V usa; el primero %.2f s a %d Hz)"
+          % (t3.src, len(clips), len(x) / tasa, tasa))
+
+
 def wav_pool(folder, rms=7000.0):
     """Los .wav de una carpeta (cualquier frecuencia; estereo -> mono) a 16 kHz. Si la mediana de su volumen
     (RMS) pasa de la de las grabaciones de IW (~6000-7000), se bajan todos a la vez."""
@@ -435,3 +554,5 @@ if __name__ == "__main__":
     out = build_bank(bytes(bank), [None, sig])
     assert struct.unpack_from(">f", out, 0x130 + 0x34)[0] == -6.0
     print("gritos.py: volumen de huecos vacios OK")
+    if "--t3-prueba" in sys.argv:
+        t3_prueba()

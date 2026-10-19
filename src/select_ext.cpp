@@ -30,6 +30,7 @@
 #include <cstdio>
 #include <string>
 #include <cstring>
+#include <cstdlib>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -50,6 +51,14 @@ namespace {
 
 using dbz3::roster::GetVirtualCell;
 using dbz3::roster::VirtualCellCount;
+
+// Diagnostico (solo lectura): traza el cambio de ROTULO por alias. Se activa con la
+// variable de entorno DBZ3_NAMES_DIAG=1 (mismo patron que DBZ3_TEST_VOCES). Nada de
+// comportamiento cambia sin ella. Ver seguimiento_nombres/DIAGNOSTICO_NOMBRES2.md.
+bool NamesDiag() {
+  static const bool on = std::getenv("DBZ3_NAMES_DIAG") != nullptr;
+  return on;
+}
 
 constexpr uint32_t kCells = 64;
 constexpr uint32_t kCellBase = 44;
@@ -209,8 +218,32 @@ void Restore(uint8_t* base) {
   }
   for (int k = 0; k < 3; ++k) REX_STORE_U16(SlotToId(k) + 2 * c.alias, t_saved_ids[k]);
   if (t_name_slot) REX_STORE_U32(t_name_slot, t_name_saved);
+  if (t_name_slot && NamesDiag())
+    REXLOG_INFO("dbz3 names: RESTAURA casilla {} (alias {} rotulo {}) entrada {} deja el nativo",
+                t_active, c.alias, GetVirtualCell(t_active).name[0], kNameImageBase + c.alias);
   t_name_slot = 0;
   t_active = -1;
+}
+
+// Diagnostico (solo con DBZ3_NAMES_DIAG): resuelve la textura del rotulo y del icono en el banco
+// global como lo hace sub_82096FF0 (k = tex - bank[+24]; off = bank[bank[+20] + 4k]; obj = bank + off + 20).
+void DiagBank(uint8_t* base, int vc) {
+  const uint32_t bank = REX_LOAD_U32(dbz3::GA(0x8238CE10));   // banco global (-12784 de sub_82092C58)
+  if (!GuestPtr(bank)) {
+    REXLOG_INFO("dbz3 names: BANCO global nulo (casilla {})", vc);
+    return;
+  }
+  // el indice NO esta en el banco: sub_82096FF0 lo lee del global 0x8238CE14 (-12780)
+  const uint32_t n = REX_LOAD_U32(bank + 16), idx = REX_LOAD_U32(dbz3::GA(0x8238CE14)), first = REX_LOAD_U32(bank + 24);
+  const auto& c = GetVirtualCell(vc);
+  for (int which = 0; which < 2; ++which) {
+    const uint32_t tex = uint32_t(which == 0 ? c.name[0] : c.icon[0]);
+    const uint32_t k = tex - first;
+    const uint32_t off = GuestPtr(idx) && k < n ? REX_LOAD_U32(idx + 4 * k) : 0;
+    const uint32_t obj = off ? REX_LOAD_U32(bank + off + 20) : 0;
+    REXLOG_INFO("dbz3 names: BANCO casilla {} {} tex {} k {} n {} idx {:08X} off {:08X} obj {:08X} bank {:08X}",
+                vc, which ? "icono" : "rotulo", tex, k, n, idx, off, obj, bank);
+  }
 }
 
 void Apply(uint8_t* base, int vc) {
@@ -238,6 +271,15 @@ void Apply(uint8_t* base, int vc) {
     t_name_saved = REX_LOAD_U32(t_name_slot);
     REX_STORE_U32(t_name_slot, desc);
   }
+  if (NamesDiag())
+    REXLOG_INFO("dbz3 names: APLICA casilla {} id {} alias {} rotulo {} -> entrada tbl[{}] {}",
+                vc, c.id, c.alias, GetVirtualCell(vc).name[0], kNameImageBase + c.alias,
+                t_name_slot ? "cambiada" : "SIN ROTULO (BuildImage=0)");
+  if (NamesDiag() && t_name_slot && GuestPtr(t_name_saved))
+    REXLOG_INFO("dbz3 names: NATIVO casilla {} alias {} tex nativa {} (bloque {:08X} {:08X})", vc, c.alias,
+                REX_LOAD_U32(t_name_saved + kNameTpl.tex_block), REX_LOAD_U32(t_name_saved + kNameTpl.tex_block + 4),
+                REX_LOAD_U32(t_name_saved + kNameTpl.tex_block + 8));
+  if (NamesDiag()) DiagBank(base, vc);
   t_active = vc;
 }
 
@@ -256,6 +298,16 @@ void Enter(uint8_t* base, uint32_t obj, bool nested) {
   g_select_seen_ms = NowMs();
   if (t_depth++ == 0 && VirtualCellCount() > 0 && GuestPtr(obj)) {
     uint32_t st = REX_LOAD_U32(obj + 48);
+    if (NamesDiag() && !nested && GuestPtr(st)) {
+      static thread_local int last = -1;
+      const int slot = int(int8_t(REX_LOAD_U8(st + 4)));
+      if (slot != last) {
+        last = slot;
+        REXLOG_INFO("dbz3 names: menu slot(state+4)={} (activa {} alias {} rotulo {})", slot, t_active,
+                    t_active >= 0 ? GetVirtualCell(t_active).alias : -1,
+                    t_active >= 0 ? GetVirtualCell(t_active).name[0] : -1);
+      }
+    }
     if (nested && GuestPtr(st)) st = REX_LOAD_U32(st + 16);
     t_save_buf = GuestPtr(st) ? REX_LOAD_U32(st + 120) : 0;
     Apply(base, NewCellOfState(base, st));
@@ -608,6 +660,74 @@ DBZ3_HOOK(sub_8217F3F0, dbz3eu_sub_8217F3A8) {
   orig(ctx, base);
   REX_STORE_U32(at, old0);
   REX_STORE_U32(at + 4, old1);
+}
+
+// ---- Bloque H (studies 8): rotulos de las casillas nuevas ----
+// sub_82092C80(r3 = etapa 0/1, r4 = textura) lo llama el dibujo de cada sprite (sub_82097290 / sub_820959B0) y
+// resuelve la textura en el banco GLOBAL 0x8238CE10 con sub_82096FF0(*(0x82386260), etapa, textura).
+// MEDIDO 2026-10-19 (DBZ3_NAMES_DIAG, gancho de aqui): al DIBUJAR el rotulo el banco es el #AZT del select (data_usi
+// 2027 del mod _roster, 0x4770AEA0, n = 88) y la textura 65..87 SI esta (entrada valida, objeto con vtable
+// 8201CAA0, pixeles correctos en memoria fisica). Lo que lo borraba es la guarda de sub_82096FF0 en campaigns.cpp
+// (cierres del Tag Team / R1): descarta toda entrada con desplazamiento >= 16 MB ("efecto 73 que no esta en el banco
+// 4770AEA0 ... sin efecto"), y roster_build.py anade los rotulos AL FINAL del #AZT de 17 MB (entradas en
+// +0x01047980..). Aqui, solo para una entrada que es de verdad una textura del banco (indice propio == textura,
+// recurso con la vtable de texturas y su metodo [1] en codigo), se llama a sub_82096FF0 ORIGINAL; el resto sigue por
+// el camino de siempre (con la guarda).
+DBZ3_EXTERN_EU(__imp__dbz3eu_sub_82096F88);
+namespace {
+constexpr uint32_t kTexVtable = 0x8201CAA0;   // clase de las texturas del #AZT (misma en US y EU: ver campaigns.cpp)
+
+// Entrada del banco global para la textura `tex` si es una textura real mas alla de lo que admite la guarda (0 si no).
+uint32_t EntradaLejana(uint8_t* base, uint32_t tex) {
+  const uint32_t bank = REX_LOAD_U32(dbz3::GA(0x8238CE10));
+  if (!GuestPtr(bank) || tex == 0xFFFFFFFFu) return 0;
+  const uint32_t n = REX_LOAD_U32(bank + 16), k = tex - REX_LOAD_U32(bank + 24);
+  const uint32_t idx = REX_LOAD_U32(dbz3::GA(0x8238CE14));
+  if (k >= n || n > 4096 || !GuestPtr(idx)) return 0;
+  const uint32_t rel = REX_LOAD_U32(idx + 4 * k);
+  if (rel < 0x01000000u || rel >= 0x08000000u) return 0;   // < 16 MB: lo resuelve el camino normal
+  const uint32_t e = bank + rel;
+  if (!GuestPtr(e) || REX_LOAD_U32(e) != tex) return 0;    // la entrada lleva su propio indice
+  const uint32_t res = REX_LOAD_U32(e + 20);
+  if (!GuestPtr(res) || REX_LOAD_U32(res) != kTexVtable) return 0;
+  const uint32_t m1 = REX_LOAD_U32(REX_LOAD_U32(res) + 4);
+  if (m1 < 0x82000000u || m1 >= 0x83000000u || (m1 & 3)) return 0;
+  return e;
+}
+}  // namespace
+
+DBZ3_HOOK(sub_82092C80, dbz3eu_sub_82092BC8) {
+  const uint32_t tex = ctx.r4.u32;
+  const uint32_t e = EntradaLejana(base, tex);
+  if (NamesDiag()) {   // una linea por (banco, textura) dibujada: banco, n y si resuelve
+    static std::mutex mu;
+    static std::unordered_map<uint64_t, int> seen;
+    const uint32_t bank = REX_LOAD_U32(dbz3::GA(0x8238CE10));
+    bool log = false;
+    {
+      std::lock_guard<std::mutex> lk(mu);
+      log = seen.size() < 600 && seen.emplace((uint64_t(bank) << 32) | tex, 1).second;
+    }
+    if (log) {
+      const bool ok = GuestPtr(bank);
+      const uint32_t n = ok ? REX_LOAD_U32(bank + 16) : 0, k = tex - (ok ? REX_LOAD_U32(bank + 24) : 0);
+      const uint32_t idx = REX_LOAD_U32(dbz3::GA(0x8238CE14));
+      const uint32_t off = ok && GuestPtr(idx) && k < n ? REX_LOAD_U32(idx + 4 * k) : 0;
+      REXLOG_INFO("dbz3 names: DIBUJO tex {} etapa {} bank {:08X} n {} idx {:08X} off {:08X} obj {:08X} desde {:08X} {}", tex,
+                  ctx.r3.u32, bank, n, idx, off, off ? REX_LOAD_U32(bank + off + 20) : 0, uint32_t(ctx.lr),
+                  e ? "LEJANA (sin guarda)" : "normal");
+    }
+  }
+  if (!e) {
+    orig(ctx, base);
+    return;
+  }
+  // cuerpo de sub_82092C80 con la llamada a sub_82096FF0 original
+  ctx.r5.u64 = ctx.r4.u64;
+  ctx.r4.u64 = ctx.r3.u64;
+  ctx.r3.u64 = REX_LOAD_U32(dbz3::GA(0x82386260));
+  DBZ3_IMP_EU(sub_82096FF0)(ctx, base);
+  ctx.r3.u64 = 0;
 }
 
 // Creates the icon / frame sprites of every cell (r3 = wheel data); new cells

@@ -123,7 +123,11 @@ struct Combate {
   bool clima = false;        // reglas de escenarios.md R1: cielo que se oscurece,
   float gigante = 0;         // rival a escala (0 = normal; 0.5..3)
   bool intro = false;        // e intro de cine de 10 s
+  int forma = 0;             // studies 8 (equipo A): forma inicial del rival (RequestBattleEx form2; fusiones nativas)
 };
+bool Jugable(int id);
+// Rival de un reto propio: jugable, o un registro de fusion nativo de B3 (64..104) pedido con su forma.
+bool RivalValido(int id, int forma) { return Jugable(id) || (forma > 0 && id >= 64 && id < 105); }
 struct Reto {
   std::string nombre, name;  // nombre del reto (catalogo); vacio = el del modo
   int tiempo = 0, regen = 0, objetivo = 0;   // para todos sus combates (cada combate puede cambiarlos)
@@ -549,7 +553,7 @@ bool Lanzar() {   // con g_mu: pide el combate g_st.ganados
   const Combate& c = g_reto.combates[size_t(g_st.ganados)];
   if (g_encadenado.exchange(false)) {   // ya pedido al acabar el anterior: sale de la espera en negro
     dbz3::hub::HoldChain(false);
-  } else if (!dbz3::hub::RequestBattle(g_st.jugador, c.id, c.escenario, true)) {
+  } else if (!dbz3::hub::RequestBattleEx(g_st.jugador, c.id, c.escenario, true, 0, 0, 0, 0, c.forma)) {
     return false;
   }
   g_st.fase = kCombate;
@@ -583,7 +587,7 @@ void SiguienteAlMenu() {
 // su pantalla) o vuelve al menu principal con Abort (B). Sin el conector, por el menu principal como antes.
 void Encadenar(bool solo) {   // con g_mu
   const Combate& n = g_reto.combates[size_t(g_st.ganados)];
-  if (!dbz3::hub::ChainBattleEx(g_st.jugador, n.id, n.escenario, true, 0, 0, 0, 0, 0)) {
+  if (!dbz3::hub::ChainBattleEx(g_st.jugador, n.id, n.escenario, true, 0, 0, 0, 0, n.forma)) {
     if (solo) SiguienteAlMenu();
     return;
   }
@@ -882,9 +886,10 @@ bool StartPropio(int tipo, const std::string& nombre, const std::string& palabra
   r.premio = premio;
   r.vida = std::clamp(vida_max, 1, kVidaTope);
   for (const Pelea& p : peleas) {
-    if (!Jugable(p.rival)) continue;
+    if (!RivalValido(p.rival, p.forma)) continue;
     r.combates.push_back({p.rival, p.traje, p.escenario, std::clamp(p.vida, 0, kVidaTope), p.tiempo, p.regen,
-                          p.objetivo, p.clima, p.gigante > 0 ? std::clamp(p.gigante, 0.5f, 3.0f) : 0.0f, p.intro});
+                          p.objetivo, p.clima, p.gigante > 0 ? std::clamp(p.gigante, 0.5f, 3.0f) : 0.0f, p.intro,
+                          std::clamp(p.forma, 0, 7)});
   }
   if (r.combates.empty() || ganados < 0 || ganados >= int(r.combates.size())) return false;
   g_reto = std::move(r);
@@ -940,9 +945,9 @@ void CerrarFin() { g_fin_visible = false; }
 // Rival del combate siguiente de un reto propio (entre combates).
 void SetSiguiente(const Pelea& p) {
   std::lock_guard<std::mutex> lk(g_mu);
-  if (g_st.fase != kEntre || !g_reto.propio || !Jugable(p.rival)) return;
+  if (g_st.fase != kEntre || !g_reto.propio || !RivalValido(p.rival, p.forma)) return;
   g_reto.combates[size_t(g_st.ganados)] = {p.rival, p.traje, p.escenario, std::clamp(p.vida, 0, kVidaTope), p.tiempo,
-                                           p.regen, p.objetivo, p.clima, p.gigante, p.intro};
+                                           p.regen, p.objetivo, p.clima, p.gigante, p.intro, std::clamp(p.forma, 0, 7)};
   g_st.rival = p.rival;
 }
 bool ArmaduraActiva() {
@@ -1904,7 +1909,19 @@ const bool g_hub = dbz3::hub::RegisterMode("torre", [] { AbrirSelector(kTorre); 
                                              "und Tag Team. Hol dir überall Rang S!",
                                              "Cento missioni per saga: scontri, contro il tempo, resistenza, regole speciali "
                                              "e Tag Team. Ottieni il grado S in tutte!"},
-                                            [] { AbrirSelector(3); }, &RetoEnCurso);
+                                            [] { AbrirSelector(3); }, &RetoEnCurso) &&
+                   dbz3::hub::RegisterEntry("heroe", {"Modo Heroe", "Hero Mode", "Mode Heros", "Heldenmodus", "Modalita Eroe"},
+                                            {"Tu heroe con su historia propia: crea su cuerpo y su estilo, entrena con "
+                                             "maestros y sube de nivel. Entrada propia, fuera del Kumite.",
+                                             "Your own hero and story: create his body and style, train with masters and "
+                                             "level up. Its own entry, outside the Kumite.",
+                                             "Ton heros et son histoire : cree son corps et son style, entraine-toi avec "
+                                             "des maitres et monte de niveau. Entree propre, hors du Kumite.",
+                                             "Dein Held mit eigener Geschichte: erstelle Koerper und Stil, trainiere bei "
+                                             "Meistern und steige auf. Eigener Eintrag, ausserhalb des Kumite.",
+                                             "Il tuo eroe con la sua storia: crea corpo e stile, allenati con i maestri "
+                                             "e sali di livello. Voce propria, fuori dal Kumite."},
+                                            [] { PedirPanel(); dbz3::rpg::AbrirHeroe(); }, &RetoEnCurso);
 
 // PRUEBAS. DBZ3_TEST_MODO="tipo,jugador[,traje]" (tipo: torre, supervivencia, kumite): empieza el reto cuando
 // el menu principal lleva 3 s en pantalla y, al acabar, escribe el ranking en el log.
@@ -1932,6 +1949,11 @@ const bool g_test = [] {
       std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
     PedirPanel();
+    if (tipo == kHeroe) {   // DBZ3_TEST_MODO=heroe,jugador[,traje]: abre la creacion del Modo Heroe (entrada propia)
+      dbz3::rpg::AbrirHeroe();
+      REXLOG_INFO("dbz3 modos: prueba: Modo Heroe (entrada propia del HUB)");
+      return;
+    }
     if (tipo == kMision) {   // DBZ3_TEST_MODO=mision100,jugador,n: la mision n (1-100) de la Mision 100
       REXLOG_INFO("dbz3 modos: prueba: mision 100 n {} con id {}: {}", traje, jugador,
                   dbz3::rpg::ProbarMision(traje, jugador) ? "empieza" : "no se pudo empezar");

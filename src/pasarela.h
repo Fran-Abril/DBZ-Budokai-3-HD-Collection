@@ -60,6 +60,7 @@ struct ResultadoB1 {
   Imagen pulsa;      // 666 #5: "Pulsa START" del titulo
   Imagen dificultad[3];   // 666 #7-9: Novato, Experto, Avanzado
   Imagen barra;      // 666 #3: degradado negro vertical (16 x 88)
+  Imagen copyright;  // 666 #4: "(c) 1989 BIRD STUDIO/SHUEISHA... (c) BANDAI 2002" del titulo (488 x 40)
   Imagen tienes_peq; // 668 #20: "You have ... Pts." pequeno
   Imagen cifras_peq; // 668 #23: 0-9 pequenas (4 x 3 de 40 x 40)
   Imagen clave;      // 668 #25: tablon "Password"

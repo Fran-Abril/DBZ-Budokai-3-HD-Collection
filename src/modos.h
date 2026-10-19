@@ -47,6 +47,8 @@ struct Pelea {
   bool clima = false;  // el cielo se oscurece (clima.cpp)
   float gigante = 0;   // escala del rival (gigantes.cpp; 0 = normal, 0.5..3)
   bool intro = false;  // intro de cine de 10 s antes del combate (cine.cpp)
+  int forma = 0;       // studies 8 (equipo A): forma inicial del rival (hub.cpp rec+20/+22; fusiones nativas de B3:
+                       // 64 f3 Gotenks, 70 f4 Gogeta SS4, 72 f2 Vegito, registros 64..104 del char372)
 };
 struct Reglas {
   int dano_hecho = 100, dano_recibido = 100;   // % del dano que hace / recibe el jugador
@@ -96,6 +98,7 @@ bool Busy();                 // selector o reto propio abierto (el HUB espera)
 bool Heroe();                // pantallas del Modo Heroe (su fondo propio)
 bool Mision100();            // pantalla de Mision 100 (su fondo y anfitrion propios)
 void AbrirSelector(int entrada);   // 0 torre, 1 supervivencia, 2 kumite, 3 Mision 100 (entradas del HUB)
+void AbrirHeroe();   // Modo Heroe como entrada propia del HUB (no depende del Kumite)
 bool ProbarMision(int n, int jugador);   // PRUEBAS: empieza la mision n (1-100) de la Mision 100
 bool EquiposMision();               // la mision en curso lleva equipos (tagteam_slots.cpp no los borra)
 void Dibujar(ImDrawList* dl, const dbz3::ingame::style::Area& a, float t, uint16_t pulsado);

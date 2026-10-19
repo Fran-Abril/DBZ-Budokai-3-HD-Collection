@@ -371,6 +371,22 @@ void SetRelight(int32_t level);
 bool PresentDither();
 void SetPresentDither(bool enabled);
 
+// Widescreen on wide/ultrawide monitors (SDK's present_letterbox, inverted):
+// "keep" (default) shows the native 16:9 image centered with bars so nothing
+// is distorted; "stretch" fills the whole window, stretching along X. Applies
+// live and only affects presentation (the guest HUD stays inside the 16:9
+// image).
+std::string AspectMode();
+void SetAspectMode(const std::string& mode);
+
+// Widescreen on wide/ultrawide monitors (SDK's present_letterbox, inverted):
+// "keep" (default) shows the native 16:9 image centered with bars so nothing
+// is distorted; "stretch" fills the whole window, stretching along X. Applies
+// live and only affects presentation (the guest HUD stays inside the 16:9
+// image).
+std::string AspectMode();
+void SetAspectMode(const std::string& mode);
+
 // --- Quality presets --------------------------------------------------------
 // One-click quality profiles that set the internal render scale, MSAA, aniso
 // and upscaling effect together. Values: "auto" (detect the GPU tier and apply

@@ -753,6 +753,7 @@ def story(cfg, us, mod, work):
             # `nivel` en el capitulo)
             nb = sum(1 for x in chapters if "combate" in x)
             lv = int(c.get("nivel", min(4, len([x for x in chapters[:i] if "combate" in x]) * 5 // max(1, nb))))
+            lv = max(0, min(7, lv))             # solo hay 8 registros (la historia del Heroe pedia nivel 8)
             exp, level = struct.unpack_from(">2I", new, 0x10 + 0x98 * lv + 0x60)
             for r in range(0x10, 0x10 + 8 * 0x98, 0x98):
                 struct.pack_into(">2I", new, r + 0x60, exp, level)

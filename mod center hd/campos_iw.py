@@ -50,10 +50,12 @@ CAMPOS = {
     881: ("Tierra en vuelo (IW)", 52, 16, ((5, 6), (1, 2), (3, 4)), 46.0),   # x/z +-12000; base con 4 sub-mallas
     #      libres (IW 52 = B3 48, caja de colision +-268 x +-254): el terreno va partido en 2 (PARTES)
     883: ("Namek en vuelo (IW)", 52, 16, ((5, 6), (1, 2), (3, 4)), 30.7),    # x/z +-8000 (caja de IW 52)
+    # interior de la nave de Goku (camara de gravedad, MSN_NB007): [#AMT, #AMO, #AMT, #AMO, #MTA], sin #MCF
+    880: ("Nave de Goku por dentro (IW)", 58, 16, ((1, 0), (3, 2)), 4.0),
 }
 # data_cmn.afs del juego (B2 5000+, B1 5020+); menu = entrada + 100. Fijas: un campo nuevo no mueve las demas.
 # El juego busca el alta por su carpeta de mod ("Campo IW <campo>": dbz3::escenarios::CampoIW).
-ENTRADAS = {884: 5060, 897: 5061, 900: 5062, 903: 5063, 906: 5064, 909: 5065, 881: 5066, 883: 5067}
+ENTRADAS = {884: 5060, 897: 5061, 900: 5062, 903: 5063, 906: 5064, 909: 5065, 881: 5066, 883: 5067, 880: 5068}
 
 
 def le(b, o):
@@ -235,6 +237,32 @@ def mdd_con_campo(mdd, terreno, amt, quedan=0, k=1.0, camaras=None):
     return bytes(out), bloques
 
 
+def _raices(amo):
+    """[(offset de la traslacion, (x, y, z))] de los huesos raiz (padre 0) de cada #AMG del #AMO PS2."""
+    import amo2awo  # noqa: PLC0415
+    out = []
+    for wm in amo2awo.PS2AMO(bytes(amo)).amgs:
+        for i in range(wm.nb):
+            o = wm.a + wm.axes_rel + 80 * i
+            if le(amo, o + 0x40) == 0:
+                out.append((o + 16, struct.unpack_from("<3f", amo, o + 16)))
+    return out
+
+
+def sin_raiz_del_terreno(extra, terreno):
+    """studies 8 (NB007, medido en el juego): las piezas pegadas al hueso raiz del terreno (attach_rigid, head=0) se
+    dibujan con la traslacion de esa raiz SUMADA OTRA VEZ. Solo pasa en la nave (880: raiz del suelo y del casco en
+    (55, 0, 0); en los demas campos vale 0): el casco salia ~55 u desplazado en x respecto al suelo y Goku, en el origen
+    de IW, quedaba dentro de la pared. Se resta la raiz del terreno a las raices del extra (copia)."""
+    rt = next((t for _o, t in _raices(terreno)), (0.0, 0.0, 0.0))
+    if not any(abs(v) > 1e-4 for v in rt):
+        return extra
+    b = bytearray(extra)
+    for o, t in _raices(extra):
+        struct.pack_into("<3f", b, o, *(t[k] - rt[k] for k in range(3)))
+    return bytes(b)
+
+
 def bin_campo(afs, campo, solo_terreno=False, quedan=0):
     """Bin HD del campo. El cielo y las nubes se pegan AL MODELO DEL TERRENO como partes rigidas de su hueso raiz
     (bind identidad), con el 'attach' de amo2awo (como las pelucas de B2) y sus texturas detras en el mismo banco:
@@ -249,7 +277,7 @@ def bin_campo(afs, campo, solo_terreno=False, quedan=0):
     (a0, t0), resto = piezas[0], piezas[1:]
     adjuntos, desde = [], le(f[t0], 0x10)         # banco comun: terreno, luego cada extra (indices n, n+1...)
     for a, t in resto:
-        adjuntos.append((f[a], desde))
+        adjuntos.append((sin_raiz_del_terreno(f[a], f[a0]), desde))
         desde += le(f[t], 0x10)
     # camaras de la presentacion: el #AMC del propio campo (DATA_CMN campo+1, junto al #WCF): 3 pistas de 300
     # cuadros como las de los escenarios de combate (mismo formato), apuntando a lo que se ve en ese campo
@@ -311,15 +339,15 @@ def cmd_mod(a):
 # los 6 campos de IW y los escenarios de B1/B2 probados en el juego. Nada del juego viaja en el Kit; un fallo no
 # para nada (sale 0 y lo dice en el registro: el launcher juega igual).
 # ---------------------------------------------------------------------------------------------------------
-VERSION = 12  # 12: nombres de g3/g4/g6 corregidos con PCSX2 (R7 b2_integracion). 11: B2 sin animaciones ni camaras de destruccion (R7 escenarios).   subir si cambia el resultado del conversor: se rehacen en el equipo del jugador
-B12 = (("b2", 2, "Templo de Kami", "Templo de Kami"),          # (juego, grupo, carpeta, rotulo): docs/14_frentes/
-       ("b2", 7, "Montanas nevadas", "Montañas nevadas"),       # escenarios.md. R7: probados en combate los B2
-       ("b2", 0, "Base Red Ribbon B2", "Base de la Red Ribbon (B2)"),   # 0, 2, 3, 4, 6, 7 y 8. Fuera: g1 (se cierra
-       ("b2", 3, "Namek B2", "Planeta Namek (B2)"),                    # al dibujar, lr 0x8208E5AC) y g5 (suelo
-       ("b2", 4, "Llanura B2", "Llanura (B2)"),                        # negro). R7: escenario de B2 0-12 -> grupo
-       ("b2", 6, "Islas B2", "Islas (B2)"),                            # (ELF 0x372AB0): 4 8 5 1 0 7 2 6 3 4 8 0 7
-       ("b2", 8, "Calle de la ciudad B2", "Calle de la ciudad (B2)"),
-       ("b1", 3, "Paramo al atardecer", "Páramo al atardecer"))
+VERSION = 14  # 14: caja de colision de B2 por grupo (Base Red Ribbon 1.4, medido en el juego: docs/14_frentes). 13: rotulos de B2 corregidos por el usuario (las carpetas no cambian: las usan el tablero y la nave). 12: nombres de g3/g4/g6 corregidos con PCSX2 (R7 b2_integracion). 11: B2 sin animaciones ni camaras de destruccion (R7 escenarios).   subir si cambia el resultado del conversor: se rehacen en el equipo del jugador
+B12 = (("b2", 2, "Templo de Kami", "Templo (B2)", 1.0),          # (juego, grupo, carpeta, rotulo, caja-escala): docs/14_frentes/
+       ("b2", 7, "Montanas nevadas", "Muscle Tower (B2)", 1.0),       # escenarios.md. R7: probados en combate los B2
+       ("b2", 0, "Base Red Ribbon B2", "Base de la Red Ribbon (B2)", 1.4),   # 0, 2, 3, 4, 6, 7 y 8. Fuera: g1 (se cierra
+       ("b2", 3, "Namek B2", "Mundo de Kaiyoshin (B2)", 1.0),                    # al dibujar, lr 0x8208E5AC) y g5 (suelo
+       ("b2", 4, "Llanura B2", "Llanura (B2)", 1.0),                        # negro). R7: escenario de B2 0-12 -> grupo
+       ("b2", 6, "Islas B2", "Planeta Namek (B2)", 1.0),                            # (ELF 0x372AB0): 4 8 5 1 0 7 2 6 3 4 8 0 7
+       ("b2", 8, "Calle de la ciudad B2", "Zona urbana (B2)", 1.0),            # caja-escala: la CAJA de colision del
+       ("b1", 3, "Paramo al atardecer", "Páramo al atardecer", 1.0))            # grupo (x/z; 1.0 = original de B2)
 
 
 def _sello(ruta):
@@ -355,8 +383,8 @@ def _tarea(t):
                                   "Infinite World", id_se=base - 4 + 1, tema=tema, rotulo_txt=titulo)
             poner_niebla(carpeta, hijos(afs.entry(clave))[0])
         else:
-            juego, grupo, nombre, rot = next(x for x in B12 if x[:2] == clave)
-            datos = EC.escenario_b2(EC.IsoB2(None, juego), grupo)
+            juego, grupo, nombre, rot, caja = next(x for x in B12 if x[:2] == clave)
+            datos = EC.escenario_b2(EC.IsoB2(None, juego), grupo, escala=caja)
             carpeta = EC.instalar(datos, mods, nombre, EC.ENTRADA_BASE + (20 if juego == "b1" else 0) + grupo,
                                   EC.JUEGOS[juego][0], id_se=45, tema=16, rotulo_txt=rot)
         (carpeta / "origen.txt").write_text(sello, encoding="utf-8")
@@ -381,7 +409,7 @@ def cmd_auto(a):
                 tareas.append(("iw", c, str(mods), a.us, a.ps2, sello))
     else:
         print("escenarios: sin Infinite World en %s (campos de IW: nada que hacer)" % a.ps2)
-    for juego, grupo, nombre, _ in B12:
+    for juego, grupo, nombre, _rot, _caja in B12:
         ruta = EC.iso.find_game(juego, root=str(EC.PS2))
         if not ruta:
             print("escenarios: sin %s en %s" % (EC.JUEGOS[juego][0], a.ps2))

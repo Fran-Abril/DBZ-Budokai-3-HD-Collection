@@ -13,6 +13,7 @@ fuente = "iw"
 clave = "c:goku (gt)"
 donante = 0
 preset = "original"
+voces = "iw:GT GOKOU|donante"
 extra = { fisica = 1 }   # pelo con la fisica de Goku SSJ (el de IW no se porta)
 
 [imp_iw_vegeta_gt]
@@ -21,6 +22,7 @@ fuente = "iw"
 clave = "c:vegeta (gt)"
 donante = 7
 preset = "original"
+voces = "iw:GT VEGETA|donante"
 
 [imp_iw_pan]
 nombre = "Pan"
@@ -28,6 +30,8 @@ fuente = "iw"
 clave = "c:pan"
 donante = 15
 preset = "original"
+voces = "iw:PAN|donante"
+extra = { aura_de = 2 }   # dudoso: Gohan nino (familia); sin aura canonica (TABLA_AURAS.md)
 
 [imp_iw_baby]
 nombre = "Baby"
@@ -35,6 +39,8 @@ fuente = "iw"
 clave = "c:super baby vegeta 2"
 donante = 7
 preset = "original"
+voces = "iw:VEGETA BABY|donante"
+extra = { aura_color = "#AA00FF" }   # Super Baby 2 morado (TABLA_AURAS.md)
 
 # R6 (1.5.1): los tres personajes de Infinite World que faltaban para cubrir sus misiones (Super 17: misiones 74 y 75;
 # Pikkon: 87; Gran Saiyaman 2: 92; y sus combates del Fighter's Road). Por pulir, como los demas: modelo y golpes de IW
@@ -45,6 +51,8 @@ fuente = "iw"
 clave = "c:super 17"
 donante = 29
 preset = "original"
+voces = "iw:SUPER ANDROID No.17|donante"
+extra = { aura_de = 29 }   # el aura del Androide 17 (el encargo pide "oscura": el kit no oscurece)
 
 [imp_iw_pikkon]
 nombre = "Pikkon"
@@ -52,6 +60,7 @@ fuente = "iw"
 clave = "c:pikkon"
 donante = 11
 preset = "original"
+voces = "iw:PAIKUHAN|donante"
 
 [imp_iw_gran_saiyaman2]
 nombre = "Gran Saiyaman 2"
@@ -59,6 +68,20 @@ fuente = "iw"
 clave = "c:great saiyaman 2"
 donante = 5
 preset = "original"
+voces = "iw:GREAT SAIYAMAN2|donante"
+
+
+# studies 5: Gogeta SS4 de IW (mision 77 y Fighter's Road) como personaje propio. No se usa el registro 70 de B3:
+# pedido con forma 0 carga Goku normal (la fusion de B3 solo nace en combate, fusion.cpp/tag::Fuse). Una sola forma
+# (SSJ4); voces de IW (14 grabaciones) y, si no esta la copia de IW, las del donante.
+[imp_iw_gogeta_ss4]
+nombre = "Gogeta SS4"
+fuente = "iw"
+clave = "c:gogeta"
+donante = 0
+preset = "original"
+voces = "iw:GOGITA SS4 (GOKOU)|donante"
+extra = { formas = 2 }
 
 # El mod publicado usa el modelo y las bocas del port de la comunidad (modelos/janemba.bin); la
 # receta da el modelo de Infinite World con los golpes de ese port.
@@ -69,7 +92,7 @@ clave = "c:janemba"
 donante = 10
 despues_de = 37
 preset = "original"
-extra = { formas = 1 }   # sin transformaciones: la 2a forma del port era la de Krillin
+extra = { formas = 1, ki_base = [5], aura_color = "#AA00FF" }   # sin transformaciones (la 2a forma del port era la de Krillin); ki base 5 (pedido del usuario, 2026-10-18); aura morada (TABLA_AURAS.md)
 
 [port_trunks_espada_sb2]
 nombre = "Trunks SB2"

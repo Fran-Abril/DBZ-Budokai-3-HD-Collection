@@ -128,15 +128,21 @@ std::vector<MisionTablaIW> LeerTablaIW(const std::filesystem::path& iw, std::str
 // iw_mapa): Bu con Gohan sale como Super Bu de serie. Gogeta SS4 (70) sigue en gris.
 int IWaB3(int id_iw) {
   if (id_iw >= 0 && id_iw <= 43 && id_iw != 1) return id_iw;
-  if (id_iw == 64 || id_iw == 74) return id_iw;
+  // Fusiones nativas (s7 frente 06): Gotenks 64 y Gogeta SS4 70 son registros de B3 con su forma de fusion; Vegito de
+  // Goku (IW 74) es el registro 72 de B3 (el 74 esta vacio en el char372: nf = 0). Sin el flag, comportamiento antiguo.
+  if (id_iw == 64) return 64;
+  if (id_iw == 74) return kFusionesNativas ? 72 : 74;
+  if (id_iw == 70 && kFusionesNativas) return 70;
   // Gogeta SS4 (IW 70), R7: el registro 70 de B3 se llama "GOGITA SS4 (GOKOU)", pero pedido con forma 0 sale Goku
   // normal (D:/DBZ3HD/_pruebas/20261017-171216_iw_fix_gogeta77): la fusion de B3 se hace en pleno combate (fusion.cpp,
-  // tag::Fuse). Sigue en gris hasta empezar ya fusionado.
+  // tag::Fuse). Ronda studies 5: se porta como personaje propio (receta imp_iw_gogeta_ss4, modelo y moveset de IW) y se
+  // mapea aqui; sin el port instalado la mision 77 sigue en gris con el aviso de FaltaIW.
   if (id_iw == 78 || id_iw == 79 || id_iw == 84) return 35;
   static const std::pair<int, const char*> kPorts[] = {{44, "c:goku (gt)"}, {45, "c:super baby vegeta 2"},
                                                        {46, "c:super 17"},   {47, "c:janemba"},
                                                        {48, "c:pikkon"},     {54, "c:vegeta (gt)"},
-                                                       {55, "c:great saiyaman 2"}, {56, "c:pan"}};
+                                                       {55, "c:great saiyaman 2"}, {56, "c:pan"},
+                                                       {70, "c:gogeta"}};   // en el disco de IW se llama "Gogeta" (2 formas)
   for (const auto& [iw, clave] : kPorts) {
     if (iw == id_iw) return IdPort("iw", clave);
   }
@@ -148,6 +154,17 @@ int IWaB3(int id_iw) {
 int MapaIW(int escenario) {
   constexpr int k[] = {46, 58, 56, 68, 64, 62, 52, 60, 50, 54, 48, 56, 66, 54, 60, 54, 44};
   return escenario >= 0 && escenario < int(std::size(k)) ? k[escenario] : 62;
+}
+
+// Forma con la que empieza la fusion de IW (0 = normal). Para la 67 (Gotenks), la 69 (Vegito) y la 77 (Gogeta SS4).
+int FormaFusionIW(int id_iw) {
+  if (!kFusionesNativas) return 0;
+  switch (id_iw) {
+    case 64: return 3;   // Gotenks: char372 de B3 id 64 forma 3, capsula 150 "Fusion <Gotenks> (Goten)"
+    case 70: return 4;   // Gogeta SS4: id 70 forma 4, capsula 175 "Fusion <SS4 Gogeta> (Goku)"
+    case 74: return 2;   // Vegito: id 72 forma 2, capsula 187 "Potara <Vegito> (Goku)"
+    default: return 0;
+  }
 }
 
 // ---- Dragon Mission (frente P1, 2026-10-16) ----

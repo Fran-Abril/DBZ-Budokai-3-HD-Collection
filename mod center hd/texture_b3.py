@@ -14,6 +14,7 @@ Uso:
 Requiere Pillow (DDS<->PNG) y el xbcompress/xbdecompress del XDK.
 """
 import argparse
+import hashlib
 import os
 import struct
 import subprocess
@@ -267,14 +268,25 @@ def pad4(rgba):
     return rgba[(np.arange(H) * h // H)[:, None], (np.arange(W) * w // W)[None, :]]
 
 
+_ENCODE_CACHE = {}
+_ENCODE_CACHE_BYTES = [0]
+
+
 def encode_dxt3(rgba):
     """Todos los bloques a la vez con numpy, byte a byte igual que _encode_block bloque a bloque (el bucle en
-    Python era casi todo el tiempo de montar el roster: 6,4 millones de bloques, ~400 s)."""
+    Python era casi todo el tiempo de montar el roster: 6,4 millones de bloques, ~400 s).
+    Recordado por CONTENIDO (mismo RGBA -> mismo DXT3): el montaje codifica la misma textura
+    una vez por idioma (data_usi, data_eng...), y con la cache solo la codifica una vez."""
     h, w = rgba.shape[:2]
     assert w % 4 == 0 and h % 4 == 0, "dimensiones deben ser multiplo de 4"
     if not h or not w:
         return b""
-    b = np.asarray(rgba)[:, :, :4].reshape(h // 4, 4, w // 4, 4, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 16, 4)
+    rgba = np.asarray(rgba)
+    key = (h, w, hashlib.sha1(np.ascontiguousarray(rgba[:, :, :4]).tobytes()).digest())
+    hit = _ENCODE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    b = rgba[:, :, :4].reshape(h // 4, 4, w // 4, 4, 4).transpose(0, 2, 1, 3, 4).reshape(-1, 16, 4)
     a = np.minimum(15, (b[:, :, 3].astype(np.int32) + 8) // 16)          # = min(15, int(a / 16 + 0.5))
     alpha = (a[:, 0::2] | (a[:, 1::2] << 4)).astype(np.uint8)            # 8 bytes por bloque
     rgb = b[:, :, :3].astype(np.int32)
@@ -288,7 +300,11 @@ def encode_dxt3(rgba):
     idx = ((rgb[:, :, None, :] - pal[:, None, :, :]) ** 2).sum(axis=3).argmin(axis=2)   # (n, 16)
     ind = (idx[:, 0::4] | (idx[:, 1::4] << 2) | (idx[:, 2::4] << 4) | (idx[:, 3::4] << 6)).astype(np.uint8)
     col = np.stack([c0 & 0xFF, c0 >> 8, c1 & 0xFF, c1 >> 8], 1).astype(np.uint8)
-    return np.concatenate([alpha, col, ind], axis=1).tobytes()
+    out = np.concatenate([alpha, col, ind], axis=1).tobytes()
+    if _ENCODE_CACHE_BYTES[0] < 64 * 1024 * 1024:
+        _ENCODE_CACHE[key] = out
+        _ENCODE_CACHE_BYTES[0] += len(out)
+    return out
 
 
 def decode_dxt3_bitmap(bitmap, w, h):

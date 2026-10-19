@@ -69,6 +69,11 @@ namespace dbz3 {
 bool GameDimmed();
 bool OverlayOpen();
 }  // namespace dbz3
+namespace dbz3::iwmini {
+// X de la palanca derecha (iw_minijuegos.cpp; netplay_hooks.cpp la guarda junto a la Y): el visor la usa en
+// Pad_GetStickAxes (EU 0x3394F0), la de mayor magnitud de las dos.
+int PalancaDerechaX();
+}  // namespace dbz3::iwmini
 
 namespace dbz3::iwmini {
 // Hilo del juego, cada cuadro: lo llama Fotograma de iw_minijuegos.cpp (clima.cpp sub_820C2058, empieza el dibujo
@@ -569,11 +574,14 @@ void PasoVuelo(uint8_t* base) {
     float h = iwvuelo::EjeIW(px), v = iwvuelo::EjeIW(py);
     bool r1 = (g_pad.b12 & kR1) != 0;
     if (j.auto_) Piloto(j, h, v, r1);
-    // Pad_GetStickAxes (EU 0x3394F0): X = la mayor de las dos palancas (+0xD8/+0xDA), Y = palanca derecha (+0xD9)
-    j.cam_x = h;
-    // Y de la palanca derecha (netplay_hooks.cpp la pasa con la X a iwmini::PalancaDerecha), a la escala de h/v (s8).
-    // ponytail: signo sin medir contra IW (arriba = mirar arriba); si sale al reves, cambiar el signo aqui.
-    j.cam_y = dbz3::iwmini::PalancaDerechaY() / 256;
+    // Pad_GetStickAxes (EU 0x3394F0): X = la de mayor magnitud de las dos palancas (+0xD8/+0xDA); Y = la
+    // derecha (+0xD9). Las dos por el mismo decodificado que la izquierda (EjeIW), tambien la Y: sin el,
+    // cam_y valia x128 (el mando son -32768..32767) y +0x604 (cabeceo) saturado al tope con cualquier
+    // toque (antes: j.cam_y = PalancaDerechaY() / 256). [H] signo de la Y sin medir contra IW.
+    const float der_x = iwvuelo::EjeIW(std::clamp(dbz3::iwmini::PalancaDerechaX() / 256, -127, 127));
+    const float der_y = iwvuelo::EjeIW(std::clamp(dbz3::iwmini::PalancaDerechaY() / 256, -127, 127));
+    j.cam_x = std::fabs(der_x) > std::fabs(h) ? der_x : h;
+    j.cam_y = der_y;
     const float ax = j.x, az = j.z;
     Volar(j, h, v, r1);
     if (static const bool poses = !std::getenv("DBZ3_IW_VUELO"); poses) dbz3::anim::Bucle(x0, PoseVuelo(j, h, v));

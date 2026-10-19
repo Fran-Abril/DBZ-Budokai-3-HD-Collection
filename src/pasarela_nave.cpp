@@ -214,12 +214,12 @@ struct Sitio {
   const char *es, *en;
 };
 const Sitio kSitios[] = {{"Llanura B2", 62, "Llanura (B2)", "Plains (B2)"},
-                         {"Calle de la ciudad B2", 68, "Calle de la ciudad (B2)", "City street (B2)"},
+                         {"Calle de la ciudad B2", 68, "Zona urbana (B2)", "Urban Area (B2)"},
                          {"Base Red Ribbon B2", 44, "Base de la Red Ribbon (B2)", "Red Ribbon Base (B2)"},
-                         {"Montanas nevadas", 64, "Montañas nevadas (B2)", "Snowy mountains (B2)"},
-                         {"Templo de Kami", 52, "Templo de Kami (B2)", "Kami's Lookout (B2)"},
-                         {"Namek B2", 60, "Planeta Namek (B2)", "Planet Namek (B2)"},
-                         {"Islas B2", 56, "Islas (B2)", "Islands (B2)"}};
+                         {"Montanas nevadas", 64, "Muscle Tower (B2)", "Muscle Tower (B2)"},
+                         {"Templo de Kami", 52, "Templo (B2)", "Temple (B2)"},
+                         {"Namek B2", 54, "Mundo de Kaiyoshin (B2)", "Supreme Kai's World (B2)"},
+                         {"Islas B2", 60, "Planeta Namek (B2)", "Planet Namek (B2)"}};
 constexpr int kNSitios = int(sizeof(kSitios) / sizeof(kSitios[0]));
 // Registro del selector del alta de B2 de cada sitio (-1 si el launcher no la creo), leido una vez.
 const std::vector<int>& Registros() {
@@ -489,6 +489,24 @@ void Voz(int entrada) {
   OirAdxPs2(g_iso, "ADX_US.AFS", entrada, Volumen());
 }
 
+// Efectos IECS de la nave (studies 8, E; N13). El original los pide con FUN_00147260(canal, 0, id, 0):
+//   canal 2 = banco propio de la nave: FUN_00265F20 -> FUN_002A68F0(0x699DC0, 2, 0x1046D, 0x1046E, 0x1046F) (b2.c:212401;
+//     tabla 0x378360) = DATA_<idioma> 1133 (cuerpo PS-ADPCM), 1134 (indice IECS, 2 sonidos: 0,79 s y 0,18 s) y 1135.
+//     Ids usados: 1 (cada paso de la cuenta y de la barra: 0x263700, 0x262DD0) y 2 (fin de la cuenta, premio, saltar).
+//     [H] van de 1 en 1 (id 1 -> registro 0, id 2 -> registro 1): son los unicos dos y es el unico reparto que cabe.
+//   canal 0 = menus: cursor 2, aceptar 5, volver 3 (0x264790 prueba, 0x264F60 1P/2P), 0x15 al abrir la pantalla 1P/2P
+//     (0x2629B0) y 0x16 tras aceptar 1P. [H] banco: el general DATA_<idioma> 142/143 (26 sonidos), el mismo que el port
+//     usa para el canal 3 del tablero; no se ha visto quien lo carga.
+void Efecto(int canal, int id) {
+  if (g_iso.empty() || g_afs_idioma.empty()) return;
+  const bool prueba = std::getenv("DBZ3_TEST_MUSICA") != nullptr;
+  const int cuerpo = canal == 2 ? 1133 : 142, i = canal == 2 ? id - 1 : id;
+  static int pasos = 0;   // el paso de la cuenta suena cada 3 cuadros: al registro, 1 de cada 50
+  if (!(canal == 2 && id == 1) || pasos++ % 50 == 0)
+    REXLOG_INFO("dbz3 nave: efecto canal {} id {} -> {} cuerpo {} registro {}", canal, id, g_afs_idioma, cuerpo, i);
+  OirSonidoPs2(g_iso, g_afs_idioma, cuerpo, i, canal == 2 ? 6 : 7, prueba ? 1.0f : Volumen(), 0, prueba);
+}
+
 // Pantalla del original (640x448) dentro del area: escala y origen.
 struct Lienzo {
   float s;
@@ -680,6 +698,7 @@ bool PasoResultado(float cuadros, bool ok) {
   switch (r.fase) {
     case 0:   // 0x263700: 1 Kili cada 3 cuadros; la cuenta baja uno cada `pago`
       if (ok || r.ganado >= r.total) {
+        Efecto(2, 2);   // b2.c:211143 (fin) / 211171 (saltar)
         r.cuenta = 0;
         r.ganado = r.total;
         r.fase = 1;
@@ -689,6 +708,7 @@ bool PasoResultado(float cuadros, bool ok) {
       for (r.acc += cuadros; r.acc >= 3 && r.ganado < r.total; r.acc -= 3) {
         if (r.ganado % pago == 0) --r.cuenta;
         ++r.ganado;
+        Efecto(2, 1);   // b2.c:211165: cada paso
       }
       break;
     case 1:   // 0x263670: 40 cuadros; sin Kili se acaba
@@ -703,6 +723,7 @@ bool PasoResultado(float cuadros, bool ok) {
     case 2: {   // 0x262DD0
       const auto& P = Premios();
       if (ok) {
+        Efecto(2, 2);   // b2.c:210934: saltar
         if (r.barra > 9999) Vuelta();
         if (r.sig >= int(P.size()) && r.barra + r.ganado > 9999) {
           r.ganado -= 10000 - r.barra;
@@ -723,13 +744,16 @@ bool PasoResultado(float cuadros, bool ok) {
         break;
       }
       if (r.sig < int(P.size()) && r.barra == P[size_t(r.sig)].kili) {
+        Efecto(2, 2);   // b2.c:210859: llega a un premio
         EnsenarPremio();
       } else if (r.ganado < 1) {
+        Efecto(2, 2);   // b2.c:210875: se acaba
         AcabarBarra();
       } else {
         for (r.acc += cuadros; r.acc >= 3 && r.ganado > 0; r.acc -= 3) {
           --r.ganado;
           ++r.barra;
+          Efecto(2, 1);   // b2.c:210928: cada paso
           if (r.barra > 10000) Vuelta();
           if (r.sig < int(P.size()) && r.barra == P[size_t(r.sig)].kili) break;
         }
@@ -752,6 +776,25 @@ bool PasoResultado(float cuadros, bool ok) {
   }
   return false;
 }
+// Ventana "Get skill!" del original (FUN_002a44c0 + FUN_002a4070, b2.c) en el cuadro c desde que se abrio: lanza a la
+// vez la tarea del cartel (anim 0 -> reposo 1), la de la estrella (3 -> 4) y las del estallido con el emblema (6..12) y
+// la placa "BOOM!!" (13); texturas DATA_<idioma> 1148, disposicion DATA_CMN 933. El nombre del premio es su arte nativo
+// (DATA_<idioma> 542 + ID, textura 0; FUN_00292850 lo pide como 0x10000 | (ID + 0x21E)). La usan la nave y la orden 70
+// del tablero de B2 (FUN_00293740), que es la misma ventana.
+void DibVentanaPremio(ImDrawList* dl, const Lienzo& L, int id_b2, const char* nombre, float c) {
+  auto obj = [&](int e, int r) {
+    if (c < DurDe(e, &g_animv)) DibC(dl, L, e, c, false, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
+    else DibC(dl, L, r, c - DurDe(e, &g_animv), true, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
+  };
+  obj(3, 4);   // estrella
+  obj(0, 1);   // cartel "Get skill!"
+  for (int k = 6; k <= 13; ++k) DibC(dl, L, k, c, false, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
+  if (const Tex* n = NombreTex(id_b2))
+    dl->AddImage(reinterpret_cast<ImTextureID>(n->t.get()), L.P(320 - n->w * 0.5f, 206 - n->h * 0.5f),
+                 L.P(320 + n->w * 0.5f, 206 + n->h * 0.5f));
+  else
+    S::MenuText(dl, L.P(320, 206), 22 * L.s, nombre, true, false, 320 * L.s);
+}
 void DibujarResultado(ImDrawList* dl, const Lienzo& L) {
   // 0x262640: titulo (16), panel (77), franja (78), esferas (79, 80), aguja (81), cuenta (82) con su palabra (92-95),
   // Kili ganado (96, 106) y barra de la nave (107, 117)
@@ -770,15 +813,7 @@ void DibujarResultado(ImDrawList* dl, const Lienzo& L) {
     // las texturas son DATA_<idioma> 1148 (la disposicion, DATA_CMN 933). El nombre del premio es su arte nativo
     // (DATA_<idioma> 542 + ID, textura 0) y el Kili, nuestra linea (el original no lo repite).
     const Premio& p = Premios()[size_t(g_res.premio)];
-    const float c = std::max(0.0f, g_cuadro - g_res.premio_t);
-    Obj(dl, L, 3, 4, g_res.premio_t, 0, 0, &g_animv, &g_pzv);   // estrella
-    Obj(dl, L, 0, 1, g_res.premio_t, 0, 0, &g_animv, &g_pzv);   // cartel "Get skill!"
-    for (int k = 6; k <= 13; ++k) DibC(dl, L, k, c, false, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
-    if (const Tex* n = NombreTex(p.id))
-      dl->AddImage(reinterpret_cast<ImTextureID>(n->t.get()), L.P(320 - n->w * 0.5f, 206 - n->h * 0.5f),
-                   L.P(320 + n->w * 0.5f, 206 + n->h * 0.5f));
-    else
-      S::MenuText(dl, L.P(320, 206), 22 * L.s, p.nombre.c_str(), true, false, 320 * L.s);
+    DibVentanaPremio(dl, L, p.id, p.nombre.c_str(), std::max(0.0f, g_cuadro - g_res.premio_t));
     char li[48];
     std::snprintf(li, sizeof(li), "%d Kili%s", p.kili, g_res.nuevo ? T::T("  ¡Nuevo!", "  New!") : "");
     S::MenuText(dl, L.P(320, 300), 15 * L.s, li, false, false);
@@ -841,7 +876,10 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
     }
     antes = g_estado;
     desde = t;
-    if (g_estado == kModo) Voz(1149);
+    if (g_estado == kModo) {
+      Voz(1149);
+      Efecto(0, 0x15);   // 0x2629B0 (b2.c:210713) al abrir la pantalla 1P/2P
+    }
     if (g_estado == kJugador) {
       g_frase_sel = 9 + std::rand() % 2;   // 0x2617C0
       Voz(1150 + g_frase_sel - 9);
@@ -893,8 +931,15 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
       DibC(dl, L, 35, 0, false, 0, 0, 0, IM_COL32(150, 150, 150, 255));
     }
     M::Help(dl, a, {{"A", T::T("Elegir", "Select")}, {"B", T::T("Salir", "Quit")}});
-    if (pressed & kB) return salir(1);
-    if (ok) g_estado = kPrueba;
+    if (pressed & kB) {
+      Efecto(0, 3);   // b2.c:211911
+      return salir(1);
+    }
+    if (ok) {
+      Efecto(0, 5);      // b2.c:211890
+      Efecto(0, 0x16);   // b2.c:211895 (corta al anterior, como en el original: mismo canal)
+      g_estado = kPrueba;
+    }
     return 0;
   }
   if (g_estado == kPrueba) {   // 0x262830 / 0x264790
@@ -906,6 +951,9 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
       g_prueba = std::clamp(std::atoi(f), 0, 3);
     static float desde_p = 0;
     if (g_prueba != antes_p) desde_p = g_cuadro;   // la "Fase N" nueva entra con su animacion
+    if (g_prueba != antes_p && !auto_on) Efecto(0, 2);   // cursor (b2.c:211685/211705)
+    if (pressed & kB) Efecto(0, 3);                       // b2.c:211730
+    else if (ok) Efecto(0, 5);                            // b2.c:211712
     Obj(dl, L, 15, 16, g_cuadro - g_c_tit);
     Obj(dl, L, 61, 62);                                // la columna de las 4 casillas
     DibC(dl, L, 66 + g_prueba, 0, false);              // la casilla encendida
@@ -998,5 +1046,48 @@ void Resultado(int ganador, int vida, int segundos, int golpes) {
 
 // Para el tablero de B2 (cápsula al azar de sus casillas): la de B3 equivalente a una de B2, 0 si no hay.
 int CapsulaDeB2(int id_b2) { return CapsulaB3(id_b2); }
+
+// ---- Orden 70 del tablero de B2 (studies 8, E): FUN_00293740 -> FUN_002835F0 + la ventana de premio de la nave ----
+// FUN_002835F0(grupo, mascara, inventario) (b2.c:229323): recorre los 0x208 registros del #SKA (en RAM 0x6942A0 = DATA_CMN
+// 851 + 0x20); vale el que tiene +0x14 == grupo y su mascara de personajes (+0, u64) es 0 o comparte bit con la pedida.
+// Lista A: los que valen y aun no estan al maximo (+0x0D); lista B: los que valen con mascara != 0. Elige al azar en A
+// (FUN_0012E4E0) y, si A esta vacia, en B; sin ninguno, 0. La mascara pedida es la de los personajes que tienes
+// (FUN_00245DD0: tabla 0x377E40 de 36 capsulas de personaje) con un AND con el bit del personaje de la pieza.
+// [H] "tienes al personaje": aqui siempre (las piezas del tablero son las del jugador; B3 no tiene esas capsulas).
+int CapsulaAlAzar(int grupo, int personaje_b2) {
+  const std::vector<uint8_t>& d = TablaCapsulas();
+  if (d.size() < 0x40 || std::memcmp(d.data(), "#SKA", 4) != 0) return 0;
+  // personaje < 0: la orden 8 (FUN_00295C10), que pide la mascara de TODOS los personajes que tienes (aqui, todos [H])
+  const uint64_t tengo = personaje_b2 < 0 ? ~uint64_t(0) : personaje_b2 < 64 ? (uint64_t(1) << personaje_b2) : 0;
+  std::vector<int> con_hueco, con_mascara;
+  for (int i = 0; i < 0x208; ++i) {
+    const size_t o = 0x20 + 0x20 * size_t(i);
+    if (o + 0x20 > d.size()) break;
+    if (d[o + 0x14] != uint8_t(grupo)) continue;
+    uint64_t m = 0;
+    for (int b = 0; b < 8; ++b) m |= uint64_t(d[o + size_t(b)]) << (8 * b);
+    if (m != 0 && (m & tengo) == 0) continue;
+    if (m != 0) con_mascara.push_back(i);
+    if (Tienes(i) < int(d[o + 0x0D])) con_hueco.push_back(i);
+  }
+  const std::vector<int>& l = !con_hueco.empty() ? con_hueco : con_mascara;
+  if (l.empty()) return 0;
+  return l[size_t(std::rand()) % l.size()];
+}
+bool CapsulaNueva(int id_b2) { return Tienes(id_b2) == 0; }
+// Al cerrarse la ventana: +1 si no esta al maximo (b2.c:238091-238095).
+void GanarCapsula(int id_b2) {
+  if (id_b2 <= 0 || Tienes(id_b2) >= Maximo(id_b2)) return;
+  Premio p;
+  p.id = id_b2;
+  p.nombre = "#" + std::to_string(id_b2);
+  Dar(p, 1);
+}
+// La ventana "Get skill!" (la misma de la nave) en la pantalla de 640x448 del original dentro del area.
+void VentanaPremio(ImDrawList* dl, const S::Area& a, int id_b2, float cuadros) {
+  Cargar();   // hilo de dibujo (las texturas se crean aqui)
+  const std::string n = "#" + std::to_string(id_b2);
+  DibVentanaPremio(dl, LienzoDe(a), id_b2, n.c_str(), std::max(0.0f, cuadros));
+}
 
 }  // namespace dbz3::pasarela::nave

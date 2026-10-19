@@ -148,7 +148,7 @@ descripcion_fr = "Le Ten Shin Han de Budokai 2 en personnage a part, avec son mo
 
 [[mod]]
 id = "vis_iw_vegeta_saiyan"
-version = "1.1"
+version = "1.2"
 exe_nuevo = true   # sombreado de B2, voces y trajes del importador nuevo
 tipo = "personaje"
 nombre_es = "Vegeta (saga Saiyan)"
@@ -180,7 +180,7 @@ descripcion_fr = "L'armure de la saga des Saiyens comme 5e costume du Vegeta du 
 
 [[mod]]
 id = "vis_iw_yamcha_amarillo"
-version = "1.1"
+version = "1.2"
 exe_nuevo = true   # sombreado de B2, voces y trajes del importador nuevo
 tipo = "personaje"
 nombre_es = "Yamcha (traje amarillo)"
@@ -360,24 +360,25 @@ descripcion_pt = "Gohan do Futuro de Shin Budokai: Another Road no seu proprio l
 descripcion_ja = "シン武道会 アナザーロードの未来悟飯が専用スロットで登場：モデル、技、ボイスと掛け声、4つの形態（通常、超サイヤ人、超サイヤ人2、潜在能力解放）と形態で進化する技：魔閃光、スピリットショット、かめはめ波、バーニングアタック、イベイシブキック、Zソード、超かめはめ波。"
 
 # R7 ginyu_janemba (2026-10-17): voces y gritos incluidos en el mod (valen con cualquier launcher)
+# studies 4 frente 06 (2026-10-18): voz y gritos de Super Janemba (Shin Budokai: Another Road)
 [[mod]]
 id = "cut_janemba"
-version = "1.2"
+version = "1.4"
 tipo = "personaje"
 nombre_es = "Janemba"
 nombre_en = "Janemba"
 nombre_it = "Janemba"
 nombre_de = "Janemba"
 nombre_fr = "Janemba"
-descripcion_es = "Janemba de Infinite World en su propia plaza: modelo, golpes, tecnicas y modo hiper. Con sus voces y gritos de Infinite World (incluidas en el mod)."
-descripcion_en = "Janemba from Infinite World in his own slot: model, moves, techniques and hyper mode. With his Infinite World voice and shouts (included in the mod)."
-descripcion_it = "Janemba di Infinite World nel suo slot: modello, mosse, tecniche e modalità iper. Con le sue voci e grida di Infinite World (incluse nella mod)."
-descripcion_de = "Janemba aus Infinite World auf seinem eigenen Platz: Modell, Angriffe, Techniken und Hyper-Modus. Mit seinen Stimmen und Schreien aus Infinite World (im Mod enthalten)."
-descripcion_fr = "Janemba d'Infinite World à sa propre place : modèle, coups, techniques et mode hyper. Avec ses voix et cris d'Infinite World (incluses dans le mod)."
+descripcion_es = "Janemba de Infinite World en su propia plaza: modelo, golpes, tecnicas y modo hiper. Con la voz y los gritos de Super Janemba (Shin Budokai: Another Road) incluidos en el mod."
+descripcion_en = "Janemba from Infinite World in his own slot: model, moves, techniques and hyper mode. With Super Janemba's voice and shouts (Shin Budokai: Another Road) included in the mod."
+descripcion_it = "Janemba di Infinite World nel suo slot: modello, mosse, tecniche e modalità iper. Con le voci e le grida di Super Janemba (Shin Budokai: Another Road) incluse nella mod."
+descripcion_de = "Janemba aus Infinite World auf seinem eigenen Platz: Modell, Angriffe, Techniken und Hyper-Modus. Mit den Stimmen und Schreien von Super Janemba (Shin Budokai: Another Road) im Mod enthalten."
+descripcion_fr = "Janemba d'Infinite World à sa propre place : modèle, coups, techniques et mode hyper. Avec les voix et cris de Super Janemba (Shin Budokai: Another Road) inclus dans le mod."
 nombre_pt = "Janemba"
-descripcion_pt = "Janemba de Infinite World no seu próprio espaço: modelo, golpes, técnicas e cápsulas de Infinite World, com modo hiper do Budokai 3. Com as suas vozes e gritos de Infinite World (incluídas no mod)."
+descripcion_pt = "Janemba de Infinite World no seu próprio espaço: modelo, golpes, técnicas e cápsulas de Infinite World, com modo hiper do Budokai 3. Com as vozes e gritos de Super Janemba (Shin Budokai: Another Road, incluídas no mod)."
 nombre_ja = "ジャネンバ"
-descripcion_ja = "インフィニットワールドのジャネンバを専用枠に：モデル、技、必殺技、カプセルはインフィニットワールドから、武道会3のハイパーモード付き。声と掛け声もインフィニットワールドのもの（MODに同梱）。"
+descripcion_ja = "インフィニットワールドのジャネンバを専用枠に：モデル、技、必殺技、カプセルはインフィニットワールドから、武道会3のハイパーモード付き。声と掛け声はスーパージャネンバのもの（真武道会2、MODに同梱）。"
 
 [[mod]]
 id = "cut_guldo"

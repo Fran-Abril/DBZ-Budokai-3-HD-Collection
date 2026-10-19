@@ -1,0 +1,10 @@
+descripcion = "Rueda: llegar al select desde el HUB y mover el cursor a casillas nuevas, con el diagnostico de nombres"
+env = ["DBZ3_NAMES_DIAG=1"]
+pasos = [
+  'log "hub: menu principal estado 2" 120', "esperar 1500", "captura a0_hub",
+  "tecla S 1200", "tecla Space 3000", "captura a1",
+  "tecla Space 3000", "captura a2",
+  "tecla Space 4000", "captura a3", "tecla Space 4000", "captura a4",
+  "tecla A 1200", "captura b1", "tecla A 1200", "captura b2", "tecla A 1200", "captura b3",
+  "tecla D 1200", "captura c1", "tecla D 1200", "captura c2", "tecla D 1200", "captura c3",
+]

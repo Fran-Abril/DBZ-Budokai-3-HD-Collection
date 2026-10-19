@@ -21,6 +21,9 @@ copian como ADX nuevos (indices >= los del AFS) y el bloque propio va en roster.
 En personaje.toml (fuente):
     voces = "iw:JANENBA"     # las de un personaje de Infinite World (nombre interno o ID)
     voces = "sb2:GHF"        # las de un personaje de Shin Budokai (sb1/sb2 + codigo; sb_voces.py)
+    voces = "t3:BABY_V"      # las de Budokai Tenkaichi 3 (su ISO: DBZ3_T3_ISO o ps2_games), el clip
+                             # de duracion mas parecida en cada situacion del donante; "#1"/"#2"
+                             # fija el juego de bancos ([H] 1 = japones, 2 = ingles)
     voces = "b3:9"           # las de un personaje de Budokai 3 (su ID)
     voces = "wav:voces"      # frases propias: <mod>/voces/NN*.wav (NN = situacion 0-49, p. ej. 07_victoria.wav);
                              # las que falten, las del donante
@@ -253,10 +256,113 @@ def b3_block(cid, folder=B3_PS2_DIR):
     return None
 
 
+T3_AFS = "/DATA/PZS3EU2.AFS"       # voces de Budokai Tenkaichi 3 (ADX mono 24 kHz)
+
+
+def t3_source():
+    """ISO de Tenkaichi 3 (PAL): DBZ3_T3_ISO o un *.iso de ps2_games con 'tenkaichi' en el nombre."""
+    import glob  # noqa: PLC0415
+    p = os.environ.get("DBZ3_T3_ISO")
+    if p and os.path.isfile(p):
+        return p
+    return next((q for q in sorted(glob.glob(os.path.join(ROOT, "ps2_games", "*.iso")))
+                 if "tenkaichi" in os.path.basename(q).lower()), None)
+
+
+class T3Voices:
+    """Voces de Budokai Tenkaichi 3: PZS3EU2.AFS por nombre de banco (Goku_0..Goku_7, Baby_V...).
+
+    Cada personaje tiene 1..8 bancos de 100 en 100 clips con el mismo nombre; hay dos juegos
+    completos de bancos (32774..48873 y 48874..64973) con los mismos nombres [H]: el 1.º
+    japones y el 2.º ingles (el 1.º dura de media 1,76 s y el 2.º 1,46 s). Mapa y conteos:
+    studies 4\\ENTREGAS\\08_tenkaichi3\\datos\\mapa_voces_t3.json. Los grupos VIC-JP-B-/
+    VIC-US-B- son el doblaje de la historia (indice = 300*banco + sub; ver
+    mapa_clip_frase_t3.json)."""
+
+    JUEGOS = {1: (32774, 48873), 2: (48874, 64973)}
+    VACIO = 202                    # ficha ADX vacia (marcador)
+
+    def __init__(self, src=None):
+        import iso  # noqa: PLC0415  (mod center hd, como GameFiles)
+        self.src = src or t3_source()
+        if not self.src:
+            raise FileNotFoundError("sin ISO de Tenkaichi 3 (define DBZ3_T3_ISO o ponla en ps2_games)")
+        self.iso = iso.Iso(self.src)
+        head = self.iso.read(T3_AFS, 0, 8)
+        if head[:3] != b"AFS":
+            raise ValueError("no es un AFS: %s" % T3_AFS)
+        n = struct.unpack("<I", head[4:8])[0]
+        tab = self.iso.read(T3_AFS, 8, (n + 1) * 8)
+        self.ent = [struct.unpack_from("<II", tab, 8 * i) for i in range(n)]
+        no, ns = struct.unpack_from("<II", tab, 8 * n)
+        raw = self.iso.read(T3_AFS, no, ns)
+        self.nombres = [raw[48 * i:48 * i + 32].split(b"\x00")[0].decode("ascii", "replace")
+                        for i in range(n)]
+
+    def adx(self, i):
+        """ADX completo de la entrada i."""
+        return self.iso.read(T3_AFS, self.ent[i][0], self.ent[i][1])
+
+    def segundos(self, i):
+        """Duracion del clip i (cabecera ADX); 0.0 si esta vacio."""
+        if self.ent[i][1] <= self.VACIO:
+            return 0.0
+        d = self.iso.read(T3_AFS, self.ent[i][0], 18)
+        if d[:1] != b"\x80":
+            return 0.0
+        tasa, muestras = struct.unpack(">II", d[8:16])
+        return muestras / tasa if tasa else 0.0
+
+    def clips(self, who, lang=None, juego=None):
+        """Indices AFS con audio del personaje `who` (clave del mapa: GOKU, GT_GOK, BABY_V...).
+        En 'usa' mira el juego 2 y en 'jpn' el 1 ([H]); `juego` 1|2 lo fija a mano y el sufijo
+        "#1"/"#2" de `who` tambien (t3:BABY_V#2)."""
+        import re  # noqa: PLC0415
+        who, _, cual = who.partition("#")
+        j = int(cual) if cual in ("1", "2") else (juego or (2 if (lang or "usa").lower() != "jpn" else 1))
+        a, b = self.JUEGOS[j]
+        clave = re.sub(r"_\d+$", "", who.strip()).upper()
+        return [i for i in range(a, b + 1)
+                if self.ent[i][1] > self.VACIO and
+                re.sub(r"_\d+$", "", self.nombres[i]).upper() == clave]
+
+    def clips_tiempos(self, who, lang=None, juego=None):
+        """[(indice AFS, segundos)] de los clips con audio del personaje."""
+        return [(i, d) for i, d in ((i, self.segundos(i)) for i in self.clips(who, lang, juego)) if d > 0]
+
+
+def donor_durations(donor, writer):
+    """Segundos de cada ADX del bloque de voces del donante (us/adx_usa.afs), por situacion."""
+    base = b3_block(donor) if donor is not None else None
+    us_dir = getattr(writer, "us_dir", None)
+    if not base or not us_dir:
+        return None
+    try:
+        ruta = os.path.join(us_dir, VOICE_AFS[0])
+        idx = afs_index(ruta)
+        out = []
+        with open(ruta, "rb") as f:
+            for v in base:
+                if not (0 <= v < len(idx)):
+                    out.append(0.0)
+                    continue
+                f.seek(idx[v][0])
+                d = f.read(18)
+                if d[:1] != b"\x80":
+                    out.append(0.0)
+                    continue
+                tasa, muestras = struct.unpack(">II", d[8:16])
+                out.append(muestras / tasa if tasa else 0.0)
+        return out
+    except OSError:
+        return None
+
+
 class VoiceWriter:
     """Anade ADX a adx_usa/adx_jpn del mod generado (entradas nuevas, sin LZX)."""
 
     def __init__(self, us_dir, out_dir):
+        self.us_dir = us_dir
         self.out_dir = out_dir
         self.next = max(len(afs_index(os.path.join(us_dir, a))) for a in VOICE_AFS)
         self.first = self.next
@@ -369,6 +475,41 @@ def resolve(spec, writer, iw=None, log=print, donor=None, base=None):
             out.append(cache[v])
         return (["voces = [%s]" % ", ".join(map(str, out))],
                 "voces de Infinite World (%s): %d grabaciones" % (who, len(cache)))
+    if game == "t3":
+        import math  # noqa: PLC0415
+        t3 = T3Voices()
+        who2, _, cual = who.partition("#")
+        if not who2.strip():
+            raise ValueError("voces t3: sin personaje (t3:BABY_V; #1/#2 fija el juego de bancos)")
+        juegos = {"usa": int(cual) if cual in ("1", "2") else 2,
+                  "jpn": int(cual) if cual in ("1", "2") else 1}
+        base = b3_block(donor) if donor is not None else None
+        durs = donor_durations(donor, writer)
+        if base is None or not durs:
+            raise ValueError("t3: hace falta el bloque de voces del donante y sus ADX "
+                             "(ps2_games/%s)" % os.path.basename(B3_PS2_DIR))
+        pools = {lk: t3.clips_tiempos(who2, lk, juegos[lk]) for lk in ("usa", "jpn")}
+        if not pools["usa"] and not pools["jpn"]:
+            raise KeyError("personaje de Tenkaichi 3 desconocido: %s" % who2)
+        usos, ultimo, n = {}, -1, 0
+        block = [-1] * SLOTS
+        for s, v in enumerate(base):
+            if v < 0 or s >= len(durs) or durs[s] <= 0.0:
+                continue
+            def coste(cand, ln=durs[s]):
+                i, d = cand
+                return (abs(math.log((d + 0.05) / (ln + 0.05))) + 0.5 * usos.get(i, 0)
+                        + (1.5 if i == ultimo else 0))
+            elegir = {lk: min(pool, key=coste)[0] for lk, pool in pools.items() if pool}
+            i_usa = elegir.get("usa", elegir.get("jpn"))
+            i_jpn = elegir.get("jpn", elegir.get("usa"))
+            usos[i_usa] = usos.get(i_usa, 0) + 1
+            ultimo = i_usa
+            block[s] = writer.add(t3.adx(i_usa), t3.adx(i_jpn))
+            n += 1
+        return (["voces = [%s]" % ", ".join(map(str, block))],
+                "voces de Tenkaichi 3 (%s; juego %d en usa, %d en jpn): %d frases por duracion"
+                % (who2, juegos["usa"], juegos["jpn"], n))
     if game in ("sb1", "sb2"):
         import sb_voces  # noqa: PLC0415
         block, used = sb_voces.voice_block(spec, writer, b3_block(donor) if donor is not None else None, log)
@@ -417,6 +558,11 @@ if __name__ == "__main__":
     import sys
     if "--prueba-wav" in sys.argv:
         prueba_wav()
+        sys.exit(0)
+    if "--prueba-t3" in sys.argv:
+        t3 = T3Voices()
+        print("T3 %s: BABY_V tiene %d clips con audio en el juego 1 y %d en el 2"
+              % (t3.src, len(t3.clips("BABY_V", juego=1)), len(t3.clips("BABY_V", juego=2))))
         sys.exit(0)
     iw = IwVoices(sys.argv[1] if len(sys.argv) > 1 else None)
     print("tabla en 0x%X, %d IDs; %d nombres" % (iw.ptr_off, iw.n, len(iw.names)))

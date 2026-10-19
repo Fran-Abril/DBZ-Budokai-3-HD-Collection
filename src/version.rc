@@ -46,13 +46,15 @@
 // v1.4.5.1 = el pack HD instalado desde el launcher se ve sin reiniciar el juego.
 // v1.4.5.2 = Tag Team: ring out con companero vivo = relevo, el que entra carga ki al aterrizar (pose del juego); Online: mods distintos se instalan desde el panel,
 // UPnP/STUN; ports oficiales recreables; campanas con textos automaticos (Freezer).
+// v1.5.1.1 = minijuegos de IW cotejados con el original (giro, camara, HUD y resultados de IW), heroe con ID propio
+// (peinado UT, logo, dos colores), maestros y movesets desbloqueables, Leyenda de Mr. Satan como B1, tablero B2 sin atascos.
 #include <windows.h>
 
 #define VERSION_MAJOR 1
 #define VERSION_MINOR 5
 #define VERSION_PATCH 1
-#define VERSION_BUILD 0
-#define DBZ3_VERSION_STR "1.5.1"
+#define VERSION_BUILD 1
+#define DBZ3_VERSION_STR "1.5.1.1"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, VERSION_BUILD

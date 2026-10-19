@@ -211,6 +211,23 @@ if (Test-Path -LiteralPath $modcenter) {
     if (Test-Path -LiteralPath (Join-Path $modcenter "tools")) {
         Copy-Item -LiteralPath (Join-Path $modcenter "tools") (Join-Path $mcd "tools") -Recurse
     }
+    # Modo Heroe (vista previa 3D y traje de combate con colores, logo y peinado UT): vista_heroe.py y lo que importa
+    # (studies 8 INFORME F2.5; las piezas de pelo UT NO se publican: salen del UT del jugador, cac_piezas\pelo\).
+    # Sin Python en el PC del jugador la pantalla sigue con el retrato.
+    $cacd = Join-Path $mcd "cac"
+    New-Item -ItemType Directory -Path $cacd -Force | Out-Null
+    $vh = Join-Path $modcenter "cac\vista_heroe.py"
+    if (Test-Path -LiteralPath $vh) { Copy-Item -LiteralPath $vh (Join-Path $cacd "vista_heroe.py") }
+    foreach ($f in @("model_render","roster_build","capsulas","colores","gritos","hornada_support","voces")) {
+        $src = Join-Path $modcenter "$f.py"
+        if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src (Join-Path $mcd "$f.py") }
+    }
+    $libd = Join-Path $mcd "lib"
+    New-Item -ItemType Directory -Path $libd -Force | Out-Null
+    foreach ($f in @("awg_vertex_buffer","b3_gateway","skin_slots","injertar_pelo")) {
+        $src = Join-Path $root "awo_tools\$f.py"
+        if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src (Join-Path $libd "$f.py") }
+    }
 }
 
 # XDK compression tools (xbcompress/xbdecompress) needed by the mod pipeline.

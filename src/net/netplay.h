@@ -127,6 +127,10 @@ class Session {
   // Al empezar cada combate: misma semilla del RNG en los dos juegos (las esperas de carga
   // gastan numeros aleatorios distintos en cada PC). Solo jugando online; US.
   void ReseedBattle(uint8_t* base);
+  // Valor pseudoaleatorio compartido por los dos PCs (frente 12: decisiones de la simulacion, p.ej. el
+  // escenario de la revancha aleatoria). Online sale de la semilla y del numero de combate (igual en los
+  // dos PC: sin desincronia); sin sesion, de un generador local. `sal` desambigua llamadas.
+  uint32_t AzarCompartido(uint32_t sal);
   // Al empezar cada combate: cada PC tarda distinto en cargarlo, asi que el primero que llega espera
   // (gastando ticks sin mover el juego) a que el otro llegue, y los dos siguen en el mismo tick.
   // Sin esto uno pelea unos fotogramas por delante y los mandos caen en momentos distintos

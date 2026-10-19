@@ -836,7 +836,7 @@ const std::vector<InstalledComponent>& InstalledComponents() {
       }
       const Version v = ParseVersion(component.version);
       if (v.parts[0] != ref.parts[0] || v.parts[1] != ref.parts[1] ||
-          v.parts[2] != ref.parts[2] || v.parts[3] != ref.parts[3]) {
+          v.parts[2] != ref.parts[2]) {   // el 4.o numero (repack) no cuenta, como dice el comentario
         g_component_mismatch = component.file_name;
         break;
       }

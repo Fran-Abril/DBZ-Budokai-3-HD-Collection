@@ -104,6 +104,7 @@ import shutil
 import struct
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import zlib
@@ -220,9 +221,106 @@ class Afs:
         return unlzx(self.raw(n), self.work)
 
 
+# ------------------------------------------------ cache de contenido (LZX / modelos)
+# Todo lo pesado y reproducible del montaje (descomprimir LZX, comprimir LZX, convertir
+# PS2->HD) se recuerda por CONTENIDO (sha256 de lo que entra): una reconstruccion que no
+# cambia un bin no vuelve a llamar a xbcompress/xbdecompress ni a convertir. La clave lleva
+# la firma de la herramienta que produce el dato (si cambia, la cache vieja no se usa) y la
+# carpeta la pone construir (<juego>/mods_cache, junto a la de retratos).
+CACHE_DIR = None
+_MEM = {}
+_MEM_BYTES = [0]
+_MEM_MAX = 384 * 1024 * 1024        # tope de la cache en memoria (lo demas, en disco)
+_PRUNE = [0]
+_TAGS = {}
+
+
+def _file_tag(path):
+    """sha256 corto de `path`: la firma de la herramienta que produce el dato cacheado."""
+    tag = _TAGS.get(path)
+    if tag is None:
+        try:
+            with open(path, "rb") as fh:
+                tag = hashlib.sha256(fh.read()).hexdigest()[:16]
+        except OSError:
+            tag = "sin-fichero"
+        _TAGS[path] = tag
+    return tag
+
+
+def _content_key(prefix, data):
+    return "%s-%s" % (prefix, hashlib.sha256(data).hexdigest())
+
+
+def _mem_store(folder, key, data):
+    if len(data) > 8 * 1024 * 1024 or _MEM_BYTES[0] > _MEM_MAX:
+        return
+    if (folder, key) not in _MEM:
+        _MEM[(folder, key)] = data
+        _MEM_BYTES[0] += len(data)
+
+
+def _prune(folder, cap_mb):
+    """Poda la cache en disco (si paso del tope) por fecha: el dato se regenera si vuelve a hacer falta."""
+    _PRUNE[0] += 1
+    if _PRUNE[0] % 64 or not CACHE_DIR:
+        return
+    d = os.path.join(CACHE_DIR, folder)
+    try:
+        files = sorted(((e.stat().st_mtime, e.path, e.stat().st_size) for e in os.scandir(d)),
+                       key=lambda x: x[0])
+    except OSError:
+        return
+    total = sum(s for _, _, s in files)
+    cap = cap_mb * 1024 * 1024
+    for _, path, size in files:
+        if total <= cap * 8 // 10:
+            break
+        try:
+            os.remove(path)
+            total -= size
+        except OSError:
+            pass
+
+
+def _cached(folder, key, make, cap_mb=512):
+    """Valor de `make()` recordado por contenido: memoria y (si construir dio carpeta) disco."""
+    hit = _MEM.get((folder, key))
+    if hit is not None:
+        return hit
+    path = os.path.join(CACHE_DIR, folder, key) if CACHE_DIR else None
+    if path:
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            _mem_store(folder, key, data)
+            return data
+        except OSError:
+            pass
+    data = make()
+    _mem_store(folder, key, data)
+    if path:
+        try:
+            d = path.rsplit(os.sep, 1)[0]
+            os.makedirs(d, exist_ok=True)
+            tmp = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
+            with open(tmp, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp, path)
+        except OSError:
+            pass
+        _prune(folder, cap_mb)
+    return data
+
+
 def unlzx(b, work):
     if b[:4] != LZX:
         return bytes(b)
+    return _cached("lzx_d", _content_key(_file_tag(swap_b3.XBDECOMPRESS), b),
+                   lambda: _unlzx_raw(b, work))
+
+
+def _unlzx_raw(b, work):
     src, dst = os.path.join(work, "in.lzx"), os.path.join(work, "out.bin")
     open(src, "wb").write(b)
     swap_b3.lzx_decompress(src, dst, work)
@@ -237,7 +335,17 @@ _SEQ = [0]
 
 
 def _compress(raw, dst, work):
-    swap_b3.lzx_compress(raw, dst, work)
+    with open(raw, "rb") as fh:
+        data = fh.read()
+
+    def comprimir():
+        swap_b3.lzx_compress(raw, dst, work)
+        with open(dst, "rb") as fh:
+            return fh.read()
+
+    blob = _cached("lzx_c", _content_key(_file_tag(swap_b3.XBCOMPRESS), data), comprimir, cap_mb=256)
+    with open(dst, "wb") as fh:
+        fh.write(blob)
     os.remove(raw)
 
 
@@ -456,14 +564,21 @@ def donor_moveset_fixed(cmn, dn, model_hd, out_dir, next_fid, work, name):
 
 
 # ---------------------------------------------------------------- modelos
+def _amo_hd(b):
+    """#AMB PS2 -> #AMB HD (ps2hd), recordado por contenido (la conversion es lo lento
+    de un port: un bin que no cambia no se vuelve a convertir)."""
+    import ps2hd  # noqa: PLC0415
+    tag = _file_tag(ps2hd.__file__) + _file_tag(os.path.join(ROOT, "awo_tools", "amo2awo.py"))
+    return _cached("hd", _content_key(tag, b), lambda: bytes(ps2hd.convert_block(b)), cap_mb=512)
+
+
 def to_hd(b, work):
     """Bin del modelo -> #AMB HD descomprimido (acepta LZX, #AMB HD o #AMB PS2)."""
     b = unlzx(b, work)
     if b[:4] != b"#AMB":
         raise ValueError("no es un #AMB (%r)" % b[:4])
     if struct.unpack("<I", b[0xC:0x10])[0] == 3:      # PS2 (little-endian, version 3)
-        import ps2hd  # noqa: PLC0415
-        return bytes(ps2hd.convert_block(b))
+        return _amo_hd(b)
     if struct.unpack(">I", b[0xC:0x10])[0] == 2:      # HD
         return bytes(b)
     raise ValueError("version de #AMB desconocida")
@@ -686,8 +801,36 @@ def azt_textures(b):
     return out
 
 
+def _dds_rgba(blob):
+    """DDS SIN comprimir de 32 bpp con alfa (el formato del select, los retratos y los
+    rotulos) -> (alto, ancho, 4) RGBA, EL MISMO resultado byte a byte que Pillow (lo
+    comprueba datos/test_igualdad.py sobre las texturas del juego), sin pasar por su
+    decodificador (que para 1024x1024 tarda ~1,2 s). None si el DDS no es exactamente ese
+    formato (comprimido, mips, cubemap...): entonces lo decodifica Pillow como siempre."""
+    if blob[:4] != b"DDS " or len(blob) < 128:
+        return None
+    size, flags, h, w, pitch, depth, mips = struct.unpack("<7I", blob[4:32])
+    pf_flags, fourcc, rgb_bits = struct.unpack("<3I", blob[80:92])
+    if (size != 124 or not h or not w or mips not in (0, 1) or fourcc != 0
+            or rgb_bits != 32 or pf_flags & 0x41 != 0x41 or pitch not in (0, w * 4)):
+        return None
+    masks = struct.unpack("<4I", blob[92:108])
+    order = {(0xFF0000, 0xFF00, 0xFF, 0xFF000000): (2, 1, 0, 3),
+             (0xFF, 0xFF00, 0xFF0000, 0xFF000000): (0, 1, 2, 3)}.get(masks)
+    if order is None or struct.unpack("<I", blob[112:116])[0] & 0x200:
+        return None
+    if len(blob) - 128 < w * h * 4:
+        return None
+    a = np.frombuffer(blob, np.uint8, count=w * h * 4, offset=128).reshape(h, w, 4)
+    return a[..., order] if order != (0, 1, 2, 3) else a.copy()
+
+
 def azt_read(b, t):
-    return np.array(Image.open(io.BytesIO(bytes(b[t["at"]:t["at"] + t["size"]]))).convert("RGBA"))
+    blob = bytes(b[t["at"]:t["at"] + t["size"]])
+    img = _dds_rgba(blob)
+    if img is not None:
+        return img
+    return np.array(Image.open(io.BytesIO(blob)).convert("RGBA"))
 
 
 def azt_write(b, t, img):
@@ -857,6 +1000,11 @@ def adjust(c, kind):
     return base
 
 
+# aura de cada transformacion (personaje.toml aura_tipos_forma): la fila de tipo de aura (0x82321A38) es la misma
+# en todos los personajes para la misma clase de forma (medido: el SSJ y el SSJ2 de Gohan adulto = los de Goku),
+# asi que cada nombre es la forma de Goku (ID 0) que se copia; "ninguna" deja la forma sin aura.
+AURA_TIPOS = {"base": -3, "ninguna": -1, "normal": 0, "kaioken": 1, "ssj": 2, "ssj2": 3, "ssj3": 4, "ssj4": 5}
+
 CACHE_IMAGENES = None   # carpeta de la cache de iconos/retratos (la pone construir: <juego>/mods_cache/retratos)
 
 
@@ -962,8 +1110,7 @@ def load_bin(path, work):
     """Fichero de datos del personaje -> bin HD (LZX se descomprime; #AMB PS2 se convierte)."""
     b = unlzx(open(path, "rb").read(), work)
     if b[:4] == b"#AMB" and struct.unpack("<I", b[0xC:0x10])[0] == 3:
-        import ps2hd  # noqa: PLC0415
-        b = bytes(ps2hd.convert_block(b))
+        b = _amo_hd(b)
     return b
 
 
@@ -995,7 +1142,10 @@ def portrait_bin(template, content):
     o = struct.unpack(">I", h[0x20:0x24])[0]
     e = struct.unpack(">3I2H2H7I", h[o:o + 0x30])
     do, ds = e[7], e[8]
-    tpl = np.array(Image.open(io.BytesIO(bytes(h[do:do + ds]))).convert("RGBA"))
+    blob = bytes(h[do:do + ds])
+    tpl = _dds_rgba(blob)
+    if tpl is None:
+        tpl = np.array(Image.open(io.BytesIO(blob)).convert("RGBA"))
     H, W = tpl.shape[:2]
     ch, cw = content.shape[:2]
     img = np.zeros((H, W, 4), np.uint8)
@@ -1067,7 +1217,39 @@ def hud_dy(m):
 
 def hud_images(c, ui, form_models, fetch=None):
     """Caras de la barra de vida, una por forma: ui/hud.png (o hud_1.png, hud_2.png... por
-    forma) terminadas de 256x128, o render de cada modelo (hud_ajuste = [zoom, dx, dy, giro])."""
+    forma) terminadas de 256x128, o render de cada modelo (hud_ajuste = [zoom, dx, dy, giro]).
+    Con cache en disco (como los iconos/retratos): el render se repite en cada montaje."""
+    if CACHE_IMAGENES:
+        import pickle  # noqa: PLC0415
+        h = hashlib.sha1(open(os.path.join(HERE, "model_render.py"), "rb").read())
+        h.update(b"".join(form_models))
+        h.update(json.dumps([c.get("hud_ajuste"), fetch is not None]).encode())
+        if os.path.isdir(ui):
+            for fn in sorted(os.listdir(ui)):
+                p = os.path.join(ui, fn)
+                if os.path.isfile(p) and fn.startswith("hud"):
+                    h.update(fn.encode() + open(p, "rb").read())
+        f = os.path.join(CACHE_IMAGENES, "hud_" + h.hexdigest()[:24] + ".pkl")
+        try:
+            with open(f, "rb") as fh:
+                return pickle.load(fh)
+        except Exception:  # noqa: BLE001  (sin cache o cache rota: se renderiza)
+            pass
+    else:
+        f = None
+    out = _hud_images(c, ui, form_models, fetch)
+    if f:
+        try:
+            os.makedirs(CACHE_IMAGENES, exist_ok=True)
+            with open(f + ".tmp", "wb") as fh:
+                pickle.dump(out, fh)
+            os.replace(f + ".tmp", f)
+        except OSError:
+            pass
+    return out
+
+
+def _hud_images(c, ui, form_models, fetch=None):
     import model_render as mr  # noqa: PLC0415
     z, dx, dy, yaw = 1.0, 0.0, 0.0, 0.0
     v = c.get("hud_ajuste")
@@ -1559,7 +1741,10 @@ def _preview(a, c, d, ui, work):
         raw = portrait_ready(tpls[v], Image.open(ready)) if pors[v] is None else portrait_bin(tpls[v], pors[v])
         o = struct.unpack(">I", raw[0x20:0x24])[0]
         e = struct.unpack(">3I2H2H7I", raw[o:o + 0x30])
-        full = np.array(Image.open(io.BytesIO(raw[e[7]:e[7] + e[8]])).convert("RGBA"))
+        blob = bytes(raw[e[7]:e[7] + e[8]])
+        full = _dds_rgba(blob)
+        if full is None:
+            full = np.array(Image.open(io.BytesIO(blob)).convert("RGBA"))
         imgs["retrato_p%d" % (v + 1)] = full[:ch, :cw]
     if not a.solo and (hd is not None or os.path.exists(os.path.join(ui, "hud.png"))):
         try:                  # cara de la barra de vida (forma base)
@@ -1765,14 +1950,20 @@ class Capsules:
                     # cada tecnica de IW con su capsula: por su clave (iw = ...) o, en los
                     # personajes importados antes, por orden
                     skill_caps = {}
+                    key_map = {}
                     for kind in ("especial", "definitiva"):
                         mine = [o for o in own if o["tipo"] == kind]
                         keys = [sk["clave"] for sk in capsulas.iw_skills(ccm) if sk["tipo"] == kind]
                         for k, o in enumerate(mine):
-                            key = o["iw"] if o.get("iw") is not None else (keys[k] if k < len(keys) else None)
-                            if key is not None:
-                                skill_caps.setdefault(int(key), o["id"])
-                    ccm, self.grafts, rep = capsulas.adapt_iw_bcm(ccm, skill_caps, self.nforms)
+                            bcm_key = keys[k] if k < len(keys) else None
+                            # la clave declarada (iw = ...) manda; sin ella, la del BCM
+                            real = int(o["iw"]) if o.get("iw") is not None else bcm_key
+                            if real is None:
+                                continue
+                            if bcm_key is not None and bcm_key != real:
+                                key_map[bcm_key] = real
+                            skill_caps.setdefault(int(real), o["id"])
+                    ccm, self.grafts, rep = capsulas.adapt_iw_bcm(ccm, skill_caps, self.nforms, key_map)
                     notes += ["BCM de Infinite World adaptado: " + r for r in rep]
                     dsrc = cmn.entry(dn["cam"])
                     dat = capsulas.ccm_child(dsrc)
@@ -2114,11 +2305,13 @@ def forms_config(c, dn, per, donor, name):
 
 
 def build(a):
-    global CACHE_IMAGENES
+    global CACHE_IMAGENES, CACHE_DIR
     mods = a.mods or default_mods()
     us = a.us or default_us()
     out_dir = os.path.join(mods, OUT_MOD)
     CACHE_IMAGENES = os.path.join(os.path.dirname(os.path.abspath(mods)), "mods_cache", "retratos")
+    CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(mods)), "mods_cache")
+    gritos.PACKETS_DIR = os.path.join(CACHE_DIR, "gritos")
     srcs = source_mods(mods)
     trajes = traje_mods(mods)
     if not srcs and not trajes:
@@ -2286,7 +2479,9 @@ def build(a):
             ix, iy = icons.take()
             px, py = int(round(ix * icon_k)), int(round(iy * icon_k))
             icon_img[py:py + ic.shape[0], px:px + ic.shape[1]] = ic
-            nm = np.array(make_name(nombre, 48, 504))
+            # <= 256 px: la plantilla ancha (512) no se ve en la rueda (nombres largos sin rotulo, visto 2026-10-18);
+            # un nombre largo se estrecha para caber en la de 256
+            nm = np.array(make_name(nombre, 48, 256))
             tpl = NAME_TEX_TEMPLATES[0] if nm.shape[1] <= 256 else NAME_TEX_TEMPLATES[1]
             canvas = np.zeros((64, 256 if tpl == NAME_TEX_TEMPLATES[0] else 512, 4), np.uint8)
             canvas[:nm.shape[0], :nm.shape[1]] = nm
@@ -2529,9 +2724,18 @@ def build(a):
                 aura_fid = colores.aura_fid(c["aura_de"]) if c.get("aura_de") is not None else dn["aura"]
                 if c.get("aura_de") is not None:
                     log("   %s: aura de %s" % (name, c["aura_de"]))
+                    if str(c["aura_de"]).strip().isdigit():   # tambien sus tipos de aura por forma (roster_ext.cpp)
+                        extra.append("aura_tipos = %d" % int(c["aura_de"]))
             except Exception as e:  # noqa: BLE001
                 log("   %s: aviso: aura del donante (%s)" % (name, e))
                 aura_fid = dn["aura"]
+            # aura de cada transformacion (Kit): nombre -> forma de Goku cuya fila de tipo se copia (-1 = sin aura)
+            if c.get("aura_tipos_forma"):
+                idx = [AURA_TIPOS.get(str(x).strip().lower(), -2) for x in c["aura_tipos_forma"]][:8]
+                if -2 in idx:
+                    log("   %s: aviso: aura_tipos_forma con nombres desconocidos (validos: %s)"
+                        % (name, ", ".join(AURA_TIPOS)))
+                extra.append("aura_tipos_forma = %s" % toml_list([-3 if i == -2 else i for i in idx]))
             if c.get("aura_color") is not None:
                 try:
                     aura, cnt = colores.retint(cmn.entry(aura_fid), colores.tono(c["aura_color"]))
@@ -2576,7 +2780,7 @@ def build(a):
             gspec = c.get("gritos")
             if gspec is None:
                 vs = c.get("voces", "donante")
-                gspec = vs if isinstance(vs, str) and vs.lower().startswith(("iw:", "sb1:", "sb2:")) else "donante"
+                gspec = vs if isinstance(vs, str) and vs.lower().startswith(("iw:", "sb1:", "sb2:", "t3:")) else "donante"
             g_err = None
             for gspec in gspec.split("|"):
                 try:
@@ -2629,6 +2833,13 @@ def build(a):
                                         raise ValueError("sin voces de Heroes para %s" % gspec)
                                     b1_cache[gl] = gritos.norm_pool(pool)
                                 sounds = gritos.assign(lens, b1_cache[gl])
+                            elif gl.startswith("t3:"):
+                                # voces de Budokai Tenkaichi 3 (su ISO: DBZ3_T3_ISO o ps2_games), por duracion.
+                                # El banco depende del idioma (japones/ingles): cache por clave + idioma
+                                clave = gl + ":" + lk
+                                if b1_cache.get(clave) is None:
+                                    b1_cache[clave] = gritos.t3_pool(gspec[3:].strip(), lk)
+                                sounds = gritos.assign(lens, b1_cache[clave])
                             elif gl.startswith(("sb1:", "sb2:")):
                                 import sb_voces  # noqa: PLC0415  (Shin Budokai: tonos PPHD -> huecos)
                                 sounds = sb_voces.gritos_sounds(gspec, lens, lk, entry[bank[0]:bank[0] + bank[1]])
@@ -3048,6 +3259,51 @@ def iw_skill_names(who, skills, path=None):
     return out
 
 
+def iw_skill_ids(who, path=None):
+    """{nombre de la hoja IW: ID de su primer nivel} de las tecnicas (Super/Ultimate) del
+    personaje. Para escribir en `iw` la clave real (Janemba: Hell Gate 364, Rakshasa's Claw
+    367, Spike Hell 583) en vez del w11 del BCM, que en ports de la comunidad puede ser el ID
+    de un objeto (884 Senzu Bean, 887 Super Holy Water)."""
+    path = path or os.path.join(RESOURCES, NAME_LISTS["iw"])
+    if not os.path.isfile(path):
+        return {}
+    rows = []
+    for sh in (1, 3):
+        try:
+            rr = _xlsx_rows(path, sh)
+        except KeyError:
+            continue
+        head = {}
+        for r in rr[:3]:
+            for k, v in r.items():
+                v = str(v or "").upper()
+                if v in ("ID", "TYPE", "USER") or v.startswith("NAME"):
+                    head.setdefault(v.split(" ")[0], k)
+            if len(head) >= 4:
+                break
+        for r in rr:
+            try:
+                i = int(str(r.get(head.get("ID"))).replace(",", ""))
+            except ValueError:
+                continue
+            rows.append((i, _clean(r.get(head.get("NAME")) or ""), str(r.get(head.get("TYPE")) or ""),
+                         _clean(r.get(head.get("USER")) or "")))
+    users = {_norm(u) for _, _, _, u in rows if u}
+    key = _norm(re.sub(r"\((alt colou?r pall?ete|battle damaged[^)]*|halo|default)\)", "", who, flags=re.I))
+    key = IW_USER_ALIAS.get(key, key)
+    if key not in users:
+        cand = [u for u in users if u and (u in key or key in u)]
+        key = max(cand, key=len) if cand else key
+    out = {}
+    for i, n, t, u in sorted(rows):
+        if _norm(u) != key or t not in ("Super", "Ultimate") or not n:
+            continue
+        if re.match(r"(fusion|potara)", n, re.I):
+            continue
+        out.setdefault(n, i)     # el primer nivel de cada tecnica
+    return out
+
+
 def ska_classes(path):
     """Catalogo #SKA de B1/B2 (PS2, LE, registros de 28 B): {id: clase}."""
     b = open(path, "rb").read()
@@ -3109,11 +3365,14 @@ def import_caps(a, path, c, d):
     if game == "iw":            # cada tecnica de IW: su capsula, con su nombre, formas y ki
         skills = capsulas.iw_skills(ccm)
         names = iw_skill_names(c.get("nombre_iw") or c.get("nombre", ""), skills, a.lista)
+        ids = iw_skill_ids(c.get("nombre_iw") or c.get("nombre", ""), a.lista)
         caps, used = [], {"especial": 0, "definitiva": 0}
         for sk in skills:
             used[sk["tipo"]] += 1
             nm = names.get(sk["clave"]) or {"especial": "Special %d", "definitiva": "Ultimate %d"}[sk["tipo"]] % used[sk["tipo"]]
-            e = {"nombre": nm, "tipo": sk["tipo"], "iw": sk["clave"]}
+            # clave real de la hoja de IW (no el w11 del BCM, que en ports de la comunidad puede
+            # ser el ID de un objeto: Janemba 884 Senzu Bean / 887 Super Holy Water)
+            e = {"nombre": nm, "tipo": sk["tipo"], "iw": ids.get(nm, sk["clave"])}
             if sk["formas"]:
                 e["formas"] = [f + 1 for f in range(8) if sk["formas"] >> f & 1]
             if sk["ki"]:

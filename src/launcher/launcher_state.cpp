@@ -1656,6 +1656,7 @@ void LauncherDialog::OnDraw(ImGuiIO& io) {
         "dbz3_vrr",
         "dbz3_fxaa",
         "dbz3_present_dither",
+        "dbz3_aspect",
         "dbz3_async_shaders",
         "dbz3_occlusion_queries",
         "dbz3_master_volume",
@@ -2562,6 +2563,35 @@ void LauncherDialog::DrawVideoTab() {
     } else {
       ImGui::TextDisabled(i18n::T("Monitor: no detectado (se asume 60 Hz).",
                                   "Monitor: not detected (assumed 60 Hz)."));
+    }
+
+    // Aspecto en pantallas anchas (#35): el juego HD siempre se dibuja a 16:9
+    // (1280x720) en su escena 3D y su HUD; en un monitor 21:9/32:9 el presentador
+    // decide que hacer con el ancho de mas. "Mantener" = 16:9 centrado con
+    // franjas (por defecto, nada deformado); "Estirar" = llenar toda la ventana,
+    // estirando a lo ancho (sin franjas, pero los personajes salen mas anchos).
+    // Solo cambia la presentacion; no toca archivos del juego ni el HUD propio.
+    {
+      const char* aspect_items[] = {i18n::T("Mantener proporcion (franjas)", "Keep ratio (bars)"),
+                                    i18n::T("Estirar (llenar, deformado)", "Stretch (fill, distorted)")};
+      int aspect_idx = dbz3::settings::AspectMode() == "stretch" ? 1 : 0;
+      ui::RowLabel(i18n::T("Aspecto en pantallas anchas", "Wide-screen aspect"));
+      if (ImGui::Combo("##DrawVideoTab_aspect", &aspect_idx, aspect_items, 2)) {
+        dbz3::settings::SetAspectMode(aspect_idx == 1 ? "stretch" : "keep");
+        // Se aplica en caliente; se guarda ya para que sobreviva a un JUGAR/cierre
+        // sin pulsar "Guardar ajustes" (como el resto de ajustes de Video).
+        dbz3::settings::ApplyRuntimeSettingsToSdk(false);
+        dbz3::settings::SaveUserSettings();
+      }
+      ui::Tip(i18n::T(
+            "En monitores muy anchos (21:9, 32:9) el juego, que es 16:9, puede salir "
+            "con franjas a los lados o estirado. Mantener las franjas es lo recomendado: "
+            "se ve en su proporcion. Estirar llena la pantalla, pero la imagen sale "
+            "deformada a lo ancho.",
+            "On very wide monitors (21:9, 32:9) the game, which is 16:9, can show bars "
+            "on the sides or be stretched. Keeping the bars is recommended: it stays in "
+            "proportion. Stretching fills the screen, but the picture is stretched "
+            "sideways."));
     }
 
     ImGui::Spacing();

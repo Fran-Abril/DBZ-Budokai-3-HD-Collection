@@ -658,7 +658,8 @@ def sb_import(game, e, donor, work, us):
             fh.write(bytes(afs_pair.hd(dn["models"][0], region=us or afs_pair.HD_US)))
         for k, folder in enumerate(e["carpetas"][:MAX_FORMS]):
             out = os.path.join(work, "traje%d.bin" % (k + 1))
-            run_tool(conv, ["convertir", folder, tpl, out], "sdbh_model")
+            # manos en reposo (studies 6/04): el horneado de pose abria la muneca
+            run_tool(conv, ["convertir", folder, tpl, out, "--manos", "reposo"], "sdbh_model")
             models.append(out)
     else:
         import psp_amo  # noqa: PLC0415
@@ -960,6 +961,50 @@ def iw_id_of_model(model, iw=None, ms=None):
     return after[0][1] if after else None
 
 
+def iw_spx_sonidos(spx, delta=-1913):
+    """Guion #SPX de Infinite World -> el mismo con los IDs de sonido globales de B3.
+
+    IW reusa el motor y el guion de B3, pero su banco de sonidos globales va 1913 entradas
+    mas alla (medido con 5 personajes con moveset compartido: 11399/11385/11371 en IW son
+    9486/9472/9458 en B3). Un port de IW se queda con ese #SPX: sus tres golpes de tecnica
+    piden IDs que B3 no tiene y la definitiva sale MUDA. Esto reescribe solo el operando de
+    cada push previo a un builtin 0 (reproducir sonido). Devuelve (bytes, n_cambios)."""
+    if spx[:4] != b"#SPX":
+        return spx, 0
+    base = struct.unpack_from("<I", spx, 0x14)[0]
+    out, i, n, ultimo = bytearray(spx), base, 0, -1
+    fin = len(spx)
+    while i < fin:
+        b = spx[i]
+        b1 = spx[i + 1] if i + 1 < fin else -1
+        if b == 0x08 and b1 == 0x30:
+            ultimo = i
+            i += 6
+        elif b == 0x08 and b1 in (0x10, 0x20):
+            i += 3 if b1 == 0x10 else 4
+        elif b == 0x09 and b1 == 0x30:
+            i += 6
+        elif b == 0x08 and b1 in (0x5B, 0x5C, 0x5E, 0x4B, 0x4C):
+            i += 3
+        elif b == 0x01 and b1 in (0x10, 0x20, 0x30):
+            k = {0x10: 1, 0x20: 2, 0x30: 4}[b1]
+            v = int.from_bytes(spx[i + 2:i + 2 + k], "little")
+            if spx[i + 2 + k:i + 5 + k] == b"\x02\x80\x02" and v == 0 and ultimo >= 0:
+                val = struct.unpack_from("<i", spx, ultimo + 2)[0]
+                struct.pack_into("<i", out, ultimo + 2, val + delta)
+                n += 1
+            ultimo = -1
+            i += 5 + k
+        elif b == 0x12 and b1 == 0x10:
+            i += 3
+        elif b == 0x0B:
+            ultimo = -1
+            i += 1
+        else:
+            i += 1
+    return bytes(out), n
+
+
 def iw_moveset_files(cid, work, iw=None):
     """Bins PS2 del moveset de IW del personaje en work -> {"anm": [...], "cam": p, "bsp": p}
     (lo mismo que port_files de un port de la comunidad)."""
@@ -977,6 +1022,7 @@ def iw_moveset_files(cid, work, iw=None):
     ks = b1port.amb_kids(afs.entry(m["cam"]))
     if not any(d[:4] == b"#AML" for d, _ in ks):        # B3 lee los hijos de la camara por posicion
         ks = ks[:1] + [(AML, 6)] + ks[1:]
+    ks = [(iw_spx_sonidos(d)[0], t) if d[:4] == b"#SPX" else (d, t) for d, t in ks]
     out["cam"] = os.path.join(work, "iw_camara.bin")
     open(out["cam"], "wb").write(b1port.amb_build(ks))
     if m["bsp"]:

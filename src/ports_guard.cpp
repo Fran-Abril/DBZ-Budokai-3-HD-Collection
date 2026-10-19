@@ -74,6 +74,27 @@ DBZ3_HOOK_EU(sub_821266A8) {
   orig(ctx, base);
 }
 
+// Efecto de tecnica sin funcion (s9, 2026-10-19): sub_82130DA0(luchador r3, ...) busca con sub_820CD6C0(*(r3+4944) como
+// s16, 1) el registro del efecto y llama por la tabla 0x823339A0[tipo] (tipo = s16 en *(registro+32+12)+16) sin mirar si
+// la entrada existe. Con Paikuhan (port de IW, capsulas 616-618) el tipo no tiene funcion: llamada a 0 y cierre
+// (lr 0x82130F24, medido: tipo = s16 en r4+16; D:\DBZ3HD\_pruebas61019-*_s56_test_iw_dm_087, mision 87 de Dragon Mission). Si la entrada es 0
+// se salta el efecto entero (sin el, la tecnica sigue; solo falta su chispa) en vez de cerrar el juego.
+DBZ3_HOOK_EU(sub_82130DA0) {
+  // el descriptor del efecto es el 2.o argumento (r4; la funcion lo guarda en registro+32+12 y llama por su tipo, +16)
+  if (const uint32_t desc = ctx.r4.u32) {
+    constexpr dbz3::GA kTablaEfectos = 0x823339A0;
+    const int16_t tipo = int16_t(REX_LOAD_U16(desc + 16));
+    if (tipo < 0 || tipo > 4096 || !REX_LOAD_U32(uint32_t(kTablaEfectos) + 4 * uint32_t(tipo))) {
+      static std::atomic<int> avisos{0};
+      if (avisos.fetch_add(1) < 8)
+        REXLOG_WARN("dbz3 ports: efecto de tecnica de tipo {} sin funcion (descriptor {:08X}): se salta", tipo, desc);
+      ctx.r3.u64 = 0;   // como cuando sub_820CD6C0 no encuentra el registro (salto directo al final con r3 = 0)
+      return;
+    }
+  }
+  orig(ctx, base);
+}
+
 // Cadenas de fisica del modelo (feedback 1.4.6, Tag Team Janemba + Super Bu, logs/dbz3_1034.log): sub_82134640
 // (cargar modelo: r27 ID, r23 indice de forma, r25 traje, r24 jugador) lee el registro de 12 B
 // char96[ID].lista[byte(+18+8*indice) + por_traje*traje] y pasa su +4 a esta funcion, que lee alli 3 cuentas y

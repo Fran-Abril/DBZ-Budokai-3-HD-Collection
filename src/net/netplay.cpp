@@ -931,6 +931,17 @@ void Session::ReseedBattle(uint8_t* base) {
   REXLOG_INFO("dbz3 online: combate {}: semilla del RNG igualada", battles_);
 }
 
+uint32_t Session::AzarCompartido(uint32_t sal) {
+  if (!active()) {   // sin partida online: generador local (no importa que los dos PCs coincidan)
+    static std::mt19937 rng{uint32_t(NowMs()) * 2654435761u ^ 0x9E3779B9u};
+    return rng() ^ (sal * 0x85EBCA6Bu);
+  }
+  // Mezcla determinista de la semilla compartida, el numero de combate y `sal`: igual en los dos PCs.
+  uint32_t x = seed_ ^ (battles_ * 0x9E3779B9u) ^ (sal * 0x85EBCA6Bu);
+  x ^= x >> 16; x *= 0x7FEB352Du; x ^= x >> 15; x *= 0x846CA68Bu; x ^= x >> 16;
+  return x;
+}
+
 void Session::BattleBarrier() {
   if (!active()) return;
   // bit propio en el mando (0x0400 anfitrion, 0x0800 invitado; XInput no los usa): los dos PCs ven

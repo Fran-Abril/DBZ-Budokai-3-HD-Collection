@@ -422,6 +422,9 @@ uint32_t CuadrosMezcla(uint32_t de, uint32_t a) {
     case 0x328: return 20;
     case 0x324: return 18;
     case 0x32D: return 10;
+    // studies 4 (frente 04): el frenazo del visor. Viewer_StateFlyUpdate3/4/6 (431016-431020,
+    // 431335, 431457) y 431892-431897: ->0x32E 1/5 (1/15 desde 0x330, ya cubierto arriba).
+    case 0x32E: return 5;
     case 0x32C: return 5;
     case 0x323: return 5;
     case 0x321: return 10;

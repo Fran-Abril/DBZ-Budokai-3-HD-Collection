@@ -1,0 +1,3 @@
+descripcion = "SDBH: Freezer de Heroes importado con --manos reposo (ID 22 en s6_ext) en combate: mirar munecas y pulgar en las capturas"
+env = ["DBZ3_TEST_BATTLE=22,7,2,0,0,0,0,0", "DBZ3_COMBATE_MUNECO=quieto", "DBZ3_TEST_KI_LLENO=1"]
+pasos = ["esperar 34000", "captura m_00_inicio", "esperar 800", "captura m_01", "tecla P+Backspace:2500 300", "esperar 900", "captura m_02_ki", "tecla L+P+Backspace 300", "esperar 1500", "captura m_03_hiper"]

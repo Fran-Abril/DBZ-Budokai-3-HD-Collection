@@ -35,6 +35,11 @@ struct Entry {
 };
 
 static const Entry kTable[] = {
+    // Widescreen (frente 05, studies 6): aspecto en pantallas anchas
+    {"Mantener proporcion (franjas)", "Mantieni proporzioni (barre)", "Seitenverhältnis halten (Balken)", "Conserver les proportions (barres)"},
+    {"Estirar (llenar, deformado)", "Allunga (riempi, deformato)", "Dehnen (füllen, verzerrt)", "Étirer (remplir, déformé)"},
+    {"Aspecto en pantallas anchas", "Proporzioni su schermi larghi", "Seitenverhältnis auf breiten Bildschirmen", "Format sur écrans larges"},
+    {"En monitores muy anchos (21:9, 32:9) el juego, que es 16:9, puede salir con franjas a los lados o estirado. Mantener las franjas es lo recomendado: se ve en su proporcion. Estirar llena la pantalla, pero la imagen sale deformada a lo ancho.", "Sui monitor molto larghi (21:9, 32:9) il gioco, che è 16:9, può apparire con barre ai lati o allungato. Mantenere le barre è consigliato: si vede nelle sue proporzioni. Allungare riempie lo schermo, ma l'immagine risulta deformata in larghezza.", "Auf sehr breiten Monitoren (21:9, 32:9) kann das Spiel, das 16:9 ist, mit Balken an den Seiten oder gestreckt erscheinen. Die Balken beizubehalten ist empfohlen: es bleibt im richtigen Verhältnis. Dehnen füllt den Bildschirm, aber das Bild wird in die Breite verzerrt.", "Sur des écrans très larges (21:9, 32:9), le jeu, qui est en 16:9, peut s'afficher avec des barres sur les côtés ou étiré. Conserver les barres est recommandé : il reste dans ses proportions. Étirer remplit l'écran, mais l'image est déformée en largeur."},
     // QoL 2026-10-15: textos nuevos, pestana Juego, Novedades e informe de reparacion
     {"Personajes nuevos listos. Para cambiarlos hace falta el Kit de modding.", "Nuovi personaggi pronti. Per modificarli serve il Kit di modding.", "Neue Charaktere bereit. Zum Ändern brauchst du das Modding-Kit.", "Nouveaux personnages prêts. Pour les modifier, il faut le kit de modding."},
     {"«Abrir carpeta de mods» abre la carpeta donde viven los mods: lo que copies ahí aparece en la lista.", "«Apri cartella mod» apre la cartella delle mod: ciò che ci copi compare in questo elenco.", "„Mods-Ordner öffnen“ öffnet den Ordner der Mods: Was du dorthin kopierst, erscheint in dieser Liste.", "« Ouvrir le dossier des mods » ouvre le dossier des mods : ce que tu y copies apparaît dans cette liste."},

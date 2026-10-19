@@ -20,6 +20,30 @@ struct NewsBlock {
   int count;
 };
 
+inline constexpr NewsItem kNews1511[] = {
+    {"Infinite World (experimental)", "Infinite World (experimental)",
+     "Minijuegos de botones como el original: los luchadores se miran y se golpean, cámara de IW y su panel azul con siluetas.",
+     "Button minigames like the original: fighters face and hit each other, IW camera and its blue panel with silhouettes."},
+    {nullptr, nullptr,
+     "Pantalla de resultados de IW al acabar cada minijuego y tabla de tiempos en la nave de Goku.",
+     "IW results screen after each minigame and the time table in Goku's ship."},
+    {nullptr, nullptr,
+     "Arreglado un cierre contra Paikuhan en Dragon Mission.",
+     "Fixed a crash against Pikkon in Dragon Mission."},
+    {"Modo Héroe (beta)", "Hero Mode (beta)",
+     "Tu héroe es un personaje propio: su nombre, su cara y su peinado, colores y logo también en combate (reinicia tras crearlo).",
+     "Your hero is its own character: its name, face, hair, colours and logo also in battle (restart after creating it)."},
+    {nullptr, nullptr,
+     "Los maestros y los movesets se desbloquean al avanzar por las sagas.",
+     "Masters and movesets unlock as you progress through the sagas."},
+    {"Leyenda de Mr. Satán", "Legend of Mr. Satan",
+     "Título, prólogo y resultados como en el Budokai original.",
+     "Title, prologue and results like the original Budokai."},
+    {"Budokai 2 (experimental)", "Budokai 2 (experimental)",
+     "Premios de cápsula, subidas de ataque y defensa y sonidos del tablero como el original.",
+     "Capsule prizes, attack/defence boosts and board sounds like the original."},
+};
+
 inline constexpr NewsItem kNews151[] = {
     {"Budokai 2 (experimental)", "Budokai 2 (experimental)",
      "El Mundo Dragón arranca con su intro y las charlas del original; los Saibaman brotan del suelo y suena su música.",
@@ -98,6 +122,7 @@ inline constexpr NewsItem kNews145[] = {
 
 // Del mas nuevo al mas antiguo.
 inline constexpr NewsBlock kNewsBlocks[] = {
+    {"1.5.1.1", kNews1511, int(sizeof(kNews1511) / sizeof(kNews1511[0]))},
     {"1.5.1", kNews151, int(sizeof(kNews151) / sizeof(kNews151[0]))},
     {"1.5.0", kNews150, int(sizeof(kNews150) / sizeof(kNews150[0]))},
     {"1.4.5", kNews145, int(sizeof(kNews145) / sizeof(kNews145[0]))},

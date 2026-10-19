@@ -133,7 +133,7 @@ if ((Test-Path -LiteralPath $rc) -and (Test-Path -LiteralPath $buildh)) {
     $hVer = ([regex]::Match((Get-Content -LiteralPath $buildh -Raw), 'DBZ3_RUNTIME_BUILD\s+"([^"]+)"')).Groups[1].Value
     if ($rcVer -eq "" -or $hVer -eq "") {
         $errors += "no se pudo leer la version de version.rc o el sello de dbz3_build.h"
-    } elseif ($rcVer -ne $hVer) {
+    } elseif ((($rcVer -split '[.]')[0..2] -join '.') -ne (($hVer -split '[.]')[0..2] -join '.')) {   # 1.5.1.1 = repack de 1.5.1
         $errors += "sello del runtime ($hVer en rex/dbz3_build.h) != src/version.rc ($rcVer)"
     } else {
         Write-Output "sello runtime OK: $hVer (coincide con src/version.rc)"

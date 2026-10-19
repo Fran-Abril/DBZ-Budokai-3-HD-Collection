@@ -373,6 +373,7 @@ bool LeerLeyendaSatan(const std::filesystem::path& path, const std::string& lang
   out.res.pulsa = Textura(pantalla, 5);
   for (int k = 0; k < 3; ++k) out.res.dificultad[k] = Textura(pantalla, 7 + k);
   out.res.barra = Textura(pantalla, 3);
+  out.res.copyright = Textura(pantalla, 4);
   const std::vector<uint8_t> res = afs.Entry(size_t(banco - 1));
   out.res.letras[0] = Textura(res, 3);
   out.res.letras[1] = Textura(res, 4);

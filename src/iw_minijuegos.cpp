@@ -24,6 +24,7 @@
 #include "iw_ame.h"
 #include "iw_minijuegos.h"
 
+#include <rex/input/input_system.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/ui/imgui_dialog.h>
@@ -1289,6 +1290,9 @@ void PalancaDerecha(int16_t x, int16_t y) {
   g_ry = y;
 }
 int PalancaDerechaY() { return g_ry.load(); }
+// El visor de vuelo tambien mira la X de la derecha: Pad_GetStickAxes (EU 0x3394F0) usa la de mayor
+// magnitud de las dos (iw_mini_vuelo.cpp).
+int PalancaDerechaX() { return g_rx.load(); }
 
 bool TomarResultado(Resultado& r) {
   if (g_estado.load() != 3) return false;
@@ -1983,6 +1987,106 @@ namespace dbz3::iwmini {
 namespace {
 const bool g_registro = (dbz3::pasarela::RegistrarMinijuegoIW(&Empezar), true);
 
+// s8 equipo B (punto 3): el resultado de IW cuando el minijuego se lanza FUERA del mapa (fila < 0, p. ej. la prueba
+// DBZ3_TEST_IWMINI). En el mapa lo ensena pasarela_misiones.cpp con PantallaDM::Resultado; fuera de el nadie lo recogia y
+// se volvia al menu principal sin tabla. Aqui la misma pantalla de IW (fondo del mapa, filas de 334/1 t17 TIME, RANK,
+// [BRICKS], SCORE, TOTAL SCORE con el ritmo de Results_StateBeginRoll/UpdateTally, EARNED! ... ZENI) sobre el menu
+// principal, con el mando bloqueado para el menu; A la cierra (en la prueba automatica se cierra sola a los 12 s). No
+// suma Zenie ni guarda record: eso es del mapa. Sonido de cada fila: el de PantallaDM (SonidoResultado) + el propio
+// (SonidoFila, abajo).
+std::mutex g_rf_mu;
+std::shared_ptr<P::DragonMissionIW> g_rf_dm;
+P::ResultadoDM g_rf_res;
+std::atomic<bool> g_rf_ver{false};
+
+class PanelResFuera : public rex::ui::ImGuiDialog {
+ public:
+  explicit PanelResFuera(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    const bool ver = g_rf_ver.load() && dbz3::ingame::GameScreen() == kMainScreen && !dbz3::GameDimmed() &&
+                     !dbz3::OverlayOpen();
+    auto* rt = rex::Runtime::instance();
+    auto* in = rt ? static_cast<rex::input::InputSystem*>(rt->input_system()) : nullptr;
+    if (in && ver != bloqueo_) {   // el menu principal no recibe la A que cierra la tabla
+      if (ver) in->AddUIInputBlocker(); else in->RemoveUIInputBlocker();
+      bloqueo_ = ver;
+    }
+    if (!ver) {
+      t0_ = -1;
+      return;
+    }
+    std::shared_ptr<P::DragonMissionIW> dm;
+    P::ResultadoDM r;
+    {
+      std::lock_guard<std::mutex> lk(g_rf_mu);
+      dm = g_rf_dm;
+      r = g_rf_res;
+    }
+    if (!dm) return;
+    uint16_t b = 0;
+    if (in) {
+      rex::input::X_INPUT_STATE st = {};
+      if (in->GetStateForUI(0, &st) == 0) b = uint16_t(st.gamepad.buttons);
+    }
+    const float t = float(ImGui::GetTime());
+    if (t0_ < 0) t0_ = t, antes_ = b;   // lo que ya estaba pulsado (la A del minijuego) no cuenta
+    uint16_t pulsado = uint16_t(b & ~antes_);
+    antes_ = b;
+    if (g_auto && t - t0_ > 12.0f) pulsado = 0x1000 | 0x0010;   // prueba: A dos veces (salta el conteo y cierra)
+    P::InfoDM info;
+    info.dm = dm.get();
+    if (pantalla_.Resultado(ImGui::GetForegroundDrawList(), io, t, pulsado, info, r) ||
+        (g_auto && t - t0_ > 12.5f)) {
+      g_rf_ver = false;
+      REXLOG_INFO("dbz3 iwmini: resultado fuera del mapa: cerrado");
+    }
+  }
+
+ private:
+  P::PantallaDM pantalla_;
+  bool bloqueo_ = false;
+  float t0_ = -1;
+  uint16_t antes_ = 0;
+};
+
+void CrearPanelResFuera() {
+  static PanelResFuera* panel = nullptr;
+  auto* rt = rex::Runtime::instance();
+  if (!panel && rt && rt->imgui_drawer()) panel = new PanelResFuera(rt->imgui_drawer());
+}
+
+// Lo mismo que hace el mapa con el Resultado del minijuego (pasarela_misiones.cpp), sin premio ni record. Hilo propio:
+// lee el Dragon Mission de la copia del jugador (paneles, cifras, fondo) la primera vez.
+void MostrarResultadoFuera(const Resultado& mr) {
+  static std::shared_ptr<P::DragonMissionIW> dm;
+  if (!dm) {
+    auto d = std::make_shared<P::DragonMissionIW>();
+    std::string error;
+    if (!P::LeerDragonMission(P::BuscarIW(), *d, error)) {
+      REXLOG_WARN("dbz3 iwmini: resultado fuera del mapa: sin Dragon Mission ({})", error);
+      return;
+    }
+    dm = d;
+  }
+  P::ResultadoDM r;
+  r.segundos = mr.centesimas / 100;
+  r.puntos = mr.puntos;
+  r.rango = mr.rango;
+  r.zeni = mr.puntos;   // el premio de IW (lo mismo que el mapa), solo ensenado
+  if (mr.clave == 0x7D3) r.ladrillos = mr.monedas;
+  {
+    std::lock_guard<std::mutex> lk(g_rf_mu);
+    g_rf_dm = dm;
+    g_rf_res = r;
+  }
+  g_rf_ver = true;
+  dbz3::launcher::DeferUi(&CrearPanelResFuera);
+  REXLOG_INFO("dbz3 iwmini: resultado fuera del mapa: {} s, {} puntos, rango {} (minijuego 0x{:X})", r.segundos, r.puntos,
+              r.rango, mr.clave);
+}
+
 // PRUEBA: DBZ3_TEST_IWMINI=<clave>[,auto] (p. ej. 0x7D0,auto): empieza el minijuego cuando el menu principal lleva 3 s
 // en pantalla; con "auto" el jugador salta solo de aro en aro y despues a la meta.
 const bool g_test = [] {
@@ -1999,9 +2103,14 @@ const bool g_test = [] {
     REXLOG_INFO("dbz3 iwmini: prueba: {}", Empezar(clave, -1) ? "empieza" : "no empieza");
     for (int i = 0; i < 8000 && g_estado.load() != 3; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
     Resultado r;
-    if (TomarResultado(r))
+    if (TomarResultado(r)) {
       REXLOG_INFO("dbz3 iwmini: prueba: resultado superado {} tiempo {} cs puntos {} rango {} cogidos {}", r.superado,
                   r.centesimas, r.puntos, r.rango, r.monedas);
+      // s8 (punto 3): fuera del mapa, su tabla de IW al volver al menu principal
+      for (int i = 0; i < 400 && dbz3::ingame::GameScreen() != kMainScreen; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+      MostrarResultadoFuera(r);
+    }
   }).detach();
   return true;
 }();

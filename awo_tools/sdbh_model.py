@@ -1218,7 +1218,10 @@ class Textures:
         m = raster_uv_mask(img.shape[:2], uv, tris)
         self.masks[i] = self.masks.get(i, False) | m
 
-    def build(self):
+    def build(self, cap=None, hand_cap=None):
+        """#AZT de salida. cap/hand_cap permiten reintentar con menos resolucion sin cambiar el
+        orden de `keys` (los materiales ya referencian esos indices)."""
+        cap = self.cap if cap is None else cap
         items, info = [], []
         for kind, i, *extra in self.keys:
             if kind == "tpl":
@@ -1232,7 +1235,7 @@ class Textures:
                 h, w = rgba.shape[:2]
                 # 128 px: el reflejo no necesita mas y no se pasa del presupuesto del AZT (Xeno Janemba: 642 KB
                 # con 256 px, por encima de los 610 de los nativos; 592 KB con 128)
-                s = min(1.0, min(self.cap, 128) / max(w, h))
+                s = min(1.0, min(cap, 128) / max(w, h))
                 if s < 1.0:
                     w, h = int(w * s), int(h * s)
                     rgba = resize_rgba(rgba, w, h)
@@ -1255,7 +1258,9 @@ class Textures:
             alpha = np.full((h, w), 255 if i in self.unlit else 0, np.uint8)
             if i in self.masks and i not in self.unlit:
                 alpha[self.masks[i]] = 255
-            s = min(1.0, self.caps.get(i, self.cap) / max(w, h))
+            own = self.caps.get(i)
+            lim = hand_cap if (own is not None and hand_cap is not None) else (own if own is not None else cap)
+            s = min(1.0, lim / max(w, h))
             if s == 1.0 and raw[84:88] == b"DXT1":
                 bm = dxt1_to_dxt3(raw, alpha)
             else:
@@ -1283,7 +1288,8 @@ def _merge(parts):
 
 
 def convert(folder, template, out, belt_deg=80.0, cap=256, hand_tris=300, hand_cap=128, hands=None,
-            report=None, ramps=None, hair=None, face_base=None):
+            report=None, ramps=None, hair=None, face_base=None, hand_pose=True, auto_cap=True,
+            azt_budget=600000):
     """Carpeta SDBH (bcXXXbNN) + plantilla HD -> bin #AMB HD descomprimido. Devuelve un informe.
     template: bin nativo del que se toman esqueleto, etiquetas y paleta (la forma del donante:
     p.ej. 225 normal, 226 SSJ, 227 definitivo). ramps: bin nativo del que se copian las rampas de
@@ -1292,7 +1298,10 @@ def convert(folder, template, out, belt_deg=80.0, cap=256, hand_tris=300, hand_c
     expresion de SDBH que hace de cara por defecto (L00 y su copia L09).
     Presupuesto (nativos: bin <= 948 KB, AZT <= 610 KB; crecer el AZT corrompe la memoria del
     guest): las manos (una malla por variante) se reducen a hand_tris triangulos y su textura a
-    hand_cap; el resto de texturas a `cap`."""
+    hand_cap; el resto de texturas a `cap`. Con auto_cap, si el AZT pasa de azt_budget se reintenta
+    con menos resolucion (224/192/160/128) en vez de entregar un AZT que corrompe al guest.
+    hand_pose=False hornea la mano de SDBH TAL CUAL (su reposo), sin las posturas manuales
+    HAND_POSES: se une bien a la muneca y no deforma el pulgar, pero todas las variantes usan L00."""
     src = load_source(folder)
     drop_broken(src)
     tpl = Template(template)
@@ -1372,7 +1381,7 @@ def convert(folder, template, out, belt_deg=80.0, cap=256, hand_tris=300, hand_c
     if hands is None:
         dec = {side: [decimate(sm, hand_tris) if hand_tris and len(sm.tris) > hand_tris else sm
                       for sm in src["parts"].get("%s_hand" % side, [])] for side in "LR"}
-        hands = posed_hands(src, dec)
+        hands = posed_hands(src, dec) if hand_pose else {side: {0: dec[side]} for side in "LR" if dec[side]}
         for side in "LR":
             for sm in src["parts"].get("%s_hand" % side, []):
                 tx.caps[sm.texdefs[0]] = hand_cap
@@ -1453,9 +1462,19 @@ def convert(folder, template, out, belt_deg=80.0, cap=256, hand_tris=300, hand_c
         lists.append(row)
     awo = awo_bytes(tpl, awgs, lists, nlist)
     azt, tex_info = tx.build()
+    cap_usado = cap
+    if auto_cap:
+        for c in (cap, 224, 192, 160, 128):
+            if c >= cap and len(azt) <= azt_budget:
+                break
+            if c < cap:
+                azt, tex_info = tx.build(cap=c, hand_cap=min(hand_cap, c))
+                cap_usado = c
+            if len(azt) <= azt_budget:
+                break
     data = amb_pack([(awo, tpl.kid_types.get(b"#AWO", 1)), (azt, tpl.kid_types.get(b"#AZT", 2))])
     open(out, "wb").write(data)
-    stats.update({"bin": len(data), "awo": len(awo), "azt": len(azt), "textures": tex_info,
+    stats.update({"bin": len(data), "awo": len(awo), "azt": len(azt), "textures": tex_info, "cap": cap_usado,
                   "overridden": rig.overridden, "belt": rig.belt, "variants": len(variants)})
     print("OK -> %s: %d B (AWO %d, AZT %d) | AWG0 %d ventanas, %d indices, %d draws | %d variantes"
           % (out, len(data), len(awo), len(azt), stats["awg0"]["windows"], stats["awg0"]["ib"],
@@ -1463,6 +1482,7 @@ def convert(folder, template, out, belt_deg=80.0, cap=256, hand_tris=300, hand_c
     errs = verify(out)
     stats["verificacion"] = errs
     print("verificacion: %s" % ("OK" if not errs else "; ".join(errs[:5])))
+    return stats
     if report:
         import json
         json.dump(stats, open(report, "w"), indent=1, default=str)
@@ -1551,6 +1571,12 @@ def main(argv=None):
     c.add_argument("--rampas", help="bin HD nativo del que copiar las rampas de piel y ropa")
     c.add_argument("--pelo", choices=sorted(HAIR_PRESETS), help="deriva el pelo (ssj2 = SSJ2 desde el SSJ)")
     c.add_argument("--cara-base", type=int, help="expresion de SDBH que hace de cara por defecto (p.ej. 5)")
+    c.add_argument("--manos", choices=("pose", "reposo"), default="pose",
+                   help="reposo = mano de SDBH tal cual (sin las posturas manuales; se une mejor a la muneca)")
+    c.add_argument("--presupuesto-azt", type=int, default=600000,
+                   help="tamano maximo del #AZT (los nativos llegan a 610 KB; crecerlo corrompe la memoria)")
+    c.add_argument("--sin-tope-auto", action="store_true",
+                   help="no reducir la resolucion si el #AZT pasa del presupuesto")
     i = sub.add_parser("info")
     i.add_argument("carpeta")
     f = sub.add_parser("ajustar-pulgares", help="reajusta el pulgar de HAND_POSES contra las manos nativas")
@@ -1576,7 +1602,8 @@ def main(argv=None):
         cmd_fit_thumbs(a.carpeta, a.plantilla, a.extra)
     elif a.cmd == "convertir":
         convert(a.carpeta, a.plantilla, a.salida, a.cinturon, a.tope, a.manos_tris, a.tope_manos,
-                report=a.informe, ramps=a.rampas, hair=a.pelo, face_base=a.cara_base)
+                report=a.informe, ramps=a.rampas, hair=a.pelo, face_base=a.cara_base,
+                hand_pose=a.manos != "reposo", auto_cap=not a.sin_tope_auto, azt_budget=a.presupuesto_azt)
     else:
         ap.print_help()
     return 0

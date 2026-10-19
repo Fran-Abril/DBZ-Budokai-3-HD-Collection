@@ -29,6 +29,11 @@ struct MisionTablaIW {
 // Lee la tabla del ELF de la carpeta extraida o de la ISO (busca la tabla por su numeracion; vale USA y PAL).
 std::vector<MisionTablaIW> LeerTablaIW(const std::filesystem::path& iw, std::string& error);
 int IWaB3(int id_iw);             // -1 = personaje solo de IW (sin su port instalado con el Mod Kit)
+// Fusiones de IW con el registro nativo de B3 (s7 frente 06): forma inicial del luchador (0 = normal).
+// Medido en el char372 de B3 (out/analysis/guest_image): 64 Gotenks forma 3 (capsula 150), 70 Gogeta SS4 forma 4
+// (capsula 175), 74 Vegito = registro 72 forma 2 (capsula 187). false = vuelve a los ports de antes.
+constexpr bool kFusionesNativas = true;
+int FormaFusionIW(int id_iw);
 int MapaIW(int escenario);        // entrada de data_cmn del mapa de B3 parecido
 
 // ---- Dragon Mission: el mapa del mundo de IW (2026-10-16, frente P1) ----

@@ -1,0 +1,33 @@
+# copia: heroe_s56
+#
+# Heroe: la fila Aura de la creacion llega al combate. El valor se fija con el hook `DBZ3_TEST_HEROE_AURA=4`
+# (src/heroe.cpp, `AplicarHooksDePrueba`) porque navegar hasta la fila Aura con el arnes no es fiable: la primera
+# pulsacion de Space se pierde a veces y el cursor cae en otra fila (con `D` cambiaba el moveset, no el aura).
+#
+# Lineas que se comprueban:
+#   dbz3 heroe: prueba: creacion forzada (... aura 4 ...)        (heroe.cpp, al cargar el heroe)
+#   dbz3 heroe: aura 4 puesta al estilo E (tipo T)               (heroe.cpp, heroe::Reglas al empezar el combate)
+#
+# Para probar la navegacion a mano: `01_creacion_aura_ssj` tiene que ense��ar "Aura: Super Saiyan" y la fila
+# "Puntos (N)" debajo; para mover la fila se usa Shift+Izq/Der (cruceta) o A/D (palanca), y Space avanza de fila.
+descripcion = "Heroe: aura 4 (SSJ) elegida en la creacion puesta al estilo en combate"
+env = ["DBZ3_TEST_MODO=heroe", "DBZ3_HUB_MODE=5", "DBZ3_TEST_HEROE_AURA=4", "DBZ3_TEST_RINGOUT=1"]
+# studies 8 (equipo A): A en "Apariencia" y en "Maestros" abre ahora sus pantallas (Create / Select Master):
+# se baja a "Empezar" con la palanca (S x8) y se pulsa A una vez.
+pasos = [
+  "log \"dbz3 rpg: Modo Heroe\" 240",
+  "log \"dbz3 heroe: prueba: creacion forzada .* aura 4\" 30",
+  "esperar 1500",
+  "captura 01_creacion_aura_ssj",
+  "tecla S 600",
+  "tecla S 600",
+  "tecla S 600",
+  "tecla S 600",
+  "tecla S 600",
+  "tecla S 600",
+  "tecla S 600",
+  "tecla S 600",
+  "tecla Space 2500",
+  "log \"dbz3 heroe: aura 4 puesta al estilo\" 90",
+  "captura 02_combate_aura",
+]

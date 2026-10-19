@@ -31,7 +31,8 @@ MODS = os.path.join(ROOT, "out", "build", "win-amd64-release", "mods")
 OUT = os.path.join(ROOT, "release_packs")
 CHARACTERS = ["cut_janemba", "cut_android19", "cut_zarbon", "cut_dodoria", "cut_guldo", "cut_jeice",
               "cut_burter"]
-KIT_ENTRIES = ["roster_build", "importar", "swap_b3", "texture_b3", "texture_dump_import", "texture_pack",
+KIT_ENTRIES = ["vista_heroe",   # Modo Heroe: vista previa 3D y traje de combate (cac/vista_heroe.py + awo_tools/injertar_pelo.py)
+               "roster_build", "importar", "swap_b3", "texture_b3", "texture_dump_import", "texture_pack",
                "capsulas", "gritos", "voces", "iso", "model_render",
                "modkit_gui",      # DBZ3 HD Mod Kit: the no-console window over all of these
                "diagnostico",     # its Diagnostics page (reads a game log, explains it)
@@ -49,7 +50,9 @@ KIT_ENTRIES = ["roster_build", "importar", "swap_b3", "texture_b3", "texture_dum
 KIT_EXTRA_TOOLS = ["name_banner", "portrait_hd", "extract_azt_afs", "awg_to_obj_b3", "awg0_export",
                    "awg_cara_export", "swap_matrix", "texture_upscale_b3", "psp_amo", "sb_amm", "csk_edit",
                    "acm_parse", "sbport", "sb_tablas", "sdbh_model", "sb_tecnicas", "sb_voces",
-                   "cri"]   # voces de SDBH (importar.py lo importa dentro de una funcion: el rastreo no lo ve)
+                   "cri",           # voces de SDBH (importar.py lo importa dentro de una funcion: el rastreo no lo ve)
+                   "comprobar_assets"]   # studies 6 frente 01: validador de bins (ventana 44 B, rampa, pesos PS2);
+                                         # opcional: si no esta en mod center hd/, `find` devuelve None y se ignora
 KIT_DATA = ["catalog_b3.cat", "roster_db.json", "b1_capsulas.txt",   # b1_capsulas: nombres de B1 (importador)
             # sin estos el Kit fallaba en casa de los jugadores (log de un jugador, 2026-10-12): presets del
             # importador, nombres de los modelos de IW, codigos de Dragon Universe, etiquetas de texturas
@@ -77,7 +80,7 @@ RES_FILES = ["Budokai_3_Capsules_IDs.txt", "Dragon Ball Z Infinite World Capsule
 
 def kit_modules():
     """Local modules reached from the entry scripts (imports inside functions too)."""
-    dirs = [os.path.join(ROOT, "mod center hd"), os.path.join(ROOT, "awo_tools")]
+    dirs = [os.path.join(ROOT, "mod center hd"), os.path.join(ROOT, "mod center hd", "cac"), os.path.join(ROOT, "awo_tools")]
 
     def find(m):
         for d in dirs:
@@ -144,6 +147,9 @@ def kit_pack(ver, stage, dry=False):
     os.makedirs(awo)
     for p in kit_modules():
         dst = mch if os.path.basename(os.path.dirname(p)) == "mod center hd" else awo
+        if os.path.basename(os.path.dirname(p)) == "cac":     # cac/vista_heroe.py va en mod center hd/cac/
+            dst = os.path.join(mch, "cac")
+            os.makedirs(dst, exist_ok=True)
         shutil.copyfile(p, os.path.join(dst, os.path.basename(p)))
     studio = os.path.join(ROOT, "mod center hd", "studio")   # Studio de camaras (paquete)
     if os.path.isdir(studio):
