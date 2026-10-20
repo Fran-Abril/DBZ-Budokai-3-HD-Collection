@@ -54,6 +54,7 @@
 
 #include "generated/dbz3_init.h"
 #include "cinematica.h"
+#include "escenarios.h"   // S1-F03.2: Ring de Cell de B1 (alta de campos_iw.py)
 #include "eu_map.h"
 #include "ingame/game_style.h"
 #include "ingame/tutorial.h"
@@ -79,6 +80,7 @@ int GameScreen();   // online_panel.cpp
 }
 namespace dbz3::combate {
 int OndasEvento(int lado, int tipo);   // combate.cpp: ondas del lado dado; 0 devueltas con G, 1 con un golpe, 2 desviadas
+void OcultarHud(bool ocultar);         // S1-F03.1: combate.h (marcador del juego)
 }
 namespace dbz3::net {
 void InyectarPad(uint32_t usuario, int32_t botones);   // net/netplay_hooks.cpp (< 0: el mando de verdad)
@@ -374,6 +376,10 @@ int EscenarioB3(const std::string& nombre_b1) {
   for (const auto& [k, m] : kMapas) {
     if (n.rfind(k, 0) == 0) mapa = m;
   }
+  // S1-F03.2: el ring de Cell de B1, entero (hierba, losas y cuatro columnas), si el launcher lo creo de la ISO del
+  // jugador (campos_iw.py auto, carpeta "Ring de Cell B1"); si no, el de B3 (destruido)
+  if (mapa == 50)
+    if (const int b1 = dbz3::escenarios::PorMod("Ring de Cell B1"); b1 >= 0) return b1;
   return EscenarioPorMapa(mapa);
 }
 
@@ -1087,7 +1093,12 @@ void Salir(bool completo) {   // con g_mu
   Publicar(kNada);
 }
 
+bool g_previa_vista = false;   // S1-F03.1: con g_mu; la escena previa de los Juegos de Cell ya salio en este paso
+std::atomic<bool> g_previa_combate{false};   // S1-F03.1: el combate en curso es el "solo escena" (sin puntos en pantalla)
+std::atomic<bool> g_previa_negro{false};     // S1-F03.1: tras la escena previa, negro hasta que B3 suelta el combate
+
 void Entrar(int paso) {   // con g_mu
+  g_previa_vista = false;
   g_paso = paso;
   g_intentos = 0;
   Publicar(paso >= int(g_pasos.size()) ? kFin : kPantalla);
@@ -1163,13 +1174,8 @@ void TomasPresentacion(dbz3::cinematica::Escena& e) {
 // Cell, Goku, reportero ni coche) con los subtitulos de B1 resumidos.
 void EscenaCell(dbz3::cinematica::Escena& e) {
   namespace C = dbz3::cinematica;
-  C::Paso p;
-  p.plano = C::kGeneral;
-  p.segundos = 5.0f;
-  p.linea = T::T("¡Empiezan los Juegos de Cell!", "The Cell Games are about to begin!");
-  Toma(p, {-75.0f, 40.0f, 125.0f}, {0.0f, 5.0f, 0.0f}, {-50.0f, 26.0f, 85.0f}, {-6.0f, 9.0f, 0.0f});
-  e.pasos.push_back(p);
-  p = C::Paso{};   // Mr. Satan de espaldas, con la mochila, de cara al ring
+  C::Paso p;   // S1-F03.1: el ring de lejos va ahora en la escena previa (EscenaPrevia)
+  // Mr. Satan de espaldas, con la mochila, de cara al ring
   p.plano = C::kLado1;
   p.segundos = 3.0f;
   Toma(p, {-47.0f, 9.5f, 2.5f}, {15.0f, 8.5f, 0.0f}, {-43.0f, 9.0f, 2.0f}, {15.0f, 8.5f, 0.0f});
@@ -1195,6 +1201,161 @@ void EscenaCell(dbz3::cinematica::Escena& e) {
   Toma(p, {-9.0f, 12.6f, 8.0f}, {-15.0f, 12.4f, 0.0f}, {-11.0f, 12.6f, 7.0f}, {-15.0f, 12.4f, 0.0f});
   e.pasos.push_back(p);
   TomasPresentacion(e);
+}
+
+// S1-F03.1: escena previa de los Juegos de Cell (B1, escena 0x1C de la ronda 1, antes de Mr. Satan): Goku (SSJ) contra
+// Cell en un combate "solo escena" que no puntua, con las 4 tomas del original (capturas de PCSX2,
+// D:\tmp\s9b_satan\capturas\originales_b1\cell1_g1..g4): el ring de lejos, Cell de cerca, Goku desde abajo y, por
+// encima del hombro de Cell, Goku llegando. Goku = lado 1 (x = -15), Cell = lado 2 (x = +15), marco de Paso::rel.
+constexpr int kGokuB3 = 0, kCellB3 = 33, kFormaSsj = 2, kFormaPerfecto = 2;   // FormaB3: Goku 2 = SSJ, Cell 2 = perfecto
+// Camara MEDIDA en PCSX2 (B1 europeo): la de B1 vive en 0x555B00 (+0x10 ojo, +0x20 objetivo; leida ~7800 veces por
+// segundo con PINE desde un estado al final del prologo) y los luchadores en sus nodos de cuerpo (Goku 0x728400, Cell
+// 0x723FC0: matriz 4x4 cuyo eje z es hacia donde miran). Cada toma pasa al marco de Paso::rel anclada a su luchador
+// (Cell de cerca, Goku desde abajo), al sitio de Cell con el eje de la pelea (el ojo por encima de su hombro) o al
+// centro del ring (la general y el objetivo del hombro); suelo = el del luchador (nodo - 10,2 Goku, - 12,7 Cell; la
+// suela de Goku en el ring, y = 3,9). Claves {cuadro de 60 Hz, x, y, z} simplificadas (error <= 1 unidad; 4 en la
+// general, que esta a 300-700). Duraciones = cortes de la camara (9,98 / 5,80 / 3,80 / 14,42 s). Mismas unidades que
+// B3 (los escenarios de B1 entran a escala 1, escenarios_convertir.py). Herramientas en el INFORME de F03.
+constexpr std::array<float, 4> kPrevia_ring_ojo[] = {{0, 188.2f, 212.2f, 678.3f}, {99, 187.6f, 210.1f, 674.4f}, {183, 184.9f, 203.7f, 659.5f}, {237, 174.0f, 198.8f, 639.5f}, {291, 150.0f, 195.2f, 609.4f}, {357, 106.3f, 192.4f, 559.6f}, {429, 45.7f, 190.6f, 489.5f}, {507, -28.7f, 189.6f, 396.2f}, {594, -114.3f, 188.8f, 271.0f}, {598, -115.5f, 188.7f, 269.1f}};
+constexpr std::array<float, 4> kPrevia_ring_obj[] = {{0, 126.5f, 2.7f, 219.2f}, {123, 122.4f, 3.2f, 212.7f}, {177, 116.3f, 3.8f, 201.7f}, {204, 110.1f, 4.6f, 190.5f}, {249, 89.5f, 7.2f, 153.5f}, {355, 24.5f, 15.6f, 39.1f}, {385, 10.6f, 17.3f, 15.5f}, {409, 3.3f, 18.2f, 3.7f}, {447, -0.0f, 17.8f, 0.0f}, {535, 3.4f, 8.8f, 7.4f}, {598, 3.6f, 8.5f, 7.7f}};
+// (Cell de cerca, Goku desde abajo y el ojo del hombro: lo que en B1 es "delante" del luchador va hacia donde mira su
+// pecho en la guardia de B3, de lado: +z el lado 1 y -z el lado 2, como los planos de cinematica.cpp Encuadre)
+constexpr std::array<float, 4> kPrevia_cell_ojo[] = {{0, 11.1f, 18.7f, -12.6f}, {347, 11.1f, 18.7f, -12.6f}};
+constexpr std::array<float, 4> kPrevia_cell_obj[] = {{0, 15.1f, 18.9f, 0.3f}, {347, 15.1f, 18.9f, 0.3f}};
+constexpr std::array<float, 4> kPrevia_goku_ojo[] = {{0, -11.3f, 5.5f, 20.4f}, {18, -10.9f, 5.8f, 19.3f}, {66, -11.8f, 6.1f, 19.4f}, {81, -9.6f, 6.4f, 18.9f}, {89, -10.1f, 5.1f, 18.7f}, {97, -9.5f, 4.2f, 15.9f}, {108, -6.4f, 5.8f, 12.8f}, {119, -6.5f, 7.9f, 12.5f}, {139, -7.7f, 9.0f, 12.7f}, {227, -7.7f, 9.4f, 12.6f}};
+constexpr std::array<float, 4> kPrevia_goku_obj[] = {{0, -20.0f, 14.4f, -5.3f}, {30, -20.0f, 14.7f, -6.6f}, {82, -20.7f, 15.2f, -5.9f}, {99, -20.0f, 12.9f, -8.8f}, {133, -21.3f, 16.8f, -7.9f}, {227, -21.6f, 17.4f, -7.9f}};
+constexpr std::array<float, 4> kPrevia_hombro1_ojo[] = {{0, 14.9f, 25.4f, 37.7f}, {240, 29.9f, 22.4f, 18.5f}, {316, 33.4f, 22.2f, 16.1f}, {623, 49.0f, 22.5f, 12.5f}, {636, 51.0f, 22.7f, 12.3f}};
+constexpr std::array<float, 4> kPrevia_hombro1_obj[] = {{0, -5.2f, 8.4f, 9.3f}, {86, -3.1f, 10.2f, 8.3f}, {229, 0.4f, 12.9f, 3.1f}, {301, 1.4f, 13.3f, 1.7f}, {636, 5.0f, 12.1f, 0.6f}};
+constexpr std::array<float, 4> kPrevia_hombro2_ojo[] = {{0, 51.5f, 22.7f, 12.2f}, {96, 56.6f, 22.8f, 11.2f}, {123, 56.3f, 22.8f, 13.0f}, {227, 61.9f, 22.9f, 12.0f}};
+constexpr std::array<float, 4> kPrevia_hombro2_obj[] = {{0, 5.1f, 12.1f, 0.6f}, {227, 7.4f, 11.3f, -0.0f}};
+struct TomaPrevia {
+  int plano;
+  float segundos;
+  int cara;              // retrato del subtitulo (-1 ninguno)
+  const char *es, *en;   // subtitulo (texto propio; el de B1 son imagenes sin localizar, F03.4)
+  const std::array<float, 4>* ojo;
+  size_t n_ojo;
+  const std::array<float, 4>* obj;
+  size_t n_obj;
+};
+#define DBZ3_PREVIA(n) kPrevia_##n##_ojo, std::size(kPrevia_##n##_ojo), kPrevia_##n##_obj, std::size(kPrevia_##n##_obj)
+const TomaPrevia kTomasPrevia[] = {
+    // 1. el reportero y el ring de lejos, Cell en el centro (B1: el reportero anuncia los Juegos)
+    {dbz3::cinematica::kGeneral, 9.98f, -1, "¡Empiezan los Juegos de Cell!", "The Cell Games are about to begin!",
+     DBZ3_PREVIA(ring)},
+    // 2. Cell de cerca, quieto
+    {dbz3::cinematica::kLado2, 5.80f, kCellB3, "Ya es la hora. Me da igual quién, ¡pero que salga uno!",
+     "It's time. I don't care who it is, just get out here!", DBZ3_PREVIA(cell)},
+    // 3. Goku desde abajo, subiendo al ring
+    {dbz3::cinematica::kLado1, 3.80f, kGokuB3, "Bueno, empiezo yo.", "Well, I'll go first.", DBZ3_PREVIA(goku)},
+    // 4. por encima del hombro de Cell, Goku llega delante (corte del subtitulo a los 10,6 s: [H] +-1 s, capturas)
+    {dbz3::cinematica::kLado1, 10.62f, -1, "Solo hay un montón de perdedores... ¿Qué será de la Tierra?",
+     "Nothing but a bunch of losers out there... What will happen to the Earth?", DBZ3_PREVIA(hombro1)},
+    // y Mr. Satan grita desde fuera (la misma toma sigue)
+    {dbz3::cinematica::kLado1, 3.80f, kJugador, "¡Espeeera!", "Waaait!", DBZ3_PREVIA(hombro2)},
+};
+#undef DBZ3_PREVIA
+// Campo de vision vertical de B1 en estas tomas: medido proyectando a Goku (suela y = 3,9 en el pixel 385, punta del pelo
+// 24,07 en el 95, captura del estado de PCSX2 a los 33,5 s, 640x480) con el ojo y el objetivo leidos: 0,579 rad, que es
+// 2 atan(0,3) = 0,583 (la camara de B1 guarda 1,2 = 4 x 0,3 en +0). B3 usa 0,785 (mgr+0x1C4, cine.cpp).
+constexpr float kFovB1 = 0.583f;
+void EscenaPrevia(dbz3::cinematica::Escena& e) {
+  namespace C = dbz3::cinematica;
+  for (const auto& t : kTomasPrevia) {
+    C::Paso p;
+    p.plano = t.plano;
+    p.segundos = t.segundos;
+    p.cara = t.cara;
+    if (t.es) p.linea = T::T(t.es, t.en);
+    p.rel = true;
+    p.cam_ojo.assign(t.ojo, t.ojo + t.n_ojo);
+    p.cam_obj.assign(t.obj, t.obj + t.n_obj);
+    p.cam_fov = {{0.0f, kFovB1}};
+    // B1: Cell espera de pie (brazos cruzados); en guardia B3 se agacha y gira: su pose de entrada (lado 2)
+    if (t.cara == kCellB3) p.anim[1] = C::kPoseEntrada2;
+    e.pasos.push_back(p);
+  }
+}
+// El combate "solo escena": 1 s de tiempo (el reloj esta parado mientras dura la escena, cinematica.cpp) y, al acabar
+// la escena, se da por terminado como un ring out del lado 1 (mgr+35569 = hueco del ganador + 1, como los retos de
+// VigilarCombate) para no dejar ese segundo de pelea. Sin puntos ni avance: al soltar el combate se vuelve al mismo
+// paso y DrawCombate pide el combate de Yamcha (Lanzar).
+bool LanzarPrevia(int escenario) {   // con g_mu
+  namespace C = dbz3::cinematica;
+  C::Escena e;
+  e.iso_voces = g_d->ruta;
+  e.volumen = dbz3::settings::AudioMute() ? 0.0f : float(dbz3::settings::MasterVolume());
+  e.distancia = 30;
+  EscenaPrevia(e);
+  if (!dbz3::hub::RequestBattleEx(kGokuB3, kCellB3, escenario, true, 1, 0, 0, kFormaSsj, kFormaPerfecto)) return false;
+  C::Empezar(std::move(e));
+  g_previa_vista = true;
+  REXLOG_INFO("dbz3 pasarela: escena previa de los Juegos de Cell (paso {}): Goku (forma {}) contra Cell (forma {}), "
+              "escenario {}, sin puntos", g_paso + 1, kFormaSsj, kFormaPerfecto, escenario);
+  CallarVozB1();
+  CallarAdxPs2();
+  Publicar(kLuchando);
+  const uint64_t cambio = g_cambio;
+  g_previa_combate = true;
+  // B1 entra en la escena sin presentacion: el vuelo y las entradas de B3 (estados 1 y 2, ~20 s) se saltan con START
+  // (como el jugador; hub.cpp: "START la salta") en el mando del lado 1, y lo que B3 pone tras el fin (ring out,
+  // victoria, estados 5-8) se tapa con un fundido a negro (Panel) y tambien se acelera con START.
+  std::thread([] {
+    uint8_t* base = Base();
+    const int64_t t0 = NowMs();
+    bool vista = false, acabada = false, pulsado = false, sin_hud = false;
+    int64_t t_pulso = 0;
+    auto soltar = [&] {
+      if (pulsado) dbz3::net::InyectarPad(0, -1);
+      pulsado = false;
+    };
+    while (base && NowMs() - t0 < 180000) {
+      const bool own = dbz3::hub::OwnBattle();
+      const uint32_t mgr = own ? REX_LOAD_U32(kMgrPtr) : 0;
+      const uint32_t st = mgr ? REX_LOAD_U32(mgr + 35128) : 0;
+      if (!own && (vista || acabada || NowMs() - t0 > 60000)) break;
+      const bool saltar = st == 1 || st == 2 || (acabada && st >= 5 && st <= 7);
+      if (saltar && NowMs() - t_pulso > (pulsado ? 120 : 400)) {
+        t_pulso = NowMs();
+        pulsado = !pulsado;
+        dbz3::net::InyectarPad(0, pulsado ? 0x0010 : -1);
+      } else if (!saltar) {
+        soltar();
+      }
+      if (st >= 1 && st <= 3 && !sin_hud) {   // B1 no tiene marcador antes de la escena (el READY de B3 si sale)
+        sin_hud = true;
+        dbz3::combate::OcultarHud(true);
+      }
+      vista = vista || (st == 4 && C::Activa());
+      if (st == 4 && vista && !acabada && !C::Activa()) {
+        acabada = true;
+        g_previa_negro = true;
+        dbz3::combate::OcultarHud(true);
+        REX_STORE_U8(mgr + 35569, 1);
+        REXLOG_INFO("dbz3 pasarela: escena previa acabada: fin del combate solo escena");
+      }
+      if (st >= 5 && st <= 8 && !acabada) {   // acabo solo (el segundo de tiempo)
+        acabada = true;
+        g_previa_negro = true;
+        dbz3::combate::OcultarHud(true);
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    }
+    soltar();
+    if (acabada || sin_hud) dbz3::combate::OcultarHud(false);
+    g_previa_negro = false;
+    g_previa_combate = false;
+  }).detach();
+  Reglas r;
+  r.capsulas = false;
+  VigilarCombate("pasarela: escena previa", r, [cambio](const Fin& f) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (g_fase != kLuchando || g_cambio != cambio) return;
+    REXLOG_INFO("dbz3 pasarela: escena previa terminada (ganador {}); sigue el combate del paso {}", f.ganador + 1,
+                g_paso + 1);
+    Publicar(kPantalla);   // mismo paso: DrawCombate pide el combate de verdad
+  });
+  return true;
 }
 
 // Escena del retador r (1..10) tras su tablero (B1 pone la charla en el tablero, 0x231F20-0x232A80; aqui va en 3D por
@@ -1257,6 +1418,9 @@ bool Lanzar() {   // con g_mu: el combate del paso actual, con las reglas del or
   const Paso& p = g_pasos[size_t(g_paso)];
   const CombateB1& c = g_d->combates[size_t(p.ronda)];
   const int escenario = EscenarioB3(c.escenario_nombre);
+  // S1-F03.1: antes del combate 1, la escena previa de los Juegos de Cell (una vez por paso; no con DBZ3_SIN_CINE)
+  static const bool sin_cine = std::getenv("DBZ3_SIN_CINE") != nullptr || std::getenv("DBZ3_SIN_PREVIA") != nullptr;
+  if (p.ronda == 0 && p.vez == 0 && !g_previa_vista && !sin_cine) return LanzarPrevia(escenario);
   // vida que no se recupera (Krilin, Gohan) y los Cell Jr. seguidos: la que le quedo al ganar el anterior
   const bool arrastra = c.arrastra_vida || p.vez > 0;
   const int vida1 = arrastra && g_vida_ganada > 0 ? -g_vida_ganada : 0;   // < 0: solo la inicial (maxima de serie, como B1)
@@ -1429,8 +1593,13 @@ class Panel : public rex::ui::ImGuiDialog {
     const float t = float(ImGui::GetTime()), dt = std::min(io.DeltaTime, 0.1f);
     alpha_ = std::clamp(alpha_ + (show ? dt * 4.0f : -dt * 8.0f), 0.0f, 1.0f);
     // en el combate: puntos y avisos de los sucesos (como el anillo de avisos de B1)
+    {   // S1-F03.1: fundido a negro tras la escena previa (tapa el ring out y la victoria de B3)
+      negro_ = std::clamp(negro_ + (g_previa_negro.load() ? 1.0f : -2.0f) * std::min(io.DeltaTime, 0.1f) * 3.0f, 0.0f, 1.0f);
+      if (negro_ > 0.0f)
+        ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, int(255 * negro_)));
+    }
     if (const int st = EstadoCombate(); fase == kLuchando && st >= 3 && st <= 6 && !dbz3::GameDimmed() && !dbz3::cinematica::Activa() &&
-                                        !dbz3::OverlayOpen()) {
+                                        !g_previa_combate.load() && !dbz3::OverlayOpen()) {
       std::lock_guard<std::mutex> lk(g_mu);
       if (g_d) {
         Texturas();
@@ -2214,6 +2383,7 @@ class Panel : public rex::ui::ImGuiDialog {
   uint16_t last_ = 0;
   uint64_t visto_ = ~0ull;
   float cambio_at_ = 0, alpha_ = 0;
+  float negro_ = 0;   // S1-F03.1
 };
 
 void CreatePanel() {

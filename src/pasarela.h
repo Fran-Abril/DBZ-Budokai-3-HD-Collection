@@ -138,6 +138,7 @@ class AfsPs2 {
   size_t Cuantas() const;
   std::vector<uint8_t> Entrada(size_t k, uint32_t n = 0xFFFFFFFF);
  private:
+  bool AbrirUna(const std::filesystem::path& juego, const std::string& afs);
   struct Impl;
   std::shared_ptr<Impl> d_;
 };

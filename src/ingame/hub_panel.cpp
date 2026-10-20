@@ -579,10 +579,13 @@ class HubPanel : public rex::ui::ImGuiDialog {
     // pack opcional del jugador: su fondo encima del menu (y entonces nuestro marco y las tiras doradas)
     if (const S::Pic bg = S::Img("hub/fondo")) {
       has_bg_ = true;
-      const float sw = ImGui::GetIO().DisplaySize.x, sh = ImGui::GetIO().DisplaySize.y;
+      const S::Imagen g = S::GuestImage(ImGui::GetIO());   // S1-F06: en la imagen del juego, no en la ventana
+      const float sw = g.Size().x, sh = g.Size().y;
       const float k = std::max(sw / bg.w, sh / bg.h);
-      const ImVec2 c(sw * 0.5f, sh * 0.5f), half(bg.w * k * 0.5f, bg.h * k * 0.5f);
+      const ImVec2 c(g.p0.x + sw * 0.5f, g.p0.y + sh * 0.5f), half(bg.w * k * 0.5f, bg.h * k * 0.5f);
+      dl->PushClipRect(g.p0, g.p1, true);
       S::DrawPic(dl, bg, ImVec2(c.x - half.x, c.y - half.y), ImVec2(c.x + half.x, c.y + half.y));
+      dl->PopClipRect();
       S::Sides(dl, a);
       S::Frame(dl, a.At(kInX0 - S::mode::kLine - 2, kFrameY0), a.At(kInX1 + S::mode::kLine + 2, kFrameY1), a.s);
     }
@@ -692,13 +695,14 @@ class HubPanel : public rex::ui::ImGuiDialog {
     const float ms = float(ClockMs() - v.fade_t0) + (v.fade == Fade::kIn ? float(kFadeOutMs + kFadeHoldMs) : 0.0f);
     const float u = ms / total;
     if (u >= 1.0f) return;
-    const float sw = io.DisplaySize.x, sh = io.DisplaySize.y;
+    const S::Imagen g = S::GuestImage(io);   // S1-F06: centrado en la imagen del juego
+    const float sw = g.Size().x, sh = g.Size().y;
     const float alpha = Clamp01(u / 0.12f) * (1.0f - Clamp01((u - 0.78f) / 0.22f));
     const float h0 = sh * 0.14f * std::exp(3.4f * std::pow(u, 1.5f));
     const float trail[3][2] = {{0.70f, 0.10f}, {0.84f, 0.22f}, {1.0f, 1.0f}};   // escala, alfa
     for (const auto& tr : trail) {
       const float h = h0 * tr[0], w = p.w * h / p.h;
-      const ImVec2 c(sw * 0.5f, sh * 0.48f + h * 0.22f);
+      const ImVec2 c(g.p0.x + sw * 0.5f, g.p0.y + sh * 0.48f + h * 0.22f);
       S::DrawPic(dl, p, ImVec2(c.x - w * 0.5f, c.y - h * 0.5f), ImVec2(c.x + w * 0.5f, c.y + h * 0.5f), ImVec4(0, 0, 0, 0),
                  IM_COL32(255, 255, 255, int(255 * alpha * tr[1])));
     }

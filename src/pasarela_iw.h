@@ -28,6 +28,8 @@ struct MisionTablaIW {
 };
 // Lee la tabla del ELF de la carpeta extraida o de la ISO (busca la tabla por su numeracion; vale USA y PAL).
 std::vector<MisionTablaIW> LeerTablaIW(const std::filesystem::path& iw, std::string& error);
+// ELF de arranque (SLUS_*/SLES_*) de la carpeta extraida o de la ISO; vacio si no hay.
+std::vector<uint8_t> LeerElf(const std::filesystem::path& iw);
 int IWaB3(int id_iw);             // -1 = personaje solo de IW (sin su port instalado con el Mod Kit)
 // Fusiones de IW con el registro nativo de B3 (s7 frente 06): forma inicial del luchador (0 = normal).
 // Medido en el char372 de B3 (out/analysis/guest_image): 64 Gotenks forma 3 (capsula 150), 70 Gogeta SS4 forma 4
@@ -69,6 +71,10 @@ struct DragonMissionIW {
   std::vector<Imagen> frases;  // DATA_USA 334/6 por fila del #DMD (texto oscuro)
   std::vector<Imagen> ui;      // DATA_USA 334/1 (paneles, MISSION START, BEST SCORE, TIME/RANK/SCORE, cifras)
   std::vector<Imagen> road;    // DATA_USA 333/0 (globo t18, EARNED! t19, ZENI t07, TOTAL t20)
+  // s1 F04.3: titulo de cada minijuego (clave 0x7D0 + i): DATA_USA 335 + i, hijo 1 (una textura de 46 px de alto, letra
+  // azul con borde blanco). Cotejado: 346 = "Hyperbolic Time Chamber (Trunks)" (NB013, captura iw_nb013_d), 340 =
+  // "1, 2, 3, 4!" (NB007, nb007fin_200). DATA_ENG (IW europeo) tiene las mismas entradas.
+  std::vector<Imagen> titulos_mini;
   std::vector<CasillaDM> casillas;
   std::vector<EscenaIW> escenas;                 // de las tablas del ELF
   std::vector<std::vector<Imagen>> subtitulos;   // por video (DATA_USA 77 + video), una imagen por linea
@@ -95,7 +101,9 @@ struct ResultadoDM {
   bool nuevo_record = false;
   int rango = -1;        // 0 C .. 4 Z; -1 = el de los puntos (PantallaDM::Rango)
   int ladrillos = -1;    // minijuego de ladrillos (0x7D3): fila BRICKS DESTROYED; -1 = sin esa fila
+  int clave_mini = 0;    // s1 F04.3: minijuego (0x7D0-0x7E1) para su titulo arriba; 0 = mision o sin titulo
 };
+constexpr int kTituloMini0 = 335;   // DATA_USA 335 + (clave - 0x7D0), hijo 1: titulo del minijuego (s1 F04.3)
 struct InfoDM {
   const DragonMissionIW* dm = nullptr;
   const std::vector<MisionTablaIW>* tabla = nullptr;

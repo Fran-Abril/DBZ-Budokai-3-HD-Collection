@@ -400,15 +400,76 @@ std::string GetRedirect(const wchar_t* host, const wchar_t* path) {
 }
 }  // namespace
 
+namespace {
+// Plan B de las descargas (2026-10-19, pack HD de 2,9 GB que "no baja" en el PC de un jugador): curl.exe del sistema
+// (Windows 10 1803+), con reintentos que siguen donde se corto (-C -). El token solo va al primer host: curl no reenvia
+// -H Authorization a otro host al seguir la redireccion. El progreso se lee del tamano del fichero temporal.
+long long CurlDownloadWin(const std::string& url, const std::string& headers, const std::filesystem::path& tmp,
+                          const std::function<void(long long)>& progress, std::string& why) {
+  std::vector<std::string> args = {"curl", "-sSfL", "--connect-timeout", "20", "--retry", "8", "--retry-delay", "3",
+                                   "-C", "-", "-A", "dbz3-novas-mods/1.5", "-o", "@OUT@"};   // @OUT@: la ruta (ancha)
+  for (size_t i = 0; i < headers.size();) {
+    size_t e = headers.find("\r\n", i);
+    if (e == std::string::npos) e = headers.size();
+    if (e > i) {
+      args.push_back("-H");
+      args.push_back(headers.substr(i, e - i));
+    }
+    i = e + 2;
+  }
+  args.push_back(url);
+  std::wstring cmd;
+  for (const std::string& a : args) {
+    std::wstring w;
+    for (char c : a) w += wchar_t(uint8_t(c));   // cabeceras y URL: ASCII
+    if (a == "@OUT@") w = tmp.wstring();
+    cmd += L"\"";
+    for (wchar_t c : w) {
+      if (c == L'"') cmd += L'\\';
+      cmd += c;
+    }
+    cmd += L"\" ";
+  }
+  wchar_t sys[MAX_PATH] = {};
+  GetSystemDirectoryW(sys, MAX_PATH);
+  const std::wstring exe = std::wstring(sys) + L"\\curl.exe";
+  STARTUPINFOW si{};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi{};
+  if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+    why = "curl: no esta en el sistema";
+    return -1;
+  }
+  std::error_code ec;
+  while (WaitForSingleObject(pi.hProcess, 500) == WAIT_TIMEOUT) {
+    if (progress) progress((long long)std::filesystem::file_size(tmp, ec));
+  }
+  DWORD code = 1;
+  GetExitCodeProcess(pi.hProcess, &code);
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  if (code != 0) {
+    why = "curl: codigo " + std::to_string(code);
+    return -1;
+  }
+  const long long n = (long long)std::filesystem::file_size(tmp, ec);
+  return ec ? -1 : n;
+}
+}  // namespace
+
 long long HttpDownload(const std::string& url, const std::wstring& headers,
                        const std::filesystem::path& out, bool append,
                        const std::function<void(long long)>& progress) {
+  std::error_code size_ec;
+  const auto out_start = append && std::filesystem::exists(out, size_ec) ? std::filesystem::file_size(out, size_ec) : 0;
   std::wstring next(url.begin(), url.end());
   std::wstring first_host;
   long long written = -1;
   const std::wstring start = next;
   std::string why;
-  for (int mode = 0; mode < 3 && written < 0; ++mode) {
+  // PRUEBA: DBZ3_TEST_NET_SKIP=3 baja directamente con curl (como en GetAnyRoute)
+  static const int skip = std::getenv("DBZ3_TEST_NET_SKIP") ? std::atoi(std::getenv("DBZ3_TEST_NET_SKIP")) : 0;
+  for (int mode = skip; mode < 3 && written < 0; ++mode) {
   next = start;
   first_host.clear();
   bool answered = false;   // el servidor contesto (aunque fuese con un error): no se prueba otra via
@@ -489,6 +550,28 @@ long long HttpDownload(const std::string& url, const std::wstring& headers,
   }
   WinHttpCloseHandle(session);
   if (answered) break;
+  }
+  if (written < 0 && why.rfind("HTTP 4", 0) != 0) {   // corte, disco o red: curl (un 4xx no lo arregla otra via)
+    REXLOG_WARN("dbz3 red: descarga por WinHTTP fallida ({}); se reintenta con curl", why);
+    std::error_code ec;
+    std::filesystem::resize_file(out, out_start, ec);   // fuera lo que dejo a medias en este fichero
+    if (!append) std::filesystem::remove(out, ec);
+    const std::filesystem::path tmp = out.string() + ".parte";
+    std::filesystem::remove(tmp, ec);
+    std::string cw;
+    const long long n = CurlDownloadWin(url, std::string(headers.begin(), headers.end()), tmp, progress, cw);
+    if (n >= 0) {
+      std::ifstream in(tmp, std::ios::binary);
+      std::ofstream o(out, std::ios::binary | (append ? std::ios::app : std::ios::trunc));
+      o << in.rdbuf();
+      in.close();
+      o.close();
+      if (o) written = n;
+      else why = "disco lleno al copiar";
+    } else {
+      why += ", " + cw;
+    }
+    std::filesystem::remove(tmp, ec);
   }
   if (written < 0) {
     REXLOG_WARN("dbz3 red: descarga fallida ({})", why);

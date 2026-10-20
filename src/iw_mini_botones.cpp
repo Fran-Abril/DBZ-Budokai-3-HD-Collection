@@ -269,6 +269,8 @@ struct Juego {
   // DEFENSE SUCCESS RATE, TOTAL SCORE), cifras cian 5/5 t05 (5x4, % en la fila 2), cifras naranjas 5/5 t04 (11 de 32)
   // y EARNED! / TOTAL / ZENI de 333/0 (t19, t20, t07)
   P::Imagen rot[3], cif_c, cif_n, earned, total, zeni;
+  P::Imagen titulo;   // s1 F04.3: titulo del minijuego (DATA_USA 335 + clave - 0x7D0, hijo 1)
+  P::Imagen cif_e;    // s1 F04.3: 5/5 t06, cifras cian de 32 x 40 (EARNED en iw_nb013_d)
 };
 
 int Azar();   // mas abajo
@@ -298,19 +300,29 @@ void StoreF(uint8_t* base, uint32_t a, float f) {
   REX_STORE_U32(a, u);
 }
 
+// ELF de IW del jugador (carpeta o ISO, USA o europeo). Europeo SLES_553.47 (medido con las dos copias, 2026-10-19): las
+// tablas de los minijuegos van 0x7B0 mas adelante (las de NB007, 0x800) y los huecos de NB012 en otra unidad (USA = EU*10+12
+// salvo 23 de 1200, que el americano retoco). Devuelve el puntero al dato de la direccion USA `a` (o nullptr).
+struct ElfIW {
+  std::vector<uint8_t> e;
+  bool eu = false;
+  const uint8_t* Off(uint32_t a) const {
+    const size_t o = size_t(a) - 0x100000 + 0x80 + (eu ? (a < 0x47D000 ? 0x800 : 0x7B0) : 0);
+    return o + 0x400 <= e.size() ? e.data() + o : nullptr;
+  }
+};
+bool AbrirElfIW(ElfIW& x, std::string& error) {
+  x.e = P::LeerElf(P::BuscarIW());
+  x.eu = x.e.size() == 3786800;   // SLUS_218.42 = 3784752 B
+  if (x.e.empty()) error = "sin el ejecutable de Infinite World (SLUS_218.42 o SLES_553.47)";
+  return !x.e.empty();
+}
+
 // Tablas del ELF de IW del jugador (little endian; direccion = desplazamiento - 0x100000 + 0x80).
 bool LeerElf(Juego& j, std::string& error) {
-  const std::filesystem::path iw = P::BuscarIW();
-  std::ifstream f(iw / "SLUS_218.42", std::ios::binary);
-  if (!f) {
-    error = "sin SLUS_218.42 de Infinite World (USA)";
-    return false;
-  }
-  std::vector<uint8_t> e((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-  auto off = [&](uint32_t a) -> const uint8_t* {
-    const size_t o = size_t(a) - 0x100000 + 0x80;
-    return o + 0x400 <= e.size() ? e.data() + o : nullptr;
-  };
+  ElfIW elf;
+  if (!AbrirElfIW(elf, error)) return false;
+  auto off = [&](uint32_t a) { return elf.Off(a); };
   const Modulo2& m = *j.m;
   for (int l = 0; l < 2; ++l) {
     const uint8_t* s = off(m.seq + uint32_t(j.dif) * 0x70 + uint32_t(l) * 0x32);
@@ -369,6 +381,7 @@ bool Cargar(Juego& j, std::string& error) {
       for (int i = 0; i < 3; ++i) j.rot[i] = P::TexturaAmt(r7, 20 + i);
       j.cif_c = P::TexturaAmt(r5, 5);
       j.cif_n = P::TexturaAmt(r5, 4);
+      if (P::CuantasAmt(r5) > 6) j.cif_e = P::TexturaAmt(r5, 6);   // s1 F04.3: cifras cian grandes de EARNED
     }
     const std::vector<uint8_t> r333 = P::HijoAmb(usa.Entrada(333), 0);
     if (P::CuantasAmt(r333) > 20) {
@@ -376,6 +389,8 @@ bool Cargar(Juego& j, std::string& error) {
       j.total = P::TexturaAmt(r333, 20);
       j.zeni = P::TexturaAmt(r333, 7);
     }
+    if (j.clave >= 0x7D0 && j.clave <= 0x7E1)   // s1 F04.3
+      j.titulo = P::TexturaAmt(P::HijoAmb(usa.Entrada(size_t(P::kTituloMini0 + j.clave - 0x7D0)), 1), 0);
   }
   const std::vector<uint8_t> h4 = P::HijoAmb(usa.Entrada(4), 0);
   if (P::CuantasAmt(h4) > 50) {
@@ -942,17 +957,26 @@ class Panel : public rex::ui::ImGuiDialog {
     earned_ = ps2::Crear(j.earned);
     total_ = ps2::Crear(j.total);
     zeni_ = ps2::Crear(j.zeni);
+    titulo_ = ps2::Crear(j.titulo);
+    cif_e_ = ps2::Crear(j.cif_e);
   }
   static void Pieza(ImDrawList* dl, const ps2::Tex& t, ImVec2 c, float k) {
     if (t) dl->AddImage(t.id(), ImVec2(c.x - t.w * k / 2, c.y - t.h * k / 2), ImVec2(c.x + t.w * k / 2, c.y + t.h * k / 2));
   }
   // s9: panel de resultado de IW (iw_nb013_d, 800x600 -> 640x448): marco 16..624 x 10..438, rotulos en x 68 (centros y
   // 73 / 138 / 202) con su % a la derecha (x 604, 22 mas abajo), EARNED! en y 347 y TOTAL en 403 con la cifra naranja
-  // hasta x 470 y ZENI en x 532. [H] sin el titulo de la mision (texto del #DMD sin leer aqui)
+  // hasta x 470 y ZENI en x 532. El titulo del minijuego, arriba (s1 F04.3)
   template <class At>
   void DibujarResultado(ImDrawList* fg, At at, const Juego& j) {
     fg->AddRectFilled(at(16, 10), at(624, 438), IM_COL32(8, 40, 72, 175), 14);
     fg->AddRect(at(16, 10), at(624, 438), IM_COL32(110, 200, 255, 230), 14, 0, 3);
+    // s1 F04.3: el titulo del minijuego arriba, centrado (medido en iw_nb013_d, 800x600: la letra azul de la textura 346/1
+    // (visible x 2..338, y 11..43 de 340x46) ocupa x 180..620 e y 34..65 -> en 640x448, 1,065 de ancho por 0,91 de alto
+    // y centro de la parte visible en (320, 37))
+    if (titulo_) {
+      const float w = titulo_.w * 1.065f, h = titulo_.h * 0.91f, y0 = 37 - 27 * 0.91f;
+      fg->AddImage(titulo_.id(), at(320 - w / 2, y0), at(320 + w / 2, y0 + h));
+    }
     auto img = [&](const ps2::Tex& tx, float x, float cy, float alto = 0) {   // alto > 0: escalado a esa altura
       if (!tx) return;
       const float h = alto > 0 ? alto : float(tx.h), w = tx.w * h / float(tx.h);
@@ -961,13 +985,23 @@ class Panel : public rex::ui::ImGuiDialog {
     // cifras cian (5x4 de 25,6x22): g 0-9, 10 = %
     auto cian = [&](int g, float xd, float cy) {   // xd = borde derecho; devuelve el ancho
       const float cw = 25.6f, ch = 22.0f;
-      const int col = g < 10 ? g % 5 : 2, row = g < 10 ? g / 5 : 2;
-      fg->AddImage(cif_c_.id(), at(xd - cw, cy - ch / 2), at(xd, cy + ch / 2), ImVec2(col * cw / 128, row * ch / 88),
-                   ImVec2((col + 1) * cw / 128, (row + 1) * ch / 88));
+      if (g == 10) {   // s1 F04.3: el % no esta en la rejilla (alfa medido en 5/5 t05: x 48..74, y 49..70)
+        fg->AddImage(cif_c_.id(), at(xd - 27, cy - 11), at(xd, cy + 11), ImVec2(48 / 128.0f, 49 / 88.0f),
+                     ImVec2(75 / 128.0f, 71 / 88.0f));
+        return 25.0f;
+      }
+      // s1 F04.3: las celdas medidas por el alfa (la rejilla de 25,6 x 22 cortaba los glifos y metia trozos del vecino):
+      // centros x 13 / 36 / 60,5 / 85 / 109,5, filas y 0..23 y 24..47
+      constexpr float kCx[5] = {13.0f, 36.0f, 60.5f, 85.0f, 109.5f};
+      const int col = g % 5, row = g / 5;
+      const float u0 = (kCx[col] - 12) / 128, u1 = (kCx[col] + 12) / 128, v0 = row * 24 / 88.0f, v1 = (row * 24 + 23) / 88.0f;
+      fg->AddImage(cif_c_.id(), at(xd - 24, cy - ch / 2), at(xd, cy + ch / 2), ImVec2(u0, v0), ImVec2(u1, v1));
+      (void)cw;
       return 19.0f;   // avance del glifo (la celda trae margen; IW las junta)
     };
+    const ps2::Tex* grandes = &cif_n_;   // s1 F04.3: EARNED con las cifras cian grandes (5/5 t06), TOTAL naranjas (t04)
     auto naranja = [&](int g, float xd, float cy) {   // 11 cifras de 32 x 40
-      fg->AddImage(cif_n_.id(), at(xd - 32, cy - 20), at(xd, cy + 20), ImVec2(g * 32 / 352.0f, 0), ImVec2((g + 1) * 32 / 352.0f, 1));
+      fg->AddImage(grandes->id(), at(xd - 32, cy - 20), at(xd, cy + 20), ImVec2(g * 32 / 352.0f, 0), ImVec2((g + 1) * 32 / 352.0f, 1));
       return 32.0f;
     };
     auto numero = [&](int v, float xd, float cy, bool pct) {
@@ -989,7 +1023,9 @@ class Panel : public rex::ui::ImGuiDialog {
     for (float y : {347.0f, 403.0f})   // las franjas claras de EARNED y TOTAL
       fg->AddRectFilled(at(28, y - 24), at(612, y + 24), IM_COL32(200, 215, 230, 70), 18);
     img(earned_, 38, 347, 34);
+    if (cif_e_) grandes = &cif_e_;
     numero(j.puntos, 470, 347, false);
+    grandes = &cif_n_;
     img(zeni_, 520, 347, 28);
     img(total_, 38, 403, 34);
     numero(j.puntos, 470, 403, false);
@@ -1126,6 +1162,7 @@ class Panel : public rex::ui::ImGuiDialog {
   ps2::Tex objetivo_, ready_, start_, hit_, miss_, clear_, failed_, aro_, relleno_, barra_;
   ps2::Tex banda_, aro4_, marco4_, verde4_, sil_[2], caras_;   // s9: HUD de IW (DATA_USA 4/0)
   ps2::Tex rot_[3], cif_c_, cif_n_, earned_, total_, zeni_;     // s9: panel de resultado de IW
+  ps2::Tex titulo_, cif_e_;                                     // s1 F04.3
 };
 
 void CreatePanel() {
@@ -1427,16 +1464,9 @@ bool CargarB(JuegoB& j, std::string& error) {
     constexpr float kPremio[6] = {100, 6500, 6800, 7100, 7400, 7700}, kMult[6] = {0.6f, 0.8f, 1.0f, 1.3f, 1.6f, 2.0f};
     for (int k = 0; k < 6; ++k) j.pts[k] = kPremio[k], j.mult[k] = kMult[k];
   }
-  std::ifstream f(P::BuscarIW() / "SLUS_218.42", std::ios::binary);
-  if (!f) {
-    error = "sin SLUS_218.42 de Infinite World (USA)";
-    return false;
-  }
-  std::vector<uint8_t> e((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-  auto off = [&](uint32_t a) -> const uint8_t* {
-    const size_t o = size_t(a) - 0x100000 + 0x80;
-    return o + 0x400 <= e.size() ? e.data() + o : nullptr;
-  };
+  ElfIW elf;
+  if (!AbrirElfIW(elf, error)) return false;
+  auto off = [&](uint32_t a) { return elf.Off(a); };
   const ModuloB& m = *j.m;
   for (int r = 0; r < 20 && m.tipo != kBarrido; ++r) {
     const uint8_t* s = off(m.seq + uint32_t(j.dif) * 0xD0 + uint32_t(r) * 10);
@@ -1445,6 +1475,7 @@ bool CargarB(JuegoB& j, std::string& error) {
     for (int i = 0; i < 10; ++i) {
       j.seq[r][i] = s[i];
       if (!m.teclear) std::memcpy(&j.hueco[r][i], h + 4 * i, 4);
+      if (!m.teclear && elf.eu && j.hueco[r][i] > 0) j.hueco[r][i] = j.hueco[r][i] * 10 + 12;   // ver ElfIW
       // NB007 lleva tambien la cruceta (4 arriba, 5 derecha, 6 abajo, 7 izquierda, desde la dificultad 1)
       if (s[i] < (m.teclear ? 4 : 8) || s[i] > 15 || j.hueco[r][i] < 0 || j.hueco[r][i] > 3000) {
         error = "las tablas del ELF no son las de IW USA";
@@ -2132,9 +2163,10 @@ static void Sonda(uint8_t* base, uint32_t mgr, const char* quien) {
     float r[3] = {0, 0, 0};
     const bool ok = dbz3::anim::RaizActual(base, x, r);
     REXLOG_INFO("dbz3 s8 sonda {}: rol {} pos ({:.2f}, {:.2f}, {:.2f}) giro 0x{:04X} cadera {} ({:.2f}, {:.2f}, {:.2f})"
-                " clip 0x{:X} cuadro {}",
+                " clip 0x{:X} cuadro {} dibujo ({:.2f}, {:.2f}, {:.2f}) m00 {:.2f} m02 {:.2f}",
                 quien, rol, LoadF(base, x + 64), LoadF(base, x + 68), LoadF(base, x + 72),
-                uint16_t(REX_LOAD_U16(x + kMiradaA) + 15759), ok, r[0], r[1], r[2], g_cb_clip.load(), g_cb_frame.load());
+                uint16_t(REX_LOAD_U16(x + kMiradaA) + 15759), ok, r[0], r[1], r[2], g_cb_clip.load(), g_cb_frame.load(),
+                LoadF(base, x + 48), LoadF(base, x + 52), LoadF(base, x + 56), LoadF(base, x + 0), LoadF(base, x + 8));
   }
   REXLOG_INFO("dbz3 s8 sonda {}: camara ojo ({:.2f}, {:.2f}, {:.2f}) obj ({:.2f}, {:.2f}, {:.2f}) fov {:.3f} origen ({:.2f}, "
               "{:.2f}, {:.2f})",

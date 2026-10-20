@@ -7,7 +7,8 @@ r"""ranking.py - Ranking Elo por personaje desde combates.csv (el juego anota ca
 
 Mismo calculo que el del juego (src/modos.cpp, dbz3::modos::Ranking): K = 32, todos empiezan en 1000, los
 combates en el orden del archivo y sin espejos (mismo ID en los dos lados). ganador: 1 = lado 1, 2 = lado 2,
-0 = empate. Si al lado esta retos.csv (torre, supervivencia, kumite), tambien sale el mejor de cada reto.
+0 = empate. Columna 6 (com, opcional): lados que llevaba el ordenador (1 = lado 1, 2 = lado 2); el personaje del
+COM no entra en el ranking (issue #42). Si al lado esta retos.csv (torre, supervivencia, kumite), tambien sale el mejor de cada reto.
 """
 import argparse
 import csv
@@ -29,11 +30,12 @@ def nombre(i):
 
 
 def leer(ruta):
-    """(id1, id2, ganador) de cada combate; las lineas que no son de datos se saltan."""
+    """(id1, id2, ganador, com) de cada combate; las lineas que no son de datos se saltan."""
     with open(ruta, encoding="utf-8", errors="replace", newline="") as f:
         for fila in csv.reader(f):
             try:
-                yield int(fila[1]), int(fila[2]), int(fila[3])
+                com = int(fila[5]) if len(fila) > 5 and fila[5].strip() else 0
+                yield int(fila[1]), int(fila[2]), int(fila[3]), com
             except (IndexError, ValueError):
                 continue
 
@@ -41,14 +43,21 @@ def leer(ruta):
 def ranking(filas):
     """[(id, elo, ganados, perdidos, empates)] de mas a menos Elo (empates de Elo: por ID)."""
     elo, tab = {}, {}
-    for a, b, w in filas:
-        if a == b or a < 0 or b < 0:
+    for fila in filas:
+        a, b, w = fila[:3]
+        com = fila[3] if len(fila) > 3 else 0
+        if a == b or a < 0 or b < 0 or (com & 3) == 3:
             continue
-        ra, rb = elo.setdefault(a, 1000.0), elo.setdefault(b, 1000.0)
+        ra, rb = elo.get(a, 1000.0), elo.get(b, 1000.0)
         sa = 1.0 if w == 1 else 0.0 if w == 2 else 0.5
         ea = 1 / (1 + 10 ** ((rb - ra) / 400))
-        elo[a], elo[b] = ra + 32 * (sa - ea), rb - 32 * (sa - ea)
-        for i, s in ((a, sa), (b, 1 - sa)):
+        if not com & 1:
+            elo[a] = ra + 32 * (sa - ea)
+        if not com & 2:
+            elo[b] = rb - 32 * (sa - ea)
+        for i, s, c in ((a, sa, com & 1), (b, 1 - sa, com & 2)):
+            if c:
+                continue
             t = tab.setdefault(i, [0, 0, 0])
             t[0 if s == 1 else 1 if s == 0 else 2] += 1
     out = [(i, int(math.floor(elo[i] + 0.5)), *tab[i]) for i in tab]   # lround del juego
@@ -76,6 +85,8 @@ def selftest():
     assert r == [(0, 1016, 1, 0, 0), (7, 984, 0, 1, 0)], r
     r = ranking([(0, 7, 1), (0, 7, 1), (7, 0, 1)])            # el Elo se conserva y el que pierde mas abajo
     assert sum(x[1] for x in r) == 2000 and r[0][0] == 0 and r[0][2:] == (2, 1, 0), r
+    assert ranking([(0, 7, 2, 2)]) == [(0, 984, 0, 1, 0)]       # #42: el personaje del COM no entra
+    assert ranking([(0, 7, 1, 3)]) == []                        # COM contra COM: nada
     assert ranking([(5, 5, 1)]) == []                           # espejo fuera
     r = ranking([(1, 2, 0)])                                    # empate entre iguales: nadie se mueve
     assert r == [(1, 1000, 0, 0, 1), (2, 1000, 0, 0, 1)], r

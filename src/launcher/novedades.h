@@ -20,6 +20,21 @@ struct NewsBlock {
   int count;
 };
 
+inline constexpr NewsItem kNews1513[] = {
+    {"Budokai 2 (experimental)", "Budokai 2 (experimental)",
+     "Vuelta del combate con el iris de la Bola de Dragón, ficha de cápsula como el original y arreglado un cierre al empezar el tablero.",
+     "Return from battle with the Dragon Ball iris, capsule card like the original and a crash when the board starts fixed."},
+    {"Leyenda de Mr. Satán", "Legend of Mr. Satan",
+     "Escena previa de los Juegos de Cell y el ring de Cell entero de Budokai 1.",
+     "Cell Games intro scene and the full Cell ring from Budokai 1."},
+    {"Infinite World (experimental)", "Infinite World (experimental)",
+     "Vale también la ISO europea. Título de cada minijuego en el panel de resultados.",
+     "The European ISO works too. Each minigame's title on the results panel."},
+    {"Arreglos", "Fixes",
+     "Escenarios de PS2 en equipos sin Office, ranking de luchadores, un cierre con ports y cápsulas propias, y el pack HD reintenta y sigue la descarga si se corta.",
+     "PS2 stages on PCs without Office, fighter ranking, a crash with ports and custom capsules, and the HD pack retries and resumes if the download breaks."},
+};
+
 inline constexpr NewsItem kNews1512[] = {
     {"Escenarios", "Stages",
      "Los escenarios de Budokai 2, Budokai 1 e Infinite World se crean desde tu ISO sin instalar nada más (Templo de Kami, Montañas nevadas...).",
@@ -134,6 +149,7 @@ inline constexpr NewsItem kNews145[] = {
 
 // Del mas nuevo al mas antiguo.
 inline constexpr NewsBlock kNewsBlocks[] = {
+    {"1.5.1.3", kNews1513, int(sizeof(kNews1513) / sizeof(kNews1513[0]))},
     {"1.5.1.2", kNews1512, int(sizeof(kNews1512) / sizeof(kNews1512[0]))},
     {"1.5.1.1", kNews1511, int(sizeof(kNews1511) / sizeof(kNews1511[0]))},
     {"1.5.1", kNews151, int(sizeof(kNews151) / sizeof(kNews151[0]))},

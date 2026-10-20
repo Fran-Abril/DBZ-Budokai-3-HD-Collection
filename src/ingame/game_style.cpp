@@ -18,6 +18,7 @@
 #include <rex/ui/immediate_drawer.h>
 
 #include "../launcher/launcher_state.h"
+#include "../launcher/settings.h"   // S1-F06: AspectMode (GuestImage)
 #include "../launcher/ui_kit.h"
 #include "../mods.h"
 #include "native_ui.h"
@@ -66,11 +67,41 @@ void OutlinedText(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, const ch
 
 }  // namespace
 
+Imagen GuestImage(const ImGuiIO& io) {
+  const float W = io.DisplaySize.x, H = io.DisplaySize.y;
+  Imagen g{ImVec2(0, 0), ImVec2(W, H)};
+  if (W <= 0 || H <= 0) return g;
+  static int cuadro = -1;   // se lee una vez por cuadro (se puede cambiar en el menu F1)
+  static bool estirar = false;
+  if (cuadro != ImGui::GetFrameCount()) {
+    cuadro = ImGui::GetFrameCount();
+    estirar = dbz3::settings::AspectMode() == "stretch";
+  }
+  if (estirar) return g;
+  if (W * 9.0f > H * 16.0f) {   // mas ancha que 16:9: bandas a los lados
+    const float w = H * 16.0f / 9.0f;
+    g.p0.x = (W - w) * 0.5f;
+    g.p1.x = g.p0.x + w;
+  } else {                      // mas alta (4:3, 16:10): bandas arriba y abajo
+    const float h = W * 9.0f / 16.0f;
+    g.p0.y = (H - h) * 0.5f;
+    g.p1.y = g.p0.y + h;
+  }
+  return g;
+}
+
 Area GameArea(const ImGuiIO& io) {
+  // S1-F06: el area 4:3 de los menus del juego es el centro de su imagen 16:9 (3/4 del ancho, todo el alto)
   Area a;
-  const float h = io.DisplaySize.y, w = h * 4.0f / 3.0f;
-  a.p0 = ImVec2((io.DisplaySize.x - w) * 0.5f, 0.0f);
-  a.p1 = ImVec2(a.p0.x + w, h);
+  const Imagen g = GuestImage(io);
+  const ImVec2 sz = g.Size();
+  float h = sz.y, w = h * 4.0f / 3.0f;
+  if (w > sz.x) {   // solo con "stretch" en una ventana mas alta que 4:3: que quepa a lo ancho
+    w = sz.x;
+    h = w * 0.75f;
+  }
+  a.p0 = ImVec2(g.p0.x + (sz.x - w) * 0.5f, g.p0.y + (sz.y - h) * 0.5f);
+  a.p1 = ImVec2(a.p0.x + w, a.p0.y + h);
   a.s = h / 900.0f;
   return a;
 }
@@ -308,9 +339,13 @@ void Backdrop(ImDrawList* dl, const Area& a, const char* image) {
       DrawPic(dl, p, a.p0, a.p1, ImVec4(0, 0, w, h));
       return;
     }
-    const ImVec2 d = ImGui::GetIO().DisplaySize;
-    const float k = std::max(d.x / w, d.y / h), x0 = (d.x - w * k) * 0.5f, y0 = (d.y - h * k) * 0.5f;
+    // S1-F06: a toda la imagen del juego (en 4:3 / 16:10 no tapa sus bandas negras)
+    const Imagen g = GuestImage(ImGui::GetIO());
+    const ImVec2 d = g.Size();
+    const float k = std::max(d.x / w, d.y / h), x0 = g.p0.x + (d.x - w * k) * 0.5f, y0 = g.p0.y + (d.y - h * k) * 0.5f;
+    dl->PushClipRect(g.p0, g.p1, true);
     DrawPic(dl, p, ImVec2(x0, y0), ImVec2(x0 + w * k, y0 + h * k), ImVec4(0, 0, w, h));
+    dl->PopClipRect();
     return;
   }
   dl->AddRectFilledMultiColor(a.p0, a.p1, IM_COL32(250, 170, 70, 255), IM_COL32(250, 170, 70, 255),
@@ -327,7 +362,10 @@ void Host(ImDrawList* dl, const Area& a, const char* image, float x, float y, bo
   const float k = 1.33f * a.s;   // como los Kaio del Duelo
   // con bordes se corta en el area 4:3 (las tiras lo tapan); sin ellos, en la ventana
   if (Borders()) dl->PushClipRect(a.p0, a.p1, true);
-  else dl->PushClipRect(ImVec2(0, 0), ImGui::GetIO().DisplaySize, true);
+  else {   // S1-F06: en la imagen del juego
+    const Imagen g = GuestImage(ImGui::GetIO());
+    dl->PushClipRect(g.p0, g.p1, true);
+  }
   DrawPic(dl, p, a.At(x, y), ImVec2(a.At(x, y).x + p.w * k, a.At(x, y).y + p.h * k), ImVec4(0, 0, 0, 0),
           IM_COL32_WHITE, mirror);
   dl->PopClipRect();

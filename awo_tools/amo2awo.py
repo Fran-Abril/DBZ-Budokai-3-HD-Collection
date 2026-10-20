@@ -626,6 +626,92 @@ def le_awg_axes(buf, awg):
     return struct.unpack_from(">I", buf, awg + 0x14)[0]
 
 
+# S1-F03.2: un escenario PS2 cuyo segundo objeto del #MDD (B1, Ring de Cell: suelo del ring + 4 columnas) el juego HD
+# no dibuja (las altas viven en el registro anfitrion 16 y solo se pintan las sub-mallas del objeto 0; s9b). Sus
+# modelos se pegan al modelo 0 del objeto 0 (el terreno) como partes rigidas de su hueso raiz y sus texturas van detras
+# de las del objeto 0, igual que el cielo y las nubes de los campos de IW (campos_iw.py bin_campo).
+def _le_mdd(m, o):
+    return struct.unpack_from("<I", m, o)[0]
+
+
+def modelos_objeto(mdd, ob_i):
+    """(#AMT, [#AMO de cada sub-malla]) del objeto ob_i de un #MDD PS2 (bytes de cada bloque, del grafo de escena)."""
+    import escenarios_convertir as EC  # noqa: PLC0415 (mod center hd, en el path del que llama)
+    tam = dict(EC.bloques_mdd(mdd))
+    ob = _le_mdd(mdd, _le_mdd(mdd, 0x20) + 4 * ob_i)
+    tex = _le_mdd(mdd, ob + 0xA4)
+    n, a = _le_mdd(mdd, ob + 0x90), _le_mdd(mdd, ob + 0xA8)
+    mods = []
+    for s in range(n):
+        o = _le_mdd(mdd, _le_mdd(mdd, a + 4 * s) + 8)
+        mods.append(mdd[o:o + tam[o]])
+    return mdd[tex:tex + tam[tex]], mods
+
+
+class objeto_pegado:
+    """with objeto_pegado(EC, mdd, 1, saltar=(5,)): EC.escenario_b2(...)  -> los modelos del objeto 1 (salvo las
+    sub-mallas `saltar`, p. ej. la de colision) salen pegados al terreno (sub-malla 0 del objeto 0). Con ob_i = 0, las
+    demas sub-mallas del propio objeto 0 (mismo banco de texturas) se pegan a su sub-malla 0."""
+
+    def __init__(self, EC, mdd, ob_i=1, saltar=()):
+        import amt_ps2  # noqa: PLC0415
+        self.EC, self.amt_ps2 = EC, amt_ps2
+        self.tex0, mods0 = modelos_objeto(mdd, 0)
+        self.terreno = mods0[0]
+        tex1, mods1 = modelos_objeto(mdd, ob_i)
+        mismo = ob_i == 0
+        self.tex1 = None if mismo else tex1
+        n0 = 0 if mismo else _le_mdd(self.tex0, 0x10)
+        self.extra = [(m, n0) for k, m in enumerate(mods1) if k not in saltar and not (mismo and k == 0)]
+
+    def __enter__(self):
+        mod = sys.modules[__name__]
+        self.viejo_amo, self.viejo_pegar, self.viejo_blk = mod.convert_amo, mod.attach_rigid, self.EC.ps2hd.convert_block
+        conv_amo, pegar, conv = self.viejo_amo, self.viejo_pegar, self.viejo_blk
+        terreno, extra, tex0, tex1, amt = self.terreno, self.extra, self.tex0, self.tex1, self.amt_ps2
+
+        def convertir_amo(d, report=None, attach=()):
+            return conv_amo(d, report, extra if d == terreno else attach)
+
+        def convertir(d):
+            return amt.to_azt(d, extra=(tex1,)) if tex1 is not None and d == tex0 else conv(d)
+        mod.convert_amo = convertir_amo
+        mod.attach_rigid = lambda a, e, t: pegar(a, e, t, head=0)   # hueso 0 = raiz del terreno
+        self.EC.ps2hd.convert_block = convertir
+        return self
+
+    def __exit__(self, *exc):
+        mod = sys.modules[__name__]
+        mod.convert_amo, mod.attach_rigid = self.viejo_amo, self.viejo_pegar
+        self.EC.ps2hd.convert_block = self.viejo_blk
+        return False
+
+
+class _FuenteObjeto1:
+    """Fuente de escenarios (EC.IsoB2) cuyo #MDD sale con los dos primeros objetos cambiados (EC.objetos_zona_b)."""
+
+    def __init__(self, EC, fuente):
+        self.EC, self.f, self.juego = EC, fuente, fuente.juego
+
+    def piezas(self, grupo):
+        mdd, mad, mas, spx = self.f.piezas(grupo)
+        return self.EC.objetos_zona_b(mdd)[0], mad, mas, spx
+
+
+def escenario_ring_cell_b1(EC, fuente, grupo=11, saltar=(5,), convertir=None, **k):
+    """S1-F03.2: bin HD del Ring de Cell de Budokai 1 (grupo 11 de su DATA_EN.AFS) entero. Su #MDD lleva dos objetos
+    (variantes por el nombre de sus huesos: 0 = BBSELA, 1 = BBSELB); el ring de la Leyenda de Mr. Satan (losas
+    BBSELB_RING0 en y = 0..4, hierba BBSELB_GROUND en y = 0, acantilados, arboles) es el objeto 1 y sus 4 columnas
+    (75 de alto en (+-83,25, +-83,25)) son sus sub-mallas 1-4; la 5 es la caja de colision (2 huesos, como la del
+    objeto 0). El juego HD solo dibuja el objeto 0 y sus primeras sub-mallas: el objeto 1 pasa a ser el 0 y las
+    columnas se pegan a su terreno. Con el objeto 0 (BBSELA) el suelo de la variante A tapaba el ring a y = 61,5 y
+    solo asomaban las puntas de las columnas (medido en el juego, studies 1 F03)."""
+    f1 = _FuenteObjeto1(EC, fuente)
+    mdd = f1.piezas(grupo)[0]
+    with objeto_pegado(EC, mdd, 0, saltar=saltar):
+        return (convertir or EC.escenario_b2)(f1, grupo, **k)   # convertir: el escenario_b2 sin envolver
+
+
 def convert_file(src, dst):
     b = open(src, "rb").read()
     if b[:4] == b"#AMB":

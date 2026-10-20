@@ -14,13 +14,23 @@
 
 namespace dbz3::ingame::style {
 
-// Area 4:3 donde dibuja el juego (centrada en la ventana) y escala respecto a 1600x900.
+// Area 4:3 donde dibuja el juego (centrada en la imagen del juego) y escala respecto a 1600x900.
 struct Area {
   ImVec2 p0, p1;
-  float s = 1.0f;   // 1.0 = ventana de 900 px de alto
+  float s = 1.0f;   // 1.0 = area de 900 px de alto
   ImVec2 At(float x, float y) const { return ImVec2(p0.x + x * s, p0.y + y * s); }   // en px de 1200x900
 };
 Area GameArea(const ImGuiIO& io);
+// S1-F06: rectangulo de la imagen del juego (16:9) en la ventana, como la coloca el presentador del SDK
+// (rexglue-sdk ui/presenter.cpp, present_letterbox = dbz3_aspect "keep"): cabe entera, con bandas arriba y abajo en
+// una ventana mas alta que 16:9 (4:3, 16:10, Steam Deck) y a los lados en una mas ancha; con "stretch" llena la
+// ventana. Antes el area 4:3 se calculaba con el alto de la VENTANA: en 4:3 todo el HUD propio salia un 33 % mas
+// grande y fuera de la imagen. Lo que proyecta el 3D (ps2::CamaraCombate) o centra en pantalla debe usar esto.
+struct Imagen {
+  ImVec2 p0, p1;
+  ImVec2 Size() const { return ImVec2(p1.x - p0.x, p1.y - p0.y); }
+};
+Imagen GuestImage(const ImGuiIO& io);
 
 // Imagen <nombre>.png: primero la de un mod activo (mods/*/ui_ingame/), si no la de serie
 // (ingame_ui/). Sin ninguna, w = 0. Hilo de dibujo.

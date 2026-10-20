@@ -1750,6 +1750,7 @@ class Panel : public rex::ui::ImGuiDialog {
       // aplica: el monedero es el comun del proyecto (rpg.cpp, tope propio).
       r.zeni = r.puntos;
       if (mr.clave == 0x7D3) r.ladrillos = mr.monedas;   // fila BRICKS DESTROYED (334/1 t17, fila 2)
+      r.clave_mini = mr.clave;                            // s1 F04.3: titulo del minijuego arriba
       dbz3::rpg::Premio(r.zeni);
       for (const CasillaDM& c : dm->casillas) {   // su escena de despues (FD08B tras el 10, la nave de Namek)
         if (c.tipo == 0 && c.clave == mr.clave && mr.superado) g_iw_despues = VideoIW(*dm, 0, c.indice, true);
@@ -1766,6 +1767,7 @@ class Panel : public rex::ui::ImGuiDialog {
       hecho = true;
       ResultadoDM r;
       r.segundos = 95, r.puntos = r.zeni = 4200, r.rango = 3, r.ladrillos = 37, r.nuevo_record = true;
+      r.clave_mini = 0x7D3;   // s1 F04.3: con su titulo ("Destroy the bricks!")
       g_iw_res = r;
       g_iw_vista = 2;
       ++g_cambio;

@@ -814,7 +814,8 @@ def rotulo(texto, w=288, h=48):
     """Nombre como los rotulos del selector: letra redondeada estrechada para caber, marron con borde blanco."""
     from PIL import Image, ImageDraw, ImageFilter, ImageFont
     k = 4
-    font = ImageFont.truetype(str(FUENTE), 38 * k)
+    from capsulas import load_font  # noqa: PLC0415 (Arial Rounded viene con Office: sin ella, Roboto del zip)
+    font = load_font(str(FUENTE), 38 * k)
     x0, y0, x1, y1 = font.getbbox(texto)
     m = Image.new("L", (x1 - x0 + 16 * k, 48 * k))
     ImageDraw.Draw(m).text((8 * k - x0, (48 * k - (y1 - y0)) // 2 - y0), texto, font=font, fill=255)

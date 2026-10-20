@@ -24,7 +24,9 @@
 #include <toml++/toml.hpp>
 
 #include <atomic>
+#include <bit>        // S1-F07: std::bit_cast (guarda de sub_821117B8)
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -198,6 +200,48 @@ DBZ3_HOOK_EU(sub_82155990) {
       static std::atomic<int> avisos{0};
       if (avisos.fetch_add(1) < 4)
         REXLOG_WARN("dbz3 ports: nodo de efecto {} reutilizado aun en la lista ({:08X}): se saca antes", i, node);
+    }
+  }
+  orig(ctx, base);
+}
+
+// S1-F07 (F07.1, cierre lr 0x8210C974; issue #33, dbz3_061.log de 1.4.5.2 con 16 ports de capsulas propias):
+// sub_8210C700 (tick del luchador X) llama a sub_821117B8(X) cuando X+3256 - X+6220 pasa de un tope. Si el temporizador
+// X+6220 supera la constante 0x8201F60C (EU 0x8201F604), sub_821117B8 busca en la lista del luchador (P = *(X+2932):
+// cuenta P+40, tabla *(P+44) de 8 B {u16 tipo, s16 indice, u32 tabla}) la de tipo 1 y lee el u16 de
+// tabla + 16 * indice - 16 para el evento 9 de sub_820D85A8 (despues sub_82122488(1, 33)); luego X+6224, X+8193 = 1 y
+// X+6220 = constante 0x820007CC. Un port sin esa entrada trae tabla 0: lectura de 0x0 y cierre (r10 = r11 = 0x10 en el
+// log, justo tras lhz r11,-16(r11)). Con la lista mala se deja X+6220 igual al tope: con t == tope la funcion salta el
+// evento (ble) y hace el resto, como siempre. DBZ3_TEST_F07_LISTA=1 lo fuerza en cualquier luchador (prueba).
+namespace {
+bool ListaEvento9Valida(uint8_t* base, uint32_t x) {
+  static const bool forzar = std::getenv("DBZ3_TEST_F07_LISTA") != nullptr;
+  if (forzar) return false;
+  const auto ok = [](uint32_t a) { return a >= 0x00100000u && a < 0xF0000000u; };
+  const uint32_t p = REX_LOAD_U32(x + 2932);
+  if (!ok(p)) return false;
+  const int32_t n = int32_t(REX_LOAD_U32(p + 40));
+  uint32_t e = REX_LOAD_U32(p + 44);
+  if (!ok(e)) return false;
+  for (int32_t i = 0; i < n && i < 4096; ++i)   // como el juego: avanza mientras no sea de tipo 1
+    if (REX_LOAD_U16(e) != 1) e += 8;
+  if (!ok(e)) return false;
+  const uint32_t tabla = REX_LOAD_U32(e + 4);
+  const uint32_t a = tabla + uint32_t(int32_t(int16_t(REX_LOAD_U16(e + 2)))) * 16u - 16u;
+  return ok(tabla) && ok(a);
+}
+}  // namespace
+DBZ3_HOOK_EU(sub_821117B8) {
+  if (const uint32_t x = ctx.r3.u32) {
+    constexpr dbz3::GA kTope = 0x8201F60C;
+    const float t = std::bit_cast<float>(REX_LOAD_U32(x + 6220));
+    const uint32_t tope_bits = REX_LOAD_U32(kTope);
+    if (t > std::bit_cast<float>(tope_bits) && !ListaEvento9Valida(base, x)) {
+      static std::atomic<int> avisos{0};
+      if (avisos.fetch_add(1) < 8)
+        REXLOG_WARN("dbz3 ports: luchador {:08X} (id {}) sin la entrada de tipo 1 en su lista {:08X}: se salta su "
+                    "evento 9 (antes, cierre en lr 0x8210C974)", x, REX_LOAD_U32(x + 7420), REX_LOAD_U32(x + 2932));
+      REX_STORE_U32(x + 6220, tope_bits);
     }
   }
   orig(ctx, base);

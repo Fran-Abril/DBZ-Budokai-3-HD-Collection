@@ -986,19 +986,27 @@ int Ranking(Puesto* out, int max) {
   std::map<int, Puesto> p;
   std::string line;
   while (std::getline(in, line)) {
-    int a = -1, b = -1, w = -1;
-    if (std::sscanf(line.c_str(), "%*[^,],%d,%d,%d", &a, &b, &w) != 3 || a == b || a < 0 || b < 0) continue;
-    const double ra = elo.try_emplace(a, 1000.0).first->second, rb = elo.try_emplace(b, 1000.0).first->second;
+    int a = -1, b = -1, w = -1, mot = 0, com = 0;   // S1-F10 (#42): 6a columna com (lineas viejas: 0 = los dos cuentan)
+    if (std::sscanf(line.c_str(), "%*[^,],%d,%d,%d,%d,%d", &a, &b, &w, &mot, &com) < 3 || a == b || a < 0 || b < 0)
+      continue;
+    const bool cuenta_a = !(com & 1), cuenta_b = !(com & 2);   // el personaje que llevaba el COM no entra
+    if (!cuenta_a && !cuenta_b) continue;
+    const auto it_a = elo.find(a), it_b = elo.find(b);
+    const double ra = it_a != elo.end() ? it_a->second : 1000.0, rb = it_b != elo.end() ? it_b->second : 1000.0;
     const double sa = w == 1 ? 1.0 : w == 2 ? 0.0 : 0.5;
     const double ea = 1.0 / (1.0 + std::pow(10.0, (rb - ra) / 400.0));
-    elo[a] = ra + 32.0 * (sa - ea);
-    elo[b] = rb - 32.0 * (sa - ea);
-    Puesto& pa = p[a];
-    Puesto& pb = p[b];
-    pa.id = a;
-    pb.id = b;
-    (w == 1 ? pa.ganados : w == 2 ? pa.perdidos : pa.empates)++;
-    (w == 2 ? pb.ganados : w == 1 ? pb.perdidos : pb.empates)++;
+    if (cuenta_a) {
+      elo[a] = ra + 32.0 * (sa - ea);
+      Puesto& pa = p[a];
+      pa.id = a;
+      (w == 1 ? pa.ganados : w == 2 ? pa.perdidos : pa.empates)++;
+    }
+    if (cuenta_b) {
+      elo[b] = rb - 32.0 * (sa - ea);
+      Puesto& pb = p[b];
+      pb.id = b;
+      (w == 2 ? pb.ganados : w == 1 ? pb.perdidos : pb.empates)++;
+    }
   }
   std::vector<Puesto> v;
   for (auto& [id, q] : p) {
@@ -1037,8 +1045,9 @@ bool CalcularPerfil(Perfil* out) {
   Perfil p;
   std::string line;
   while (std::getline(in, line)) {
-    int a = -1, b = -1, w = -1;
-    if (std::sscanf(line.c_str(), "%*[^,],%d,%d,%d", &a, &b, &w) != 3 || a < 0 || b < 0) continue;
+    int a = -1, b = -1, w = -1, mot = 0, com = 0;   // S1-F10 (#42): COM contra COM (com & 1) no es un combate tuyo
+    if (std::sscanf(line.c_str(), "%*[^,],%d,%d,%d,%d,%d", &a, &b, &w, &mot, &com) < 3 || a < 0 || b < 0 || (com & 1))
+      continue;
     const double rb = elo.try_emplace(b, 1000.0).first->second;
     const double s = w == 1 ? 1.0 : w == 2 ? 0.0 : 0.5;
     yo += 32.0 * (s - 1.0 / (1.0 + std::pow(10.0, (rb - yo) / 400.0)));

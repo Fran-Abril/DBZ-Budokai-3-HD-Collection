@@ -1137,6 +1137,12 @@ bool EmpezarCombate(const std::shared_ptr<Datos>& d) {
       }
     }
     REXLOG_INFO("dbz3 iwmini: fin del combate (ganador {}): resultado listo", fin.ganador);
+    {   // s1 F04.4: la misma linea que los modulos (Terminar), para que la prueba en automatico del campo (MSNMW) la
+        // espere igual que la de los demas (antes el automatico acababa en META pero la prueba esperaba esta linea)
+      std::lock_guard<std::mutex> lk(g_mu);
+      REXLOG_INFO("dbz3 iwmini: modulo 0x{:X}: resultado listo (superado {}, rango {}, puntos {})", g_res.clave,
+                  g_res.superado, g_res.rango, g_res.puntos);
+    }
     g_estado = 3;
   });
   return true;
@@ -2076,6 +2082,7 @@ void MostrarResultadoFuera(const Resultado& mr) {
   r.rango = mr.rango;
   r.zeni = mr.puntos;   // el premio de IW (lo mismo que el mapa), solo ensenado
   if (mr.clave == 0x7D3) r.ladrillos = mr.monedas;
+  r.clave_mini = mr.clave;   // s1 F04.3: titulo del minijuego arriba
   {
     std::lock_guard<std::mutex> lk(g_rf_mu);
     g_rf_dm = dm;

@@ -143,10 +143,14 @@ class Panel : public rex::ui::ImGuiDialog {
         if (a && !antes) g_saltar = true;
         antes = a;
       }
-    const float t = g_t.load(), w = io.DisplaySize.x, h = io.DisplaySize.y;
+    // S1-F06: bandas y rotulos medidos en la imagen del juego (g), no en la ventana: en 16:9 es lo mismo; en 4:3 o
+    // 16:10 la imagen va con bandas negras y antes la de abajo y los rotulos caian fuera de ella.
+    const S::Imagen g = S::GuestImage(io);
+    const float t = g_t.load(), w = io.DisplaySize.x, h = io.DisplaySize.y, gw = g.Size().x;
     const float abre = Suave(std::min(t * 10.0f, (1.0f - t) * 10.0f));   // las bandas entran y salen en 1 s
     const S::Area a = S::GameArea(io);
-    const float arriba = (a.p0.y + 170.0f * a.s) * abre, abajo = h * 0.12f * abre;   // la de arriba tapa el marcador
+    const float arriba = g.p0.y + 170.0f * a.s * abre;   // la de arriba tapa el marcador
+    const float abajo = (h - g.p1.y) + g.Size().y * 0.12f * abre;
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     dl->AddRectFilled(ImVec2(0, 0), ImVec2(w, arriba), IM_COL32(0, 0, 0, 255));
     dl->AddRectFilled(ImVec2(0, h - abajo), ImVec2(w, h), IM_COL32(0, 0, 0, 255));
@@ -158,8 +162,10 @@ class Panel : public rex::ui::ImGuiDialog {
       rotulo = g_rotulo[plano];
     }
     if (plano == 2) rotulo = std::string("VS  ") + rotulo;
-    if (!rotulo.empty()) S::MenuText(dl, ImVec2(w * 0.5f, h - abajo * 0.5f), 40.0f * a.s, rotulo.c_str(), true, false);
-    S::HelpLine(dl, ImVec2(w * 0.86f, arriba * 0.5f), 36.0f * a.s, {{"A", dbz3::i18n::T("Saltar", "Skip")}});
+    const float banda = g.Size().y * 0.12f;   // S1-F06
+    if (!rotulo.empty())
+      S::MenuText(dl, ImVec2(g.p0.x + gw * 0.5f, g.p1.y - banda * 0.5f), 40.0f * a.s, rotulo.c_str(), true, false);
+    S::HelpLine(dl, ImVec2(g.p0.x + gw * 0.86f, g.p0.y + 85.0f * a.s), 36.0f * a.s, {{"A", dbz3::i18n::T("Saltar", "Skip")}});
   }
 };
 

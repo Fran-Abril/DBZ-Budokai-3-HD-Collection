@@ -88,6 +88,9 @@ ImFont* AddFont(ImFontAtlas* atlas, const std::string& path, float size,
     ic.GlyphMinAdvanceX = size * 1.1f;
     atlas->AddFontFromFileTTF(icons.c_str(), size * 0.92f, &ic, kIconRanges);
   }
+  // S1-F10 (#25): sin la fuente de iconos (Linux) ImGui pintaba su caracter de relleno ('?' o U+FFFD) en cada icono
+  // del launcher. Con un espacio de relleno el icono no se ve y el texto de al lado queda limpio.
+  if (f && icons.empty()) f->FallbackChar = ImWchar(' ');
   return f;
 }
 
@@ -100,6 +103,15 @@ void LoadFonts(ImFontAtlas* atlas) {
       "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
       "/usr/share/fonts/TTF/DejaVuSans.ttf",
       "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+      // S1-F10 (#25): Arch/CachyOS, Fedora, Debian y SteamOS sin DejaVu ni Liberation (antes caia a la fuente de
+      // ImGui, sin tildes: '?' en cada letra acentuada)
+      "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+      "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+      "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+      "/usr/share/fonts/google-noto-vf/NotoSans[wght].ttf",
+      "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+      "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
+      "/usr/share/fonts/cantarell/Cantarell-VF.otf",
       "Z:\\usr\\share\\fonts\\truetype\\dejavu\\DejaVuSans.ttf",
   });
   if (regular.empty()) {
@@ -113,6 +125,10 @@ void LoadFonts(ImFontAtlas* atlas) {
       "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
       "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
       "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+      "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",   // S1-F10 (#25)
+      "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+      "/usr/share/fonts/google-noto/NotoSans-Bold.ttf",
+      "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
   });
   const std::string black = FirstExisting({
       "C:\\Windows\\Fonts\\seguibl.ttf",

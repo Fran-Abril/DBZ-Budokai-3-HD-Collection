@@ -350,6 +350,23 @@ B12 = (("b2", 2, "Templo de Kami", "Templo (B2)", 1.0),          # (juego, grupo
        ("b1", 3, "Paramo al atardecer", "Páramo al atardecer", 1.0))            # grupo (x/z; 1.0 = original de B2)
 
 
+# S1-F03 (studies 1, Leyenda de Mr. Satan): el Ring de Cell de B1 entero, de la ISO del jugador. Su objeto 1 (la
+# variante con el ring, las losas y la hierba) pasa a objeto 0 y las 4 columnas se pegan al terreno
+# (awo_tools/amo2awo.py escenario_ring_cell_b1). La carpeta la busca pasarela.cpp (EscenarioB3, escenarios::PorMod).
+B12 = B12 + (("b1", 11, "Ring de Cell B1", "Ring de Cell (B1)", 1.0),)
+_escenario_b2_s1f03 = EC.escenario_b2
+
+
+def _escenario_s1f03(fuente, grupo, **k):
+    if grupo == 11 and fuente.juego == EC.JUEGOS["b1"][0]:
+        import amo2awo  # noqa: PLC0415 (awo_tools, en el path desde escenarios_convertir)
+        return amo2awo.escenario_ring_cell_b1(EC, fuente, grupo, convertir=_escenario_b2_s1f03, **k)
+    return _escenario_b2_s1f03(fuente, grupo, **k)
+
+
+EC.escenario_b2 = _escenario_s1f03   # S1-F03: fin
+
+
 def _sello(ruta):
     st = Path(ruta).stat()
     return "%s|%d|%d|v%d" % (Path(ruta).name, st.st_size, int(st.st_mtime), VERSION)

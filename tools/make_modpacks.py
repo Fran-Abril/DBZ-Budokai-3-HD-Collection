@@ -31,7 +31,8 @@ MODS = os.path.join(ROOT, "out", "build", "win-amd64-release", "mods")
 OUT = os.path.join(ROOT, "release_packs")
 CHARACTERS = ["cut_janemba", "cut_android19", "cut_zarbon", "cut_dodoria", "cut_guldo", "cut_jeice",
               "cut_burter"]
-KIT_ENTRIES = ["vista_heroe",   # Modo Heroe: vista previa 3D y traje de combate (cac/vista_heroe.py + awo_tools/injertar_pelo.py)
+KIT_ENTRIES = ["t3", "inventario_copias",   # studies 1 F08/F09: Tenkaichi 3 e inventario de las copias del jugador
+               "vista_heroe",   # Modo Heroe: vista previa 3D y traje de combate (cac/vista_heroe.py + awo_tools/injertar_pelo.py)
                "roster_build", "importar", "swap_b3", "texture_b3", "texture_dump_import", "texture_pack",
                "capsulas", "gritos", "voces", "iso", "model_render",
                "modkit_gui",      # DBZ3 HD Mod Kit: the no-console window over all of these

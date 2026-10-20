@@ -56,6 +56,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <atomic>
 
 #include "generated/dbz3_init.h"
 #include "eu_map.h"
@@ -76,6 +77,7 @@ int CapsulaAlAzar(int grupo, int personaje_b2);   // FUN_002835F0: 0 = ninguna
 bool CapsulaNueva(int id_b2);
 void GanarCapsula(int id_b2);
 bool VentanaPremio(ImDrawList* dl, const dbz3::ingame::style::Area& a, int id_b2, float cuadros, uint16_t pressed, bool auto_on);
+const std::vector<uint8_t>& ElfB2();   // S1-F01.2: el SLES/SLUS de la ISO del jugador (leido una vez)
 }
 namespace dbz3::pasarela::b2 {
 namespace {
@@ -1854,6 +1856,20 @@ struct Tex {
 };
 std::vector<Tex> g_tmapa, g_tfichas, g_ticonos, g_tadornos, g_tloc, g_thud;
 Tex g_tgo, g_tgoku, g_thoyo, g_tcabezas;
+// S1-F07.2: cierre intermitente al empezar el tablero (0xC0000005 en D3D12Core+0x8A119, RSI = texto "t\mods\o..."):
+// la escena (T155, M207...) se cerraba A MITAD de cuadro (`g_esc = Escena{}` tras sus AddImage) y destruia sus
+// ImmediateTexture; ImGui pintaba despues ese cuadro con el puntero ya liberado (D3D12ImmediateDrawer::Draw lee
+// texture->resource() de memoria reutilizada -> CreateShaderResourceView con basura). Las texturas que se sueltan
+// durante el dibujo van a esta papelera y se destruyen 3 cuadros despues, cuando ningun cuadro pendiente las usa.
+std::vector<std::pair<uint64_t, std::vector<Tex>>> g_papelera;
+uint64_t g_cuadro_b2 = 0;
+void Diferir(std::vector<Tex>&& v) {
+  if (!v.empty()) g_papelera.emplace_back(g_cuadro_b2, std::move(v));
+}
+void VaciarPapelera() {   // al principio de cada cuadro del tablero
+  ++g_cuadro_b2;
+  std::erase_if(g_papelera, [](const auto& p) { return g_cuadro_b2 - p.first >= 3; });
+}
 // ---- Escenas, efectos y camara de los guiones ----
 // Escenas de texto de DATA_<idioma>.AFS del jugador (comprobado con la ISO europea): 155 = la intro del Mundo Dragon
 // (narracion, Shenron, el mapa y Goku), 207 = la charla de Nappa y Raditz al llegar (5 lineas). Las ordenes 4/5/6 NO son
@@ -1913,6 +1929,7 @@ void AbrirEscena(int letra, int n) {
   if (n == 207) esc.hablan = {9, 10, 10, 10, 10, 9};   // ID de B2: 9 Raditz, 10 Nappa
   REXLOG_INFO("dbz3 tablero b2: escena {}{}: {} ({} lineas, {} fondos)", char(letra), n, esc.teatro ? "teatro" : "charla",
               esc.textos.size(), esc.fondos.size());
+  Diferir(std::move(g_esc.img));   // S1-F07.2: la escena anterior pudo dibujarse en este mismo cuadro
   g_esc = std::move(esc);
 }
 
@@ -2081,7 +2098,10 @@ void DibEscena(ImDrawList* dl, const S::Area& a, float t, uint16_t& pressed) {
     e.t0 = t;
   }
   pressed = 0;
-  if (e.paso >= e.textos.size()) g_esc = Escena{};
+  if (e.paso >= e.textos.size()) {   // S1-F07.2: sus AddImage de este cuadro aun no se han pintado
+    Diferir(std::move(e.img));
+    g_esc = Escena{};
+  }
 }
 // Goku del tablero en 3D, como en B2: los archivos fijos del tablero (ELF 0x2350C0, tabla 0x377C80) son CMN 335 (#AMO de
 // 21 huesos) + 334 (sus 26 animaciones), 337 + 338 (Goku, #AMO de 44 huesos y 21 variantes; con la bandera 4 de
@@ -3495,7 +3515,9 @@ void Entrar() {
   VideoMundoDragon();   // M1 (mod opcional b2.video_mundo_dragon), una vez por sesion
 }
 
+std::atomic<bool> g_iris_pend{false};   // S1-F01.2: el iris de la Bola al volver del combate (lo dibuja DibIris)
 void Resultado(int ganador, int vida) {
+  g_iris_pend = true;   // S1-F01.2 (B2: FUN_0024A080(0xB, 0x2382A0) al volver del combate)
   g_luchando = false;
   const int pj = g_pend_j, pr = g_pend_r;
   g_pend_j = g_pend_r = g_pend_mov = -1;
@@ -3628,6 +3650,16 @@ int MenuTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed) {
         DibHudSp(dl, 118, L, std::fmod(c, 15.0f), IM_COL32_WHITE, op.px + op.x0 - 18 - fl.px, op.py - fl.py);
       }
     }
+    if (g_d.hud_ama.size() <= 118 || g_thud.size() < 1) {   // sin las piezas del CMN 402 (otra ISO): el menu en texto,
+      // si no se abria invisible y el jugador no veia como salir
+      const bool si_no = g_menu == 2;
+      const char* op[2] = {si_no ? T::T("Sí", "Yes") : T::T("Salir", "Quit"),
+                           si_no ? T::T("No", "No") : T::T("Reiniciar Mundo Dragón", "Restart Dragon World")};
+      if (si_no) S::MenuText(dl, a.At(600, 360), 38 * a.s, g_menu_sel == 0 ? T::T("¿Salir del Mundo Dragón?", "Quit Dragon World?")
+                                                                         : T::T("¿Empezar de nuevo?", "Start over?"), true, false);
+      for (int i = 0; i < 2; ++i)
+        S::MenuText(dl, a.At(600, 440 + 70 * i), 44 * a.s, op[i], i == (si_no ? g_yn_sel : g_menu_sel), i != (si_no ? g_yn_sel : g_menu_sel));
+    }
     S::HelpLine(dl, a.At(600, 878), 38 * a.s, {{"A", T::T("Aceptar", "OK")}, {"Y", T::T("Volver", "Back")}});
     if (pressed & (kUp | kDown)) {
       (g_menu == 1 ? g_menu_sel : g_yn_sel) ^= 1;
@@ -3658,8 +3690,12 @@ int MenuTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed) {
 
 // 0 nada, 1 salir, 2 combate: out = {jugador, rival (IDs de B3), mapa de B3, vida que le queda al jugador, vida del
 // rival (< 0 = solo la inicial), condicion de la casilla (1-5, ver T1)}.
+bool IrisActivo(float t);   // S1-F01.2 (mas abajo, con DibIris)
+void IrisCerrar(float t);   // S1-F01.1
+bool IrisCerrado(float t);  // S1-F01.1
 int DibujarTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool auto_on, int out[8]) {
   g_ahora = t;
+  VaciarPapelera();   // S1-F07.2
   if (g_d.fase < 0) {
     S::MenuText(dl, a.At(600, 400), 40 * a.s, T::T("No se pudo leer el tablero de tu Budokai 2.",
                                                    "Couldn't read the board from your Budokai 2."), true, false);
@@ -3719,9 +3755,13 @@ int DibujarTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, 
       pressed &= uint16_t(~kA);
     }
   }
-  if (!prepara && g_mensajes.empty() && g_premio_id > 0) {   // orden 70: ventana "Get skill!" (la de la nave)
-    if (g_premio_t < 0) g_premio_t = t;
-    const float c = (t - g_premio_t) * 60.0f;
+  if (!prepara && g_mensajes.empty() && g_premio_id > 0 && !IrisActivo(t)) {   // orden 70: ventana "Get skill!" (la de la nave); S1-F01.2: tras el iris
+    if (g_premio_t < 0) {
+      g_premio_t = t;
+      // S1-F01.4, PRUEBA: DBZ3_TEST_B2_PREMIO=<ID de B2> cambia la capsula del premio (193 = la ficha dorada)
+      if (const char* p = std::getenv("DBZ3_TEST_B2_PREMIO")) g_premio_id = std::max(1, std::atoi(p));
+    }
+    const float c = (t - g_premio_t) * 60.0f / Lento();   // S1-F01.4: DBZ3_TEST_B2_LENTO tambien la frena (capturas)
     // s9b: cartel "Get skill!" y despues la ficha de la capsula (Skill Z Sheet), como en el original (medido en PCSX2): A salta el
     // cartel, X / cruceta da la vuelta a la ficha y A / Y la cierran. [H] el minimo de 30 cuadros antes de aceptar A: el cartel
     // pide su segundo sonido a los 30 (FUN_002A3E90).
@@ -3842,6 +3882,20 @@ int DibujarTablero(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, 
   if (g_estado == kJuego && g_fase_rival && g_pend_j < 0 && g_menu == 0) {
     FaseRival();
     if (g_fase_rival && g_pend_j < 0) return 0;
+  }
+  if (g_estado == kGanada && g_fase_sig >= 0 && !std::getenv("DBZ3_TEST_B2_ROTULO")) {
+    // S1-F01.1: orden 41 como el original (FUN_00294660, b2.c): sin rotulo; guardada la fase (orden 41, ya hecho), la Bola
+    // se cierra hasta el negro (FUN_0024A120(0xB, 0x2382C0): 100 cuadros) y se pasa a la fase siguiente, que entra con el
+    // iris que abre (FUN_0024A080(0xB, 0, 0) al empezar la fase). [H] el visor de sucesos de antes del cierre
+    // (FUN_00270A50(0x1500): texto de DATA_<idioma> 289 con la VM de mensajes, FUN_0026E020(4, ...)) y el fundido de la
+    // musica (FUN_00246190(.., -2)): sin portar.
+    IrisCerrar(t);
+    if (IrisCerrado(t)) {
+      REXLOG_INFO("dbz3 tablero b2: fin de fase {}: iris cerrado, a la fase {}", g_d.fase + 1, g_fase_sig + 1);
+      if (Cargar(g_fase_sig)) Preparar();
+      g_iris_pend = true;
+    }
+    return 0;
   }
   if (g_estado == kGanada || g_estado == kPerdida) {
     const bool gana = g_estado == kGanada;
@@ -4297,10 +4351,195 @@ int PistaMenuB2() {
 // La musica del Mundo Dragon: la pista de cada fase de la tabla de B2 (ELF .data 0x377E90, u32 0x20000 | entrada de
 // ADX_US.AFS: los indices 0-9 -> 265..274, que el tablero pide por fase; R6 2026-10-17). Se corta al ir a un combate o al
 // salir y vuelve al regresar al tablero. R7: el indice lo pone la orden 71 (g_musica), no la fase (ver PistaB2).
+// ---- S1-F01.2: iris de la Bola de Dragon al volver de un combate (y al empezar la fase) ----
+// B2 abre el tablero con FUN_0024A080(0xB, ...) (b2.c: vuelta del combate 0x2382A0 y entrada de la fase): tipo 0xB = al
+// azar 1..8 (rand & 7) + 1, dibujado por FUN_00248990 (tabla 0x377EE0) con p de 1 a 0 a 0,01 por cuadro (100 cuadros,
+// FUN_00249CB0). En el lienzo de 640x448, centro (320, 224), y por 0,94:
+//  - la Bola: abanico de radio 551 (1 - p); centro naranja (1, 0,5, 0) con alfa p; borde (k, k/2, k/10) (tope 1) con
+//    k = (cos(2 pi i / 64) * 0,5 + 0,5) * 1,5 + 0,75 (claro arriba a la izquierda) y alfa min(1, 2p);
+//  - tipos 1-7: tantas estrellas de 5 puntas (radios R y R * 0,381966, primera punta a 260 grados) de color (1, 0,5, 0) y
+//    alfa min(1, 2p); R y los centros de la tabla del ELF (PTR 0x377F2C: {R, x0, y0, ...}) * 1,5 * (1 - p), girando
+//    -0,5 grados por cuadro; tipo 8: la "Z" (tira de 16 puntos de la misma tabla), sin girar;
+//  - el brillo: abanico blanco de radio 60 (1 - p), centro alfa min(1, 2p) y borde p / 2, desplazado
+//    ((1 - p) + (1 - p)^2) * 100 arriba a la izquierda;
+//  - fuera de la Bola, negro (el cuadro de toda la pantalla con z = 3 detras de las figuras).
+// Las tablas se leen del ELF del jugador buscando la de 2 estrellas {75, -75, -75, 75, 75}; sin ellas, la Bola sin estrellas.
+struct IrisTablas {
+  bool ok = false;
+  std::vector<float> t[9];   // t[n] = {R, x0, y0, ...}; t[8] = 16 puntos (la Z)
+};
+const IrisTablas& TablasIris() {
+  static const IrisTablas it = [] {
+    IrisTablas r;
+    const std::vector<uint8_t>& e = dbz3::pasarela::nave::ElfB2();
+    if (e.size() < 0x100 || std::memcmp(e.data(), "\x7F" "ELF", 4) != 0) return r;
+    auto u32 = [&](size_t o) -> uint32_t { return o + 4 <= e.size() ? uint32_t(e[o]) | uint32_t(e[o + 1]) << 8 | uint32_t(e[o + 2]) << 16 | uint32_t(e[o + 3]) << 24 : 0; };
+    const uint32_t phoff = u32(0x1C);
+    const int phn = e[0x2C] | e[0x2D] << 8;
+    auto va2off = [&](uint32_t va) -> size_t {   // direccion virtual -> posicion en el fichero (PT_LOAD)
+      for (int i = 0; i < phn; ++i) {
+        const size_t h = phoff + 32 * size_t(i);
+        const uint32_t off = u32(h + 4), v = u32(h + 8), fs = u32(h + 16);
+        if (u32(h) == 1 && va >= v && va < v + fs) return off + (va - v);
+      }
+      return SIZE_MAX;
+    };
+    auto off2va = [&](size_t o) -> uint32_t {
+      for (int i = 0; i < phn; ++i) {
+        const size_t h = phoff + 32 * size_t(i);
+        const uint32_t off = u32(h + 4), v = u32(h + 8), fs = u32(h + 16);
+        if (u32(h) == 1 && o >= off && o < size_t(off) + fs) return uint32_t(v + (o - off));
+      }
+      return 0;
+    };
+    auto f = [&](size_t o) { const uint32_t u = u32(o); float x; std::memcpy(&x, &u, 4); return x; };
+    const float firma[5] = {75, -75, -75, 75, 75};
+    const auto* fb = reinterpret_cast<const uint8_t*>(firma);
+    const auto it2 = std::search(e.begin(), e.end(), fb, fb + sizeof(firma));
+    if (it2 == e.end()) return r;
+    const uint32_t va2 = off2va(size_t(it2 - e.begin()));
+    for (size_t o = 0; va2 && o + 4 <= e.size(); o += 4) {   // la tabla de punteros: [2] apunta a la de 2 estrellas
+      if (u32(o) != va2 || o < 8) continue;
+      bool bien = true;
+      for (int n = 1; n <= 8 && bien; ++n) {
+        const size_t q = va2off(u32(o + 4 * size_t(n - 2)));
+        const int cuantos = n == 8 ? 32 : 1 + 2 * n;
+        if (q == SIZE_MAX || q + 4 * size_t(cuantos) > e.size()) { bien = false; break; }
+        r.t[n].clear();
+        for (int k = 0; k < cuantos; ++k) r.t[n].push_back(f(q + 4 * size_t(k)));
+      }
+      if (bien && r.t[1][0] > 0 && r.t[1][0] < 1000) { r.ok = true; break; }
+    }
+    REXLOG_INFO("dbz3 tablero b2: iris: tablas de estrellas del ELF {}", r.ok ? "leidas" : "no encontradas (Bola sin estrellas)");
+    return r;
+  }();
+  return it;
+}
+float g_iris_t0 = -1, g_iris_ang = 0, g_iris_ult = -1;
+int g_iris_tipo = 1;
+bool g_iris_cierra = false;   // S1-F01.1: FUN_0024A120 (p de 0 a 1: la Bola se encoge hasta el negro) en vez de abrir
+bool IrisActivo(float t) {
+  return g_iris_pend || (g_iris_t0 >= 0 && (g_iris_cierra || (t - g_iris_t0) * 60.0f / Lento() < 100.0f));
+}
+void IrisTipo() {
+  static std::mt19937 rng{std::random_device{}()};
+  g_iris_tipo = int(rng() & 7) + 1;
+  if (const char* v = std::getenv("DBZ3_TEST_B2_IRIS")) g_iris_tipo = std::clamp(std::atoi(v), 1, 8);   // PRUEBA
+}
+// S1-F01.1: empieza el cierre (orden 41); IrisCerrado dice cuando ha llegado al negro (100 cuadros).
+void IrisCerrar(float t) {
+  if (g_iris_cierra && g_iris_t0 >= 0) return;
+  g_iris_pend = false;
+  g_iris_cierra = true;
+  g_iris_t0 = t;
+  g_iris_ult = -1;
+  IrisTipo();
+  REXLOG_INFO("dbz3 tablero b2: iris de la Bola que cierra (tipo {})", g_iris_tipo);
+}
+bool IrisCerrado(float t) { return g_iris_cierra && g_iris_t0 >= 0 && (t - g_iris_t0) * 60.0f / Lento() >= 100.0f; }
+void DibIris(ImDrawList* dl, const S::Area& a, float t) {
+  if (g_iris_pend.exchange(false)) {
+    g_iris_t0 = t;
+    g_iris_ult = -1;
+    g_iris_cierra = false;
+    IrisTipo();
+    REXLOG_INFO("dbz3 tablero b2: iris de la Bola (tipo {})", g_iris_tipo);
+  }
+  if (g_iris_t0 < 0) return;
+  const float cuadros = (t - g_iris_t0) * 60.0f / Lento();
+  const float p = g_iris_cierra ? std::min(1.0f, cuadros * 0.01f) : 1.0f - cuadros * 0.01f;
+  if (p <= 0 && !g_iris_cierra) {
+    g_iris_t0 = -1;
+    return;
+  }
+  if (g_iris_ult >= 0) g_iris_ang -= 0.008726644f * std::max(0.0f, (t - g_iris_ult) * 60.0f / Lento());
+  g_iris_ult = t;
+  const ImVec2 W = ImGui::GetIO().DisplaySize;
+  const float ls = std::min(1200.0f / 640.0f, 900.0f / 448.0f) * a.s;
+  const ImVec2 lo(a.p0.x + (1200.0f * a.s - 640.0f * ls) * 0.5f, a.p0.y + (900.0f * a.s - 448.0f * ls) * 0.5f);
+  auto P = [&](float x, float y) { return ImVec2(lo.x + x * ls, lo.y + y * ls); };
+  auto col = [](float r, float g, float b, float al) {
+    return IM_COL32(int(255 * std::clamp(r, 0.0f, 1.0f)), int(255 * std::clamp(g, 0.0f, 1.0f)), int(255 * std::clamp(b, 0.0f, 1.0f)),
+                    int(255 * std::clamp(al, 0.0f, 1.0f)));
+  };
+  const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+  auto tri = [&](ImVec2 p0, ImU32 c0, ImVec2 p1, ImU32 c1, ImVec2 p2, ImU32 c2) {
+    dl->PrimReserve(3, 3);
+    dl->PrimVtx(p0, uv, c0);
+    dl->PrimVtx(p1, uv, c1);
+    dl->PrimVtx(p2, uv, c2);
+  };
+  const float q = 1.0f - p, a2 = std::min(1.0f, 2.0f * p), cx = 320, cy = 224;
+  const float R = q * 551.0f;
+  constexpr float kPi = 3.141592f;
+  // la Bola
+  if (p < 1.0f) {
+    const ImU32 centro = col(1, 0.5f, 0, p);
+    ImVec2 ant;
+    ImU32 cant = 0;
+    for (int i = 0; i <= 64; ++i) {
+      const float an = float(i) * kPi * 2.0f / 64.0f + 3.92699f;
+      const float k = (std::cos(float(i) * kPi * 2.0f / 64.0f) * 0.5f + 0.5f) * 1.5f + 0.75f;
+      const ImVec2 v = P(cx + std::cos(an) * R, cy + std::sin(an) * R * 0.94f);
+      const ImU32 c = col(k, k * 0.5f, k * 0.1f, a2);
+      if (i > 0) tri(P(cx, cy), centro, ant, cant, v, c);
+      ant = v;
+      cant = c;
+    }
+    // las estrellas (1-7) o la Z (8)
+    const IrisTablas& tb = TablasIris();
+    const ImU32 naranja = col(1, 0.5f, 0, a2);
+    if (tb.ok && g_iris_tipo == 8) {
+      const std::vector<float>& z = tb.t[8];
+      std::array<ImVec2, 16> pz;
+      for (int i = 0; i < 16; ++i) pz[size_t(i)] = P(cx + z[size_t(2 * i)] * 1.5f * q, cy + z[size_t(2 * i + 1)] * 1.5f * q * 0.94f);
+      for (int i = 0; i + 2 < 16; ++i) tri(pz[size_t(i)], naranja, pz[size_t(i + 1)], naranja, pz[size_t(i + 2)], naranja);
+    } else if (tb.ok) {
+      const std::vector<float>& s = tb.t[g_iris_tipo];
+      const float re = s[0] * 1.5f * q, ca = std::cos(g_iris_ang), sa = std::sin(g_iris_ang);
+      for (int n = 0; n < g_iris_tipo; ++n) {
+        const float X = s[size_t(1 + 2 * n)] * 1.5f, Y = s[size_t(2 + 2 * n)] * 1.5f;
+        const float ex = cx + (X * ca - Y * sa) * q, ey = cy + (Y * ca + X * sa) * q * 0.94f;
+        ImVec2 ant2;
+        for (int i = 0; i <= 10; ++i) {
+          const float an = float(i) * kPi * 2.0f / 10.0f + 4.537855f, rr = (i & 1) ? re * 0.381966f : re;
+          const ImVec2 v = P(ex + std::cos(an) * rr, ey + std::sin(an) * rr * 0.94f);
+          if (i > 0) tri(P(ex, ey), naranja, ant2, naranja, v, naranja);
+          ant2 = v;
+        }
+      }
+    }
+    // el brillo
+    const float d = (q + q * q) * 100.0f, rb = q * 60.0f, bx = cx - d, by = cy - d * 0.94f;
+    const ImU32 bc = col(1, 1, 1, a2), bb = col(1, 1, 1, p * 0.5f);
+    for (int i = 0; i < 32; ++i) {
+      const float a0 = float(i) * kPi * 2.0f / 32.0f + 3.92699f, a1 = float(i + 1) * kPi * 2.0f / 32.0f + 3.92699f;
+      tri(P(bx, by), bc, P(bx + std::cos(a0) * rb, by + std::sin(a0) * rb * 0.94f), bb,
+          P(bx + std::cos(a1) * rb, by + std::sin(a1) * rb * 0.94f), bb);
+    }
+  }
+  // negro fuera de la Bola: 64 cuadrilateros del borde a lo lejos (toda la pantalla si aun no ha crecido)
+  const ImU32 negro = IM_COL32(0, 0, 0, 255);
+  if (R < 1.0f) {
+    dl->AddRectFilled(ImVec2(0, 0), W, negro);
+    return;
+  }
+  const float lejos = 4000.0f;
+  for (int i = 0; i < 64; ++i) {
+    const float a0 = float(i) * kPi * 2.0f / 64.0f, a1 = float(i + 1) * kPi * 2.0f / 64.0f;
+    const ImVec2 c0 = P(cx + std::cos(a0) * R, cy + std::sin(a0) * R * 0.94f), c1 = P(cx + std::cos(a1) * R, cy + std::sin(a1) * R * 0.94f);
+    const ImVec2 f0 = P(cx + std::cos(a0) * lejos, cy + std::sin(a0) * lejos), f1 = P(cx + std::cos(a1) * lejos, cy + std::sin(a1) * lejos);
+    tri(c0, negro, f0, negro, f1, negro);   // sin suavizado: AddQuadFilled dejaba rayas entre los trozos
+    tri(c0, negro, f1, negro, c1, negro);
+  }
+}
+
 int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool auto_on, int out[8]) {
   static int sonando = -1;
   static float audio_anterior = -1;
+  if (IrisActivo(t)) pressed = 0;   // S1-F01.2: mientras se abre el iris no se juega
   const int r = DibujarTablero(dl, a, t, pressed, auto_on, out);
+  if (r == 0) DibIris(dl, a, t);   // S1-F01.2
   if (r == 0 && g_estado == kJuego && !EscenaAbierta()) SonidosPasosB2(audio_anterior, t);
   audio_anterior = r == 0 ? t : -1;
   const bool en_video = dbz3::video::Activo();   // M1: su video va encima y deja sin musica al port mientras dura

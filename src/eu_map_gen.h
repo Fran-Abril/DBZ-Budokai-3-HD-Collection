@@ -83,6 +83,7 @@
 #define DBZ3EU_sub_821100B0 dbz3eu_sub_821101B0
 #define DBZ3EU_sub_82110A38 dbz3eu_sub_82110B38
 #define DBZ3EU_sub_82110B08 dbz3eu_sub_82110C08
+#define DBZ3EU_sub_821117B8 dbz3eu_sub_821118B8  // S1-F07: cuerpo identico (a mano; eu_map.py da la misma)
 #define DBZ3EU_sub_82112260 dbz3eu_sub_82112360
 #define DBZ3EU_sub_82112588 dbz3eu_sub_82112688
 #define DBZ3EU_sub_82112AB0 dbz3eu_sub_82112BB0
@@ -773,6 +774,7 @@ inline constexpr Par kPares[] = {
     {0x821100B0u, 0x821101B0u},  // funcion
     {0x82110A38u, 0x82110B38u},  // funcion
     {0x82110B08u, 0x82110C08u},  // funcion
+    {0x821117B8u, 0x821118B8u},  // funcion  S1-F07
     {0x82112260u, 0x82112360u},  // funcion
     {0x82112588u, 0x82112688u},  // funcion
     {0x82112AB0u, 0x82112BB0u},  // funcion

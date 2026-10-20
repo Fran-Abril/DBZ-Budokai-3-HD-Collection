@@ -1019,7 +1019,7 @@ void LabTick(uint8_t* base) {
     const auto path = dir / "combates.csv";
     const bool fresh = !std::filesystem::exists(path, ec);
     if (std::FILE* f = std::fopen(path.string().c_str(), "a")) {
-      if (fresh) std::fputs("fecha,id1,id2,ganador,motivo\n", f);
+      if (fresh) std::fputs("fecha,id1,id2,ganador,motivo,com\n", f);
       const std::time_t now = std::time(nullptr);
       char when[32] = {};
       std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
@@ -1027,12 +1027,18 @@ void LabTick(uint8_t* base) {
       const auto& net = dbz3::net::Session::Get();
       const bool guest = net.active() && net.role() == dbz3::net::Role::kGuest;
       const int side = winner == 0 || winner == 1 ? winner + 1 : 0;
-      std::fprintf(f, "%s,%u,%u,%d,%u\n", when, REX_LOAD_U32((guest ? x1 : x0) + kId),
-                   REX_LOAD_U32((guest ? x0 : x1) + kId), guest && side ? 3 - side : side, reason);
+      // S1-F10 (#42): columna com = lados que llevaba el ordenador (1 = lado 1, 2 = lado 2; mando X+5028 = -1, como
+      // cine::Mando). El ranking de luchadores no cuenta al personaje del COM: perder contra ti no es "su" derrota.
+      const bool com_a = int16_t(REX_LOAD_U16((guest ? x1 : x0) + 5028)) == -1;
+      const bool com_b = int16_t(REX_LOAD_U16((guest ? x0 : x1) + 5028)) == -1;
+      std::fprintf(f, "%s,%u,%u,%d,%u,%d\n", when, REX_LOAD_U32((guest ? x1 : x0) + kId),
+                   REX_LOAD_U32((guest ? x0 : x1) + kId), guest && side ? 3 - side : side, reason,
+                   (com_a ? 1 : 0) | (com_b ? 2 : 0));
       std::fclose(f);
     }
-    REXLOG_INFO("dbz3 tag: combate acabado: id {} contra id {}, gana el lado {}, motivo {}", REX_LOAD_U32(x0 + kId),
-                REX_LOAD_U32(x1 + kId), winner + 1, reason);
+    REXLOG_INFO("dbz3 tag: combate acabado: id {} contra id {}, gana el lado {}, motivo {}, com {}",
+                REX_LOAD_U32(x0 + kId), REX_LOAD_U32(x1 + kId), winner + 1, reason,
+                (int16_t(REX_LOAD_U16(x0 + 5028)) == -1 ? 1 : 0) | (int16_t(REX_LOAD_U16(x1 + 5028)) == -1 ? 2 : 0));
     if (lab) std::fflush(lab);
   }
   last = st;

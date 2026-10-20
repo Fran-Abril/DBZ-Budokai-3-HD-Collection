@@ -727,14 +727,18 @@ bool LeerMisionesIW(const std::filesystem::path& iw, const std::vector<int>& num
   std::string en_iso;
   std::error_code ec;
   if (std::filesystem::is_directory(iw, ec)) {
-    for (const auto& e : std::filesystem::recursive_directory_iterator(iw, ec)) {
-      if (Lower(e.path().filename().string()) == "data_usa.afs") {
-        f.open(e.path(), std::ios::binary);
-        break;
+    for (const char* n : {"data_usa.afs", "data_eng.afs"}) {   // data_eng: IW europeo
+      for (const auto& e : std::filesystem::recursive_directory_iterator(iw, ec)) {
+        if (Lower(e.path().filename().string()) == n) {
+          f.open(e.path(), std::ios::binary);
+          break;
+        }
       }
+      if (f.is_open()) break;
     }
   } else if (iso.Open(iw)) {
     en_iso = iso.Find("data_usa.afs");
+    if (en_iso.empty()) en_iso = iso.Find("data_eng.afs");
   }
   auto leer = [&](uint64_t off, uint32_t n) -> std::vector<uint8_t> {
     if (!en_iso.empty()) return iso.ReadFile(en_iso, off, n);
@@ -796,6 +800,12 @@ struct AfsPs2::Impl {
 };
 
 bool AfsPs2::Abrir(const std::filesystem::path& juego, const std::string& afs) {
+  // IW europeo (SLES_553.47): DATA_USA.AFS se llama DATA_ENG.AFS, con las mismas 1532 entradas (medido 2026-10-19)
+  if (AbrirUna(juego, afs)) return true;
+  return Lower(afs) == "data_usa.afs" && AbrirUna(juego, "data_eng.afs");
+}
+
+bool AfsPs2::AbrirUna(const std::filesystem::path& juego, const std::string& afs) {
   auto d = std::make_shared<Impl>();
   std::error_code ec;
   const std::string nombre = Lower(afs);

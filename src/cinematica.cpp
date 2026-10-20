@@ -227,7 +227,8 @@ class Panel : public rex::ui::ImGuiDialog {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     dl->AddRectFilled(ImVec2(0, 0), ImVec2(w, arriba), IM_COL32(0, 0, 0, 255));
     dl->AddRectFilled(ImVec2(0, h - abajo), ImVec2(w, h), IM_COL32(0, 0, 0, 255));
-    S::HelpLine(dl, ImVec2(w * 0.80f, arriba * 0.5f), S::mode::kSmall * a.s,
+    const S::Imagen g = S::GuestImage(io);   // S1-F06: la ayuda en la banda de arriba de la imagen del juego
+    S::HelpLine(dl, ImVec2(g.p0.x + g.Size().x * 0.80f, g.p0.y + 45.0f * a.s * abre), S::mode::kSmall * a.s,
                 {{"A", dbz3::i18n::T("Siguiente", "Next")}, {"START", dbz3::i18n::T("Saltar", "Skip")}});
     if (abre < 0.99f || !e || paso < 0 || paso >= int(e->pasos.size())) return;
     const Paso& p = e->pasos[size_t(paso)];

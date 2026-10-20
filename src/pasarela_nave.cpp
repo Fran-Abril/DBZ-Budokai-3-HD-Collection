@@ -360,6 +360,7 @@ struct Anim {
   float u0 = 0, v0 = 0, u1 = 0, v1 = 0;
   std::vector<std::array<float, 7>> claves;   // lista A: {cuadro, escala x, escala y, x, y, alfa, giro}
   float Dur() const { return claves.empty() ? 0.0f : claves.back()[0]; }
+  float dur_tarea = 0;   // S1-F01.4: lo que dura para la tarea del original: max(+0x20, +0x24) del registro (FUN_00245AD0)
 };
 std::vector<Tex> g_pz, g_frases;                 // 1131 (piezas), 1132 (frases de Babidi)
 std::vector<Tex> g_pzv;                          // ventana de premio: DATA_<idioma> 1148 (#AMT: 0 "Get skill!",
@@ -369,7 +370,15 @@ std::map<int, Tex> g_nombres;                    // nombre de cada premio: DATA_
 std::vector<Tex> g_ficha;                        // "Skill Z Sheet": DATA_<idioma> 541 (fondos, rotulos, iconos, "New")
 std::map<int, Tex> g_textos_capsula;             // textos de cada capsula: DATA_<idioma> (542 + ID), texturas 1-4 (clave ID * 8 + j)
 int g_ficha_cara = 0;                            // 0 frente, 1 reverso
-constexpr float kCartel = 100.0f;                // cuadros del cartel "Get skill!" antes de la ficha [H: duracion sin medir]
+// S1-F01.4: el cartel dura lo que tardan en acabar sus dos tareas de entrada (FUN_002A3E90 estado 0: anims 0 y 3 del
+// #AMA 933 en reposo -> FUN_00292660 abre la ficha); con la ISO europea max(+0x20, +0x24) = 101 en las dos.
+float g_cartel = 101.0f;
+// S1-F01.4: la ficha (FUN_002924A0 / FUN_00292420 / FUN_002922D0, b2.c; callbacks 0x292170 y 0x292090 en el ELF) no
+// funde: CRECE desde (320, 216) con escala x = y de 0 a 1 en 20 cuadros (+0,05 por cuadro), se encoge igual al cerrarla
+// (cruz / triangulo) y al darle la vuelta (cuadrado / izquierda / derecha) la x baja a 0 en 5 cuadros (-0,2), cambia de
+// cara y vuelve a 1 en otros 5.
+float g_ficha_giro_c = -100;                     // cuadro (de la ficha) en que se pidio la vuelta
+float g_ficha_sale_c = -1;                       // cuadro en que se pidio cerrarla (< 0 = abierta)
 std::string g_afs_idioma;                        // el DATA_<idioma>.AFS que se abrio ("DATA_UK.AFS"...)
 bool g_cargado = false;
 std::filesystem::path g_iso;
@@ -394,6 +403,7 @@ std::vector<Anim> LeerAma(const std::vector<uint8_t>& d) {
     a.y0 = f32(o + 4);
     a.x1 = f32(o + 0x10);
     a.y1 = f32(o + 0x14);
+    a.dur_tarea = float(std::max(int32_t(u32(o + 0x20)), int32_t(u32(o + 0x24))));
     const uint32_t na = u32(o + 0x30), oa = u32(o + 0x34), nb = u32(o + 0x38), ob = u32(o + 0x3C);
     for (uint32_t c = 0; c < na && c < 64 && oa + 0x20 * (size_t(c) + 1) <= d.size(); ++c) {
       const size_t q = oa + 0x20 * size_t(c);
@@ -445,6 +455,7 @@ void Cargar() {
   leer(541, g_ficha);  // la ficha de la capsula (FUN_00292850 pide 0x1021D = DATA_<idioma> 541)
   g_anim = LeerAma(cmn.Entrada(905));
   g_animv = LeerAma(cmn.Entrada(933));
+  if (g_animv.size() > 3 && g_animv[0].dur_tarea > 0) g_cartel = std::max(g_animv[0].dur_tarea, g_animv[3].dur_tarea);   // S1-F01.4
   REXLOG_INFO("dbz3 nave: graficos de la ISO: {} piezas, {} frases, {} animaciones; ventana de premio {} texturas y "
               "{} animaciones", g_pz.size(), g_frases.size(), g_anim.size(), g_pzv.size(), g_animv.size());
 }
@@ -809,46 +820,81 @@ bool PasoResultado(float cuadros, bool ok) {
 // rotulos "Skill Name" (148, 89), "Effects" (148, 161), "Usage requirements" (148, 252) y "Comments" en el reverso
 // (223, 55); nombre centrado en y 129 y la linea de "solo puede usarlo..." en y 152; efectos y requisitos desde x 157 (y 192 y
 // 282); comentarios desde (157, 90); abajo el numero de copias (azul, centro 297, 381) y el giro (verde, 390, 381);
-// "New" (88x64) centrado en (132, 101). Ayuda: cuadrado / cruceta = reverso, X / triangulo = volver. [H] la variante dorada
-// (anims 6/7 del #AMA) y el numero (aqui las copias que tienes).
-void DibFicha(ImDrawList* dl, const Lienzo& L, int id_b2, float c, int cara, int copias, bool nuevo) {
+// "New" (88x64) centrado en (132, 101). Ayuda: cuadrado / cruceta = reverso, X / triangulo = volver.
+// S1-F01.4 (FUN_00291C40, b2.c; lista de elementos del ELF 0x379E00; #SKA 851 = DATA_CMN cargado en 0x694280, registro
+// de 0x20 por ID desde +0x20): la variante v = (byte +0x0A >> 4) & 3 elige las anims 2v / 2v+1 del #AMA 852 = texturas
+// de 541 {0, 2, 3, 4} de frente y {1, 1, 1, 5} de reverso (v = 3 es la DORADA: 193 Absorption); los rotulos toman el
+// cuadro v de su lista B (tinte 0 / 0,3 / 0,6 en v 0-2 y 0,6 / 0,3 / 0 en la dorada). Abajo: la cifra azul es
+// byte +0x08 & 7 (anim 12 + n, oculta si es 0), la "P" (anim 12) sale con byte +0x0B & 8, la "Z" (anim 20) sin el
+// bit 4 y el giro es el verde (anim 21) con el bit 1 o el tachado (anim 22) sin el.
+int ByteCapsula(int id_b2, int k) {
+  const std::vector<uint8_t>& d = TablaCapsulas();
+  const size_t o = 0x20 + 0x20 * size_t(id_b2) + size_t(k);
+  return id_b2 >= 0 && o < d.size() && std::memcmp(d.data(), "#SKA", 4) == 0 ? d[o] : -1;
+}
+void DibFicha(ImDrawList* dl, const Lienzo& L, int id_b2, float c, int cara, bool nuevo) {
   if (g_ficha.size() < 22) return;
-  const int alfa = int(255 * std::clamp(c / 6.0f, 0.0f, 1.0f));
-  const ImU32 col = IM_COL32(255, 255, 255, alfa);
-  auto pone = [&](const Tex* t, float x, float y, bool centro = false, ImU32 tinte = 0) {
+  // escala de la ficha: crece en 20 cuadros, se encoge en 20 al cerrarla; la x baja y sube en 5 + 5 al darle la vuelta
+  float sy = std::clamp(c / 20.0f, 0.0f, 1.0f), sx = sy;
+  if (g_ficha_sale_c >= 0) sy = sx = std::clamp(1.0f - (c - g_ficha_sale_c) / 20.0f, 0.0f, 1.0f);
+  const float dg = c - g_ficha_giro_c;
+  if (dg >= 0 && dg < 10) {
+    sx *= dg < 5 ? 1.0f - dg / 5.0f : (dg - 5) / 5.0f;
+    if (dg < 5) cara ^= 1;   // todavia se ve la cara de antes
+  }
+  if (sx <= 0 || sy <= 0) return;
+  auto P = [&](float x, float y) { return L.P(320 + (x - 320) * sx, 216 + (y - 216) * sy); };
+  auto pone = [&](const Tex* t, float x, float y, bool centro = false, ImU32 tinte = IM_COL32_WHITE) {
     if (!t || !t->t) return;
     if (centro) {
       x -= t->w * 0.5f;
       y -= t->h * 0.5f;
     }
-    dl->AddImage(reinterpret_cast<ImTextureID>(t->t.get()), L.P(x, y), L.P(x + t->w, y + t->h), ImVec2(0, 0), ImVec2(1, 1),
-                 tinte ? (tinte & 0x00FFFFFF) | (uint32_t(alfa) << 24) : col);
+    dl->AddImage(reinterpret_cast<ImTextureID>(t->t.get()), P(x, y), P(x + t->w, y + t->h), ImVec2(0, 0), ImVec2(1, 1), tinte);
   };
-  // los rotulos son grises: el juego los pinta de azul (medido: 58 104 152 sobre su gris de 230)
-  const ImU32 azul = IM_COL32(62, 112, 168, 255);
-  pone(&g_ficha[size_t(cara ? 1 : 2)], 320, 216, true);
+  const int b10 = ByteCapsula(id_b2, 0x0A), b8 = ByteCapsula(id_b2, 0x08), b11 = ByteCapsula(id_b2, 0x0B);
+  const int v = b10 < 0 ? 1 : (b10 >> 4) & 3;   // sin la tabla, la plateada (la de antes)
+  // los rotulos son grises: el juego los tine (medido en v = 1: 58 104 152 sobre su gris de 230); la dorada, al reves
+  const ImU32 tinte = v == 3 ? IM_COL32(168, 112, 62, 255) : IM_COL32(62, 112, 168, 255);
+  static const int kFrente[4] = {0, 2, 3, 4}, kReverso[4] = {1, 1, 1, 5};
+  pone(&g_ficha[size_t(cara ? kReverso[v] : kFrente[v])], 320, 216, true);
   if (cara == 0) {
-    pone(&g_ficha[6], 148, 89, false, azul);
-    pone(&g_ficha[7], 148, 161, false, azul);
-    pone(&g_ficha[8], 148, 252, false, azul);
+    pone(&g_ficha[6], 148, 89, false, tinte);
+    pone(&g_ficha[7], 148, 161, false, tinte);
+    pone(&g_ficha[8], 148, 252, false, tinte);
     pone(TextoCapsula(id_b2, 0), 320, 129, true);
     pone(TextoCapsula(id_b2, 4), 320, 152, true);
     pone(TextoCapsula(id_b2, 1), 157, 191.75f);
     pone(TextoCapsula(id_b2, 2), 157, 282.25f);
-    pone(&g_ficha[size_t(10 + std::clamp(copias, 1, 7))], 297, 381.5f, true);
-    pone(&g_ficha[19], 390, 381.5f, true);
+    const int n = b8 < 0 ? 1 : b8 & 7;
+    if (b11 >= 0 && (b11 & 8)) pone(&g_ficha[10], 250.5f, 381.5f, true);       // "P" (anim 12)
+    if (n > 0) pone(&g_ficha[size_t(10 + n)], 297, 381.5f, true);               // cifra (anim 12 + n)
+    if (b11 >= 0 && !(b11 & 4)) pone(&g_ficha[18], 343.5f, 381.5f, true);      // "Z" (anim 20)
+    if (b11 < 0 || (b11 & 1)) pone(&g_ficha[19], 390, 381.5f, true);           // giro (anim 21)
+    else pone(&g_ficha[20], 389.5f, 381.5f, true);                              // giro tachado (anim 22)
   } else {
-    pone(&g_ficha[9], 223, 55, false, azul);
+    pone(&g_ficha[9], 223, 55, false, tinte);
     pone(TextoCapsula(id_b2, 3), 157, 90);
   }
-  if (nuevo) {   // anim 23 del #AMA: crece de 0 a 1,2 y se asienta en 1 en 10 cuadros
+  if (nuevo) {   // anim 23 del #AMA: crece de 0 a 1,2 y se asienta en 1 en 10 cuadros (va en las dos caras)
     const float e = c < 6 ? c / 6.0f * 1.2f : c < 10 ? 1.2f - 0.2f * (c - 6) / 4.0f : 1.0f;
-    const Tex& n = g_ficha[21];
-    const ImVec2 mid = L.P(132, 101);
-    const float w = n.w * 0.5f * e * L.s, h = n.h * 0.5f * e * L.s;
-    if (n.t) dl->AddImage(reinterpret_cast<ImTextureID>(n.t.get()), ImVec2(mid.x - w, mid.y - h), ImVec2(mid.x + w, mid.y + h));
+    const Tex& t = g_ficha[21];
+    const ImVec2 mid = P(132, 101);
+    const float w = t.w * 0.5f * e * sx * L.s, h = t.h * 0.5f * e * sy * L.s;
+    if (t.t) dl->AddImage(reinterpret_cast<ImTextureID>(t.t.get()), ImVec2(mid.x - w, mid.y - h), ImVec2(mid.x + w, mid.y + h));
   }
   S::HelpLine(dl, L.P(320, 428), 20 * L.s, {{"X", T::T("Ver reverso", "View reverse side")}, {"A", T::T("Volver", "Back")}});
+}
+// S1-F01.4: dar la vuelta (si no esta ya girando) y cerrar con su animacion; c = cuadro de la ficha.
+void FichaGirar(float c) {
+  if (c - g_ficha_giro_c < 10 || g_ficha_sale_c >= 0) return;
+  g_ficha_giro_c = c;
+  g_ficha_cara ^= 1;
+}
+void FichaReset() {
+  g_ficha_cara = 0;
+  g_ficha_giro_c = -100;
+  g_ficha_sale_c = -1;
 }
 
 // Ventana "Get skill!" del original (FUN_002a44c0 + FUN_002a4070, b2.c) en el cuadro c desde que se abrio: lanza a la
@@ -856,16 +902,33 @@ void DibFicha(ImDrawList* dl, const Lienzo& L, int id_b2, float c, int cara, int
 // la placa "BOOM!!" (13); texturas DATA_<idioma> 1148, disposicion DATA_CMN 933. En el original (medido) el cartel va con
 // una nube de humo y despues sale la ficha de la capsula (DibFicha) con el nombre y los textos del premio; el nombre grande
 // que antes se dibujaba aqui quedaba tapado por el humo. La usan la nave y la orden 70 del tablero de B2 (FUN_00293740).
-void DibVentanaPremio(ImDrawList* dl, const Lienzo& L, int id_b2, const char* nombre, float c, int copias = 1,
-                      bool nuevo = true) {
-  if (c >= kCartel && g_ficha.size() >= 22) return DibFicha(dl, L, id_b2, c - kCartel, g_ficha_cara, copias, nuevo);
+// S1-F01.4 (FUN_002A3E90): mientras la ficha esta abierta el cartel y la estrella siguen detras en reposo (anims 1 y 4);
+// al cerrarla salen con sus anims 2 y 5 a la vez que la ficha se encoge, y la ventana acaba cuando acaban las dos.
+float FinPremio() {
+  const float a = g_animv.size() > 5 ? std::max(g_animv[2].dur_tarea, g_animv[5].dur_tarea) : 0.0f;
+  return std::max(20.0f, a);
+}
+bool PremioCerrado(float c) { return g_ficha_sale_c >= 0 && c - g_cartel - g_ficha_sale_c >= FinPremio(); }
+void CerrarFicha(float c) {
+  if (g_ficha_sale_c < 0) g_ficha_sale_c = std::max(0.0f, c - g_cartel);
+}
+void DibVentanaPremio(ImDrawList* dl, const Lienzo& L, int id_b2, const char* nombre, float c, bool nuevo = true) {
+  const bool ficha = c >= g_cartel && g_ficha.size() >= 22;
   auto obj = [&](int e, int r) {
     if (c < DurDe(e, &g_animv)) DibC(dl, L, e, c, false, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
     else DibC(dl, L, r, c - DurDe(e, &g_animv), true, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
   };
-  obj(3, 4);   // estrella
-  obj(0, 1);   // cartel "Get skill!"
-  for (int k = 6; k <= 13; ++k) DibC(dl, L, k, c, false, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
+  if (ficha && g_ficha_sale_c >= 0) {   // S1-F01.4: salida del cartel y de la estrella
+    const float cs = c - g_cartel - g_ficha_sale_c;
+    DibC(dl, L, 5, cs, false, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
+    DibC(dl, L, 2, cs, false, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
+  } else {
+    obj(3, 4);   // estrella
+    obj(0, 1);   // cartel "Get skill!"
+  }
+  for (int k = 6; k <= 13; ++k)   // tareas de una vez (FUN_00245210): se apagan al llegar a max(+0x20, +0x24)
+    if (k < int(g_animv.size()) && c < std::max(g_animv[size_t(k)].dur_tarea, DurDe(k, &g_animv))) DibC(dl, L, k, c, false, 0, 0, 0, IM_COL32_WHITE, &g_animv, &g_pzv);
+  if (ficha) return DibFicha(dl, L, id_b2, c - g_cartel, g_ficha_cara, nuevo);
   if (g_ficha.size() < 22) {   // sin la ficha (otra ISO): el nombre sobre el cartel, como antes
     if (const Tex* n = NombreTex(id_b2))
       dl->AddImage(reinterpret_cast<ImTextureID>(n->t.get()), L.P(320 - n->w * 0.5f, 206 - n->h * 0.5f),
@@ -893,8 +956,8 @@ void DibujarResultado(ImDrawList* dl, const Lienzo& L) {
     // (DATA_<idioma> 542 + ID, textura 0) y el Kili, nuestra linea (el original no lo repite).
     const Premio& p = Premios()[size_t(g_res.premio)];
     const float c = std::max(0.0f, g_cuadro - g_res.premio_t);
-    DibVentanaPremio(dl, L, p.id, p.nombre.c_str(), c, Tienes(p.id) + 1, g_res.nuevo);
-    if (c < kCartel) {
+    DibVentanaPremio(dl, L, p.id, p.nombre.c_str(), c, g_res.nuevo);
+    if (c < g_cartel) {
       char li[48];
       std::snprintf(li, sizeof(li), "%d Kili%s", p.kili, g_res.nuevo ? T::T("  ¡Nuevo!", "  New!") : "");
       S::MenuText(dl, L.P(320, 300), 15 * L.s, li, false, false);
@@ -904,6 +967,11 @@ void DibujarResultado(ImDrawList* dl, const Lienzo& L) {
 
 }  // namespace
 
+// S1-F01.2: el ELF de B2 del jugador para el tablero (el iris de la Bola de Dragon lee de el sus tablas de estrellas).
+const std::vector<uint8_t>& ElfB2() {
+  static const std::vector<uint8_t> e = LeerElf(BuscarJuego("budokai 2"));
+  return e;
+}
 bool Disponible() { return b2::Disponible(); }
 // Se abre con el deseo "Portal de la nave de Babidi" de Shenron en el Dragon World (pasarela_b2.cpp, como en B2).
 bool Abierta() { return LeerProgreso("tablero_b2_nave", 0) != 0; }
@@ -996,16 +1064,17 @@ int Dibujar(ImDrawList* dl, const S::Area& a, float t, uint16_t pressed, bool au
   bool ok = (pressed & (kA | kStart)) != 0;
   if (g_estado == kResultado) {
     if (g_res.fase == 3) {   // el cartel pasa a la ficha con A; en la ficha, X / cruceta da la vuelta y A / Y vuelve
+      // S1-F01.4: en la ficha, X / izquierda / derecha le dan la vuelta (cuadrado / 0x80 / 0x20 del original) y A / Y
+      // la cierran con su animacion; la ventana se da por cerrada cuando acaba (PremioCerrado).
       const float c = g_cuadro - g_res.premio_t;
-      if (c < kCartel) {
-        if (ok) g_res.premio_t = g_cuadro - kCartel;   // salta el cartel
+      if (c < g_cartel) {
+        if (ok) g_res.premio_t = g_cuadro - g_cartel;   // salta el cartel
         ok = false;
-        g_ficha_cara = 0;
-      } else if (pressed & (kX | kUp | kDown | kLeft | kRight)) {
-        g_ficha_cara ^= 1;
-        ok = false;
-      } else if (pressed & kY) {
-        ok = true;
+        FichaReset();
+      } else {
+        if (pressed & (kX | kLeft | kRight)) FichaGirar(c - g_cartel);
+        else if (pressed & (kA | kStart | kY)) CerrarFicha(c);
+        ok = PremioCerrado(c);
       }
     }
     const bool fin = PasoResultado(dt * 60.0f, ok);
@@ -1185,21 +1254,21 @@ bool VentanaPremio(ImDrawList* dl, const S::Area& a, int id_b2, float cuadros, u
   static float salto = 0;   // cuadros que se adelanta la ficha al saltar el cartel con A
   if (cuadros < 1) {
     salto = 0;
-    g_ficha_cara = 0;
+    FichaReset();
   }
   const float c = cuadros + salto;
   const std::string n = "#" + std::to_string(id_b2);
-  DibVentanaPremio(dl, LienzoDe(a), id_b2, n.c_str(), std::max(0.0f, c), std::min(7, Tienes(id_b2) + 1), Tienes(id_b2) == 0);
-  bool cierra = false;
-  if (c < kCartel) {
-    if ((pressed & kA) && c >= 30) salto += kCartel - c;   // A salta el cartel (minimo 30 cuadros: sonido del cartel)
-  } else if (pressed & (kX | kUp | kDown | kLeft | kRight)) {
-    g_ficha_cara ^= 1;
-  } else if (pressed & (kA | kY)) {
-    cierra = true;
+  DibVentanaPremio(dl, LienzoDe(a), id_b2, n.c_str(), std::max(0.0f, c), Tienes(id_b2) == 0);
+  if (c < g_cartel) {
+    if ((pressed & kA) && c >= 30) salto += g_cartel - c;   // A salta el cartel (minimo 30 cuadros: sonido del cartel)
+  } else if (pressed & (kX | kLeft | kRight)) {   // S1-F01.4: cuadrado / izquierda / derecha (0x80A0 del original)
+    FichaGirar(c - g_cartel);
+  } else if (pressed & (kA | kY)) {               // cruz / triangulo (0x5000): se encoge y sale el cartel
+    CerrarFicha(c);
   }
-  if (auto_on && c - kCartel > 70.0f) cierra = true;   // prueba automatica: se ve la ficha un momento
-  return cierra;
+  if (auto_on && c - g_cartel > 70.0f) CerrarFicha(c);   // prueba automatica: se ve la ficha un momento
+  if (std::getenv("DBZ3_TEST_FICHA_GIRO") && c - g_cartel > 40.0f && c - g_cartel < 45.0f) FichaGirar(c - g_cartel);   // prueba
+  return PremioCerrado(c);
 }
 
 }  // namespace dbz3::pasarela::nave

@@ -1595,8 +1595,14 @@ bool ListedCapsule(uint8_t* base, uint32_t rec, uint64_t owner_bit, uint32_t tab
 
 // Lista visible de la pestana (9 capsulas desde el desplazamiento). Misma logica que el
 // original (sub_821B6ED8) con el catalogo entero.
+// s9 (reportes de cierres al editar habilidades): punteros del editor sin comprobar -> se deja al juego (orig)
+inline bool PtrEditor(uint32_t p) { return p >= 0x40000000u && p < 0xA0000000u; }
 DBZ3_HOOK(sub_821B6ED8, dbz3eu_sub_821B5CC0) {
   const uint32_t st = ctx.r3.u32;
+  if (!PtrEditor(st) || !PtrEditor(REX_LOAD_U32(st + 44)) || !PtrEditor(REX_LOAD_U32(kSkcRecs))) {
+    orig(ctx, base);
+    return;
+  }
   const uint32_t tab = REX_LOAD_U32(st + 36);
   const uint64_t bit = uint64_t(1) << (int32_t(REX_LOAD_U32(st + 28)) & 63);
   const uint32_t inv = REX_LOAD_U32(st + 44);
@@ -1635,6 +1641,10 @@ DBZ3_HOOK(sub_821B6FE8, dbz3eu_sub_821B5DD0) {
   const uint32_t st = ctx.r3.u32;
   const int32_t want = ctx.r4.s32;
   const uint32_t recs = REX_LOAD_U32(kSkcRecs);
+  if (!PtrEditor(st) || !PtrEditor(recs) || !PtrEditor(REX_LOAD_U32(st + 44)) || want >= int32_t(dbz3::roster::kInventorySize)) {
+    orig(ctx, base);   // s9: cursor fuera del catalogo o editor sin montar
+    return;
+  }
   if (want > 0) REX_STORE_U32(st + 36, REX_LOAD_U8(recs + 40 * uint32_t(want) + 10) & 3);
   const uint32_t tab = REX_LOAD_U32(st + 36);
   const uint64_t bit = uint64_t(1) << (int32_t(REX_LOAD_U32(st + 28)) & 63);
@@ -1682,7 +1692,7 @@ DBZ3_HOOK(sub_821B7290, dbz3eu_sub_821B6078) {
     }
   }
   orig(ctx, base);
-  if (!extra) return;
+  if (!extra || !PtrEditor(REX_LOAD_U32(dbz3::GuestAddr(0x8247971C, 0x8247970C)))) return;   // s9: sin estado del editor
   const uint32_t st = REX_LOAD_U32(dbz3::GuestAddr(0x8247971C, 0x8247970C)) + 460 * (player >> 1) + 68;
   const uint32_t recs = REX_LOAD_U32(kSkcRecs);
   uint32_t vals[7], kept = 0, slots = 0;

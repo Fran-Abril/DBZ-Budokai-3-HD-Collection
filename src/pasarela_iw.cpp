@@ -44,6 +44,8 @@ std::vector<uint8_t> Leer(std::ifstream& f, uint64_t off, uint32_t n) {
   return b;
 }
 
+}  // namespace
+
 // ELF del juego (SLUS_*/SLES_* en la raiz): de la carpeta extraida o de la ISO (ISO 9660, directorio raiz).
 std::vector<uint8_t> LeerElf(const std::filesystem::path& iw) {
   auto es_elf = [](std::string n) {
@@ -76,8 +78,6 @@ std::vector<uint8_t> LeerElf(const std::filesystem::path& iw) {
   }
   return {};
 }
-
-}  // namespace
 
 std::vector<MisionTablaIW> LeerTablaIW(const std::filesystem::path& iw, std::string& error) {
   std::vector<MisionTablaIW> out;
@@ -336,6 +336,8 @@ bool LeerDragonMission(const std::filesystem::path& iw, DragonMissionIW& out, st
   out.frases = todas(HijoAmb(b334, 6));
   out.ui = todas(HijoAmb(b334, 1));
   out.road = todas(HijoAmb(b333, 0));
+  for (int i = 0; i < 18; ++i)   // s1 F04.3: titulos de los 18 minijuegos (0x7D0..0x7E1)
+    out.titulos_mini.push_back(TexturaAmt(HijoAmb(usa.Entrada(size_t(kTituloMini0 + i)), 1), 0));
   // #DMD del mapa de Dragon Mission: el hijo con esa marca de DATA_CMN 1093 (el 11 en USA)
   const std::vector<uint8_t> e = cmn.Entrada(1093);
   std::vector<uint8_t> d;
@@ -1045,6 +1047,12 @@ bool PantallaDM::Resultado(ImDrawList* dl, const ImGuiIO& io, float t, uint16_t 
     const ImVec4 rt = Recorte(ti);
     Encajar(rt.z - rt.x, rt.w - rt.y, 600, 145, 500, 64, 3.0f, p0, p1);
     Imagen2(dl, 5000 + r.mision, ti, a.At(p0.x, p0.y), a.At(p1.x, p1.y), rt);
+  } else if (const int im = r.clave_mini - 0x7D0; r.mision <= 0 && im >= 0 && im < int(in.dm->titulos_mini.size()) &&
+                                                  in.dm->titulos_mini[size_t(im)]) {   // s1 F04.3: titulo del minijuego
+    const Imagen& ti = in.dm->titulos_mini[size_t(im)];
+    const ImVec4 rt = Recorte(ti);
+    Encajar(rt.z - rt.x, rt.w - rt.y, 600, 145, 500, 64, 3.0f, p0, p1);
+    Imagen2(dl, 5600 + im, ti, a.At(p0.x, p0.y), a.At(p1.x, p1.y), rt);
   }
   // Filas en el orden de la hoja 334/1 t17 (filas de 32 px: 0 TIME, 1 RANK, 2 BRICKS DESTROYED, 3 SCORE, 4 TOTAL
   // SCORE). Combate: TIME y RANK (con New!), sin puntos, como IW. Minijuego: TIME, RANK, BRICKS (solo el de
