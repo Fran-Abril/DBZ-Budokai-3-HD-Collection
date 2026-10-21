@@ -1082,7 +1082,7 @@ void ApplyAtLaunch(rex::memory::Memory* memory) {
   g_cap_owner_add.clear();
   g_caps_done.store(false);
   g_unified_on.store(false);
-  g_unified_all = false;
+  g_unified_all = true;
   g_unified_desc = 0;
   g_unified_ids.clear();
   g_bank_redirect.clear();
@@ -1615,11 +1615,6 @@ bool IsVirtualEquipped(uint8_t* base, uint32_t st, uint32_t cap_id) {
       const uint32_t c1 = (raw1 & 0xFFFFF000u) ? (raw1 & 0xFFF) : (raw1 & 0xFFFF);
       if (raw1 == cap_id || c1 == cap_id) return true;
     }
-    const uint32_t raw2 = REX_LOAD_U32(st + 48 + 4 * k);
-    if (raw2 != 0 && raw2 != 0xFFFFFFFFu) {
-      const uint32_t c2 = (raw2 & 0xFFFFF000u) ? (raw2 & 0xFFF) : (raw2 & 0xFFFF);
-      if (raw2 == cap_id || c2 == cap_id) return true;
-    }
   }
   return false;
 }
@@ -1628,7 +1623,8 @@ bool IsVirtualEquipped(uint8_t* base, uint32_t st, uint32_t cap_id) {
 // Lista visible de la pestana (9 capsulas desde el desplazamiento). Misma logica que el
 // original (sub_821B6ED8) con el catalogo entero.
 // s9 (reportes de cierres al editar habilidades): punteros del editor sin comprobar -> se deja al juego (orig)
-inline bool PtrEditor(uint32_t p) { return p >= 0x40000000u && p < 0xA0000000u; }
+// Nota: el catalogo ampliado vive en SystemHeap (0x30000000+), por lo que se admite desde 0x10000.
+inline bool PtrEditor(uint32_t p) { return p >= 0x00010000u && p < 0xA0000000u; }
 DBZ3_HOOK(sub_821B6ED8, dbz3eu_sub_821B5CC0) {
   const uint32_t st = ctx.r3.u32;
   if (!PtrEditor(st) || !PtrEditor(REX_LOAD_U32(st + 44)) || !PtrEditor(REX_LOAD_U32(kSkcRecs))) {
