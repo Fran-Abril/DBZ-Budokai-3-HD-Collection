@@ -59,8 +59,8 @@
 #define VERSION_MAJOR 1
 #define VERSION_MINOR 5
 #define VERSION_PATCH 1
-#define VERSION_BUILD 4
-#define DBZ3_VERSION_STR "1.5.1.4-fran"
+#define VERSION_BUILD 5
+#define DBZ3_VERSION_STR "1.5.1.5-fran"
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH, VERSION_BUILD
@@ -97,3 +97,4 @@ END
 // Icono del exe en el Explorador: arte propio CC0 (assets_propios/png/app/dbz3.ico, generar.py). En la
 // ventana, en marcha, se pone la bola del juego sacada del AFS del jugador (online_panel.cpp, WM_SETICON).
 1 ICON "dbz3.ico"
+

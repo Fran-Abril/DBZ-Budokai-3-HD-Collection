@@ -6,6 +6,17 @@ are summarized at the end; the full history (in Spanish) is in
 
 Downloads: [latest release](../../releases/latest).
 
+## v1.5.1.5-fran (2026-10-21)
+- ci: asegura sufijo -fran en bump de version y rellena notas de release desde changelog
+- ci: añade windows.yml para generar release zip de Windows y automatiza la generación de versión
+- ci: añadido windows.yml para generar release zip de Windows
+- feat: ignora la pantalla de pan
+- feat: añadida nueva cápsula transmisión instantanea ilimitada
+- v1.5.1.3: B2 board iris and capsule card, Satan Cell ring, European IW, stages without Office, resumable HD pack download
+- Linux: heroe_ui launches Python with std::system (windows.h only on Windows)
+- v1.5.1.2: PS2 stages without the Kit, leave the B2 board anytime, hero fixes
+- v1.5.1.1: IW minigames matched to the original, hero with its own ID, Satan legend like B1
+
 ## v1.5.1.4-fran (2026-10-21)
 - feat: añadida nueva cápsula transmisión instantanea ilimitada y desbloqueado la capsula de todas las transformaciones de goku en el modo online
 - feat: ignora la pantalla de cargar o nueva partida si detecta partida guardada existente
@@ -288,3 +299,4 @@ the character pack.
 | v1.2.0 / 1.2.1 | 2026-09-14 | Renewed mod center, polished HD↔HD model swap, FSR/CAS sharpness |
 | v1.1.x | 2026-09 | USA+EU dual core, single universal exe (SSSE3), disc (ISO) mode, i18n |
 | ≤ v1.0.x | 2026-08 | Initial stabilization |
+
