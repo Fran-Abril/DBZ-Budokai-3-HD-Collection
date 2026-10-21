@@ -184,12 +184,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v${{ steps.version.outputs.version }}"
-          file="DBZ-Budokai-3-HD-Collection-v${{ steps.version.outputs.version }}-linux-amd64.tar.gz"
+          ver="${{ steps.version.outputs.version }}"
+          tag="v$ver"
+          file="DBZ-Budokai-3-HD-Collection-v$ver-linux-amd64.tar.gz"
+
+          notes_file="$RUNNER_TEMP/release_notes.md"
+          python3 -c "import re; c=open('CHANGELOG.md', encoding='utf-8').read(); m=re.search(r'(?s)##\s+v?' + re.escape('$ver') + r'[^\r\n]*\r?\n(.*?)(?=\r?\n##\s+v|\Z)', c); open('$notes_file', 'w', encoding='utf-8').write((m.group(1).strip() if m else 'DBZ Budokai 3 HD Collection release $tag') + '\n')" 2>/dev/null || echo "DBZ Budokai 3 HD Collection release $tag" > "$notes_file"
+
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file "$notes_file"
             gh release upload "$tag" "$file" --clobber --repo "$GITHUB_REPOSITORY"
-            echo "Attached $file to release $tag"
+            echo "Updated release $tag and attached $file"
           else
-            gh release create "$tag" "$file" --repo "$GITHUB_REPOSITORY" --title "DBZ Budokai 3 HD Collection $tag" --notes "DBZ Budokai 3 HD Collection $tag"
+            gh release create "$tag" "$file" --repo "$GITHUB_REPOSITORY" --title "DBZ Budokai 3 HD Collection $tag" --notes-file "$notes_file"
             echo "Created release $tag and attached $file"
           fi

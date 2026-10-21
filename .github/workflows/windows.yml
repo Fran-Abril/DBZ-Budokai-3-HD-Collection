@@ -188,8 +188,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v${{ steps.version.outputs.version }}"
-          $file = "DBZ-Budokai-3-HD-Collection-v${{ steps.version.outputs.version }}.zip"
+          $ver = "${{ steps.version.outputs.version }}"
+          $tag = "v$ver"
+          $file = "DBZ-Budokai-3-HD-Collection-v$ver.zip"
+
+          # Extract release notes for this version from CHANGELOG.md
+          $releaseNotes = ""
+          if (Test-Path "CHANGELOG.md") {
+            $changelog = Get-Content "CHANGELOG.md" -Raw
+            $escapedVer = [regex]::Escape($ver)
+            $pattern = "(?s)##\s+v?$escapedVer[^\r\n]*\r?\n(.*?)(?=\r?\n##\s+v|\Z)"
+            if ($changelog -match $pattern) {
+              $releaseNotes = $matches[1].Trim()
+            }
+          }
+          if (-not $releaseNotes) {
+            $releaseNotes = (git log -n 5 --no-merges --pretty=format:"- %s" | Where-Object { $_ -notmatch "chore\(release\):" }) -join "`n"
+          }
+          if (-not $releaseNotes) {
+            $releaseNotes = "DBZ Budokai 3 HD Collection release $tag"
+          }
+
+          $notesFile = Join-Path $env:RUNNER_TEMP "release_notes.md"
+          Set-Content -Path $notesFile -Value $releaseNotes -Encoding utf8
+
           Write-Host "Checking if release $tag exists..."
           $releaseFound = $false
           try {
@@ -200,11 +222,12 @@ jobs:
           }
 
           if ($releaseFound) {
-            Write-Host "Release $tag exists. Uploading $file with clobber..."
+            Write-Host "Release $tag exists. Updating notes and uploading $file with clobber..."
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --notes-file $notesFile
             gh release upload $tag $file --clobber --repo $env:GITHUB_REPOSITORY
-            Write-Host "Uploaded $file to release $tag successfully."
+            Write-Host "Updated release $tag successfully."
           } else {
-            Write-Host "Release $tag does not exist. Creating release $tag with $file..."
-            gh release create $tag $file --repo $env:GITHUB_REPOSITORY --title "DBZ Budokai 3 HD Collection $tag" --notes "Windows game (required)"
+            Write-Host "Release $tag does not exist. Creating release $tag with notes and $file..."
+            gh release create $tag $file --repo $env:GITHUB_REPOSITORY --title "DBZ Budokai 3 HD Collection $tag" --notes-file $notesFile
             Write-Host "Created release $tag and attached $file successfully."
           }

@@ -6,6 +6,11 @@ are summarized at the end; the full history (in Spanish) is in
 
 Downloads: [latest release](../../releases/latest).
 
+## v1.5.1.4-fran (2026-10-21)
+- feat: añadida nueva cápsula transmisión instantanea ilimitada y desbloqueado la capsula de todas las transformaciones de goku en el modo online
+- feat: ignora la pantalla de cargar o nueva partida si detecta partida guardada existente
+- ci: añadido windows.yml para generar release zip de Windows y automatiza versión y changelog
+
 ## v1.5.1 (2026-10-18)
 - Budokai 2 campaign (EXPERIMENTAL): red cursor arrow, life column, portraits, event sounds, music and Budokai 2 stages on every board tile; Saibamen sprout from the ground; Babidi's Ship (beta) screens and trials closer to the original.
 - Infinite World campaign (EXPERIMENTAL): map borders, music per area, smoother animation blending; training and mission fixes.

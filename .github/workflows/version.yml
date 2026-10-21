@@ -32,13 +32,8 @@ jobs:
           # 1. Check if src/version.rc was touched manually in this push
           $versionTouched = $false
           try {
-            $before = "${{ github.event.before }}"
-            if ($before -and $before -ne "0000000000000000000000000000000000000000") {
-              $diffFiles = git diff --name-only $before HEAD
-            } else {
-              $diffFiles = git diff --name-only HEAD~1 HEAD
-            }
-            if ($diffFiles -match "src/version\.rc") {
+            $changed = git diff-tree -m --no-commit-id --name-only -r HEAD
+            if ($changed -match "src/version\.rc") {
               $versionTouched = $true
             }
           } catch {
@@ -53,12 +48,18 @@ jobs:
           $build = ($rc | Select-String 'VERSION_BUILD\s+(\d+)' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1)
           $currentStr = ($rc | Select-String 'DBZ3_VERSION_STR\s+"([^"]+)"' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -First 1)
 
+          # Extract fork suffix (always defaults to -fran for this fork)
+          $suffix = "-fran"
+          if ($currentStr -match '(-[a-zA-Z0-9.-]+)$') {
+            $suffix = $matches[1]
+          }
+
           if ($versionTouched) {
             Write-Host "src/version.rc was modified manually. Keeping version: $currentStr"
             $newVersion = $currentStr
           } else {
             $newBuild = [int]$build + 1
-            $newVersion = "$major.$minor.$patch.$newBuild"
+            $newVersion = "$major.$minor.$patch.$newBuild$suffix"
             Write-Host "Auto-bumping version from $currentStr to $newVersion"
 
             $rcRaw = Get-Content "src/version.rc" -Raw
