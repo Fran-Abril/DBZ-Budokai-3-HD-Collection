@@ -6,6 +6,9 @@ are summarized at the end; the full history (in Spanish) is in
 
 Downloads: [latest release](../../releases/latest).
 
+## v1.5.1.5-fran (2026-10-22)
+- General updates and improvements.
+
 ## v1.5.1.5-fran (2026-10-21)
 - ci: asegura sufijo -fran en bump de version y rellena notas de release desde changelog
 - ci: añade windows.yml para generar release zip de Windows y automatiza la generación de versión
@@ -299,4 +302,5 @@ the character pack.
 | v1.2.0 / 1.2.1 | 2026-09-14 | Renewed mod center, polished HD↔HD model swap, FSR/CAS sharpness |
 | v1.1.x | 2026-09 | USA+EU dual core, single universal exe (SSSE3), disc (ISO) mode, i18n |
 | ≤ v1.0.x | 2026-08 | Initial stabilization |
+
 
